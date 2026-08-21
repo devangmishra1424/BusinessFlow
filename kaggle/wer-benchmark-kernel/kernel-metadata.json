@@ -1,0 +1,15 @@
+{
+  "id": "mishradevang14/businessflow-wer-benchmark-full",
+  "title": "BusinessFlow WER Benchmark Full",
+  "code_file": "wer_benchmark_full.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "true",
+  "dataset_sources": ["mishradevang14/mucs-2021-hindi-english-test"],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}

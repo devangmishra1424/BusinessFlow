@@ -1,0 +1,42 @@
+[
+  {
+    "wav": "00.wav",
+    "reference": "The quick brown fox jumps over the lazy dog."
+  },
+  {
+    "wav": "01.wav",
+    "reference": "Please confirm your appointment for tomorrow afternoon."
+  },
+  {
+    "wav": "02.wav",
+    "reference": "The weather today is sunny with a slight chance of rain."
+  },
+  {
+    "wav": "03.wav",
+    "reference": "Your account balance has been updated successfully."
+  },
+  {
+    "wav": "04.wav",
+    "reference": "Can you send me the report by end of day."
+  },
+  {
+    "wav": "05.wav",
+    "reference": "The train to the city center departs every fifteen minutes."
+  },
+  {
+    "wav": "06.wav",
+    "reference": "I would like to schedule a meeting next week."
+  },
+  {
+    "wav": "07.wav",
+    "reference": "The library closes at nine in the evening on weekdays."
+  },
+  {
+    "wav": "08.wav",
+    "reference": "Our customer support team is available around the clock."
+  },
+  {
+    "wav": "09.wav",
+    "reference": "The new policy will take effect starting next month."
+  }
+]

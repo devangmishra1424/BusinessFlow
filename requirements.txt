@@ -1,0 +1,45 @@
+# --- Audio in ---
+silero-vad          # VAD, ONNX-backed
+faster-whisper      # ASR, int8 CPU (size decided by the small-vs-base test, see eval/)
+onnxruntime
+
+# --- Reasoning ---
+groq                # Agent LLM (Llama-3.1-8B), the one deliberate API call
+
+# --- RAG ---
+chromadb            # vector store, no separate server process
+sentence-transformers[onnx]  # multilingual-e5-small (bi-encoder) + cross-encoder reranker, ONNX backend
+rank-bm25           # BM25 half of hybrid retrieval
+
+# --- Tools ---
+fastmcp
+
+# --- Accounts DB (Supabase/Postgres) ---
+psycopg[binary]
+
+# --- Verbalizer ---
+num2words
+
+# --- Audio out ---
+piper-tts                  # English TTS
+transformers                # Meta MMS-TTS (Hindi), via HF
+torch                        # backs transformers + sentence-transformers
+soundfile
+pydub
+
+# --- Observability ---
+langfuse
+
+# --- Browser channel (backend) ---
+fastapi
+uvicorn[standard]
+websockets
+
+# --- Utility ---
+python-dotenv
+
+# --- Dev / test ---
+pytest
+psutil              # RAM measurement for the small-vs-base ASR comparison
+pyarrow             # reading the Hinglish BFSI dataset's parquet file
+jiwer               # WER computation for the fine-tuning benchmark

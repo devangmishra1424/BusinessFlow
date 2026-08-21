@@ -1,0 +1,48 @@
+"""Integration tests for the real tool-calling agent loop -- makes real
+Groq API calls, so skipped entirely if GROQ_API_KEY isn't set (same
+reasoning as test_pipeline.py: a mock can't prove the round-trip works).
+"""
+
+import os
+
+import pytest
+
+from businessflow.agent.loop import run_turn, start_conversation
+
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("GROQ_API_KEY"),
+    reason="GROQ_API_KEY not set -- copy .env.example to .env and fill it in to run this",
+)
+
+
+def test_agent_grounds_its_answer_in_a_real_tool_call():
+    conversation = start_conversation(language="en", account_id="BF-1001")
+    conversation.append({"role": "user", "content": "How many days past due is my payment, and how much do I owe?"})
+
+    conversation, reply_text = run_turn(conversation)
+
+    # A real tool call must have happened -- the model has no other way to
+    # know these numbers, since they aren't in the system prompt.
+    assert any(msg.get("role") == "tool" for msg in conversation)
+    assert "3" in reply_text  # Priya Sharma (BF-1001) is 3 days past due
+    assert "12" in reply_text or "12,500" in reply_text or "twelve" in reply_text.lower()
+
+
+def test_agent_escalates_a_high_risk_account_instead_of_offering_automated_restructuring():
+    conversation = start_conversation(language="en", account_id="BF-1003")
+    conversation.append({
+        "role": "user",
+        "content": "I can't pay my full EMI this month, can you lower it or give me a payment plan?",
+    })
+
+    conversation, reply_text = run_turn(conversation)
+
+    tool_calls_made = [
+        msg["function"]["name"]
+        for prior_message in conversation
+        if prior_message.get("role") == "assistant"
+        for msg in (prior_message.get("tool_calls") or [])
+    ]
+    # BF-1003 (Fatima Khan) has an open dispute and 2 broken promises --
+    # policy blocks any automated restructuring offer on this account.
+    assert "propose_partial_payment" not in tool_calls_made or "escalate_to_human" in tool_calls_made

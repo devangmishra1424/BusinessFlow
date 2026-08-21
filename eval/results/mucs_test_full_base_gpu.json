@@ -1,0 +1,16 @@
+{
+  "model_size": "base",
+  "device": "cuda",
+  "compute_type": "float32",
+  "note": "GPU float32, not the deployed CPU int8 config -- the fast full-corpus number, not the deployment-representative one (see mucs_test_base.json for the local CPU int8 sample)",
+  "utterances_scored": 3136,
+  "wer": 0.9953320885569485,
+  "script_consistency_rate": 0.0778061224489796,
+  "hypothesis_script_distribution": {
+    "latin": 2396,
+    "none": 471,
+    "devanagari": 244,
+    "mixed": 25
+  },
+  "runtime_seconds": 2856.2
+}

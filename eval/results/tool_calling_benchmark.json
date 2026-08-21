@@ -1,0 +1,276 @@
+{
+  "summary": {
+    "scenario_count": 11,
+    "scenarios_passed": 10,
+    "total_required_calls": 10,
+    "total_satisfied_calls": 9,
+    "total_forbidden_violations": 0,
+    "precision": 1.0,
+    "recall": 0.9,
+    "scenario_success_rate": 0.9091
+  },
+  "results": [
+    {
+      "scenario_id": "balance_inquiry_en",
+      "account_id": "BF-1001",
+      "language": "en",
+      "user_message": "What's my current balance and how many days late am I?",
+      "reply": "Your balance is ₹12,500.00 and you’re 3 days past due.",
+      "actual_tool_calls": [
+        {
+          "tool": "get_payment_status",
+          "args": {
+            "account_id": "BF-1001"
+          }
+        }
+      ],
+      "satisfied_required": [
+        "get_payment_status"
+      ],
+      "missed_required": [],
+      "forbidden_violations": [],
+      "neutral_calls": [],
+      "passed": true
+    },
+    {
+      "scenario_id": "promise_to_pay_en",
+      "account_id": "BF-1001",
+      "language": "en",
+      "user_message": "I will pay ₹12500 by August 25 2026, I promise.",
+      "reply": "Got it. I've recorded that you’ll pay ₹12,500 on or around August 25, 2026. If anything changes, just let me know. Thanks!",
+      "actual_tool_calls": [
+        {
+          "tool": "log_promise_to_pay",
+          "args": {
+            "account_id": "BF-1001",
+            "promised_amount": 12500,
+            "promised_date": "2026-08-25"
+          }
+        }
+      ],
+      "satisfied_required": [
+        "log_promise_to_pay"
+      ],
+      "missed_required": [],
+      "forbidden_violations": [],
+      "neutral_calls": [],
+      "passed": true
+    },
+    {
+      "scenario_id": "dispute_hi",
+      "account_id": "BF-1004",
+      "language": "hi",
+      "user_message": "Maine yeh EMI pehle hi UPI se pay kar diya tha last week, lekin account mein nahi dikh raha. Main is charge ko dispute karna chahta hoon.",
+      "reply": "धन्यवाद, हमने आपका विवाद फ़्लैग कर दिया है। आपकी फ़ाइल पर एक मानव एजेंट जल्द ही जाँच करेगा और आपको अगले कदमों के बारे में जानकारी देगा। हमसे संपर्क करने के लिए आपका आभारी हूँ।",
+      "actual_tool_calls": [
+        {
+          "tool": "flag_dispute",
+          "args": {
+            "account_id": "BF-1004",
+            "reason": "User claims payment not reflected in account"
+          }
+        }
+      ],
+      "satisfied_required": [
+        "flag_dispute"
+      ],
+      "missed_required": [],
+      "forbidden_violations": [],
+      "neutral_calls": [],
+      "passed": true
+    },
+    {
+      "scenario_id": "payment_link_en",
+      "account_id": "BF-1004",
+      "language": "en",
+      "user_message": "Can you send me a payment link for the full ₹28000 I owe this month?",
+      "reply": "Sure thing! Here’s your payment link for ₹28,000 this month:  \nhttps://demo.businessflow.local/pay/BF-1004?amount=28000.0  \n\nJust click it, confirm the amount, and you’ll be set. Let me know if you need anything else.",
+      "actual_tool_calls": [
+        {
+          "tool": "generate_payment_link",
+          "args": {
+            "account_id": "BF-1004",
+            "amount": 28000
+          }
+        }
+      ],
+      "satisfied_required": [
+        "generate_payment_link"
+      ],
+      "missed_required": [],
+      "forbidden_violations": [],
+      "neutral_calls": [],
+      "passed": true
+    },
+    {
+      "scenario_id": "partial_payment_accept_hi",
+      "account_id": "BF-1002",
+      "language": "hi",
+      "user_message": "Main is mahine sirf 18000 rupaye de sakta hoon, poora amount nahi. Kya yeh chalega?",
+      "reply": "बिल्कुल, 18,000 रुपये का हिस्सा हम स्वीकार कर सकते हैं। यह आपका आंशिक भुगतान है। यदि आप इसे इस महीने में पूरा कर सकते हैं तो हम इसे रिकॉर्ड कर लेंगे। अगर कुछ और बात करनी हो या कोई सवाल हो, तो बताइए।",
+      "actual_tool_calls": [
+        {
+          "tool": "propose_partial_payment",
+          "args": {
+            "account_id": "BF-1002",
+            "proposed_amount": 18000
+          }
+        }
+      ],
+      "satisfied_required": [
+        "propose_partial_payment"
+      ],
+      "missed_required": [],
+      "forbidden_violations": [],
+      "neutral_calls": [],
+      "passed": true
+    },
+    {
+      "scenario_id": "partial_payment_reject_en",
+      "account_id": "BF-1004",
+      "language": "en",
+      "user_message": "I can only pay ₹15000 this month, is that okay?",
+      "reply": "The policy says a partial payment must be at least ₹19,600.  \nWould you like to go ahead with that amount, or discuss other options?",
+      "actual_tool_calls": [
+        {
+          "tool": "propose_partial_payment",
+          "args": {
+            "account_id": "BF-1004",
+            "proposed_amount": 15000
+          }
+        }
+      ],
+      "satisfied_required": [
+        "propose_partial_payment"
+      ],
+      "missed_required": [],
+      "forbidden_violations": [],
+      "neutral_calls": [],
+      "passed": true
+    },
+    {
+      "scenario_id": "hypothetical_extend_en",
+      "account_id": "BF-1001",
+      "language": "en",
+      "user_message": "If I extended my loan by 2 more months, what would my new EMI be?",
+      "reply": "Your new monthly EMI would be ₹10,937.50 if you extend the loan by two more months. Let me know if you’d like to move forward with that.",
+      "actual_tool_calls": [
+        {
+          "tool": "calculate_hypothetical",
+          "args": {
+            "account_id": "BF-1001",
+            "extra_months": 2,
+            "restructuring_type": "extend_tenure"
+          }
+        }
+      ],
+      "satisfied_required": [
+        "calculate_hypothetical"
+      ],
+      "missed_required": [],
+      "forbidden_violations": [],
+      "neutral_calls": [],
+      "passed": true
+    },
+    {
+      "scenario_id": "hypothetical_settlement_hi",
+      "account_id": "BF-1004",
+      "language": "hi",
+      "user_message": "Agar main abhi ek baar mein poora loan settle kar doon, toh kitna paisa dena hoga?",
+      "reply": "मुझे आपकी शेष बकाया राशि की जानकारी चाहिए ताकि मैं आपको सही एकमुश्त निपटान राशि बता सकूँ। क्या आप अपनी वर्तमान शेष राशि बता सकते हैं?",
+      "actual_tool_calls": [
+        {
+          "tool": "get_payment_status",
+          "args": {
+            "account_id": "BF-1004"
+          }
+        },
+        {
+          "tool": "check_policy",
+          "args": {
+            "account_id": "BF-1004",
+            "query": "one_time_settlement discount"
+          }
+        }
+      ],
+      "satisfied_required": [],
+      "missed_required": [
+        "calculate_hypothetical"
+      ],
+      "forbidden_violations": [],
+      "neutral_calls": [
+        "get_payment_status",
+        "check_policy"
+      ],
+      "passed": false
+    },
+    {
+      "scenario_id": "escalation_forced_en",
+      "account_id": "BF-1003",
+      "language": "en",
+      "user_message": "This dispute has been open forever and nobody's helping me -- I want to talk to a real person right now.",
+      "reply": "I’ve flagged the dispute for review and queued this case for a human agent to follow up with you right away. You’ll hear from someone soon. In the meantime, if there’s anything else you need, just let me know.",
+      "actual_tool_calls": [
+        {
+          "tool": "flag_dispute",
+          "args": {
+            "account_id": "BF-1003",
+            "reason": "Dispute has been open for an extended period and the borrower reports lack of assistance."
+          }
+        },
+        {
+          "tool": "escalate_to_human",
+          "args": {
+            "account_id": "BF-1003",
+            "reason": "Open dispute with no resolution"
+          }
+        }
+      ],
+      "satisfied_required": [
+        "escalate_to_human"
+      ],
+      "missed_required": [],
+      "forbidden_violations": [],
+      "neutral_calls": [
+        "flag_dispute"
+      ],
+      "passed": true
+    },
+    {
+      "scenario_id": "policy_question_en",
+      "account_id": null,
+      "language": "en",
+      "user_message": "What is your grace period policy before late fees kick in?",
+      "reply": "We give them a 3‑day grace period. After the due date, if you pay within three days, no late fee is applied and the payment is not treated as late for reporting. Beyond day 3 the account is considered past‑due and the usual late‑fee rules apply. The grace period doesn’t stack or carry over across cycles. If you’re past that, we can discuss a new plan.",
+      "actual_tool_calls": [
+        {
+          "tool": "check_policy",
+          "args": {
+            "account_id": null,
+            "query": "grace period policy before late fees kick in"
+          }
+        }
+      ],
+      "satisfied_required": [
+        "check_policy"
+      ],
+      "missed_required": [],
+      "forbidden_violations": [],
+      "neutral_calls": [],
+      "passed": true
+    },
+    {
+      "scenario_id": "no_tool_greeting_en",
+      "account_id": null,
+      "language": "en",
+      "user_message": "Hi, who am I speaking with, and what languages can you help me in?",
+      "reply": "Hello! This is Ravi from the collections team. I can speak English and Hindi to help you out. How can I assist you today?",
+      "actual_tool_calls": [],
+      "satisfied_required": [],
+      "missed_required": [],
+      "forbidden_violations": [],
+      "neutral_calls": [],
+      "passed": true
+    }
+  ]
+}

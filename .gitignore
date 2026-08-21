@@ -1,0 +1,37 @@
+.venv/
+__pycache__/
+*.pyc
+
+.env
+
+data/raw/
+data/kb/*
+!data/kb/.gitkeep
+
+*.onnx
+*.bin
+*.pt
+*.gguf
+
+.chroma/
+chroma_db/
+
+*.wav
+*.ogg
+*.mp3
+
+*.egg-info/
+
+# Raw training corpora and Kaggle data dumps -- gigabytes, not source code.
+datasets/
+kaggle/mucs-test-dataset/
+kaggle/training_assets/
+kaggle/training_assets.zip
+kaggle/downloaded_model/
+kaggle/wer-benchmark-kernel/output/
+
+# Scratch debug output from earlier debugging sessions -- not project content.
+debug_wer.txt
+kaggle_kernel_log.txt
+prompt_debug.txt
+translit_debug.txt

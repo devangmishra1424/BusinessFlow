@@ -1,0 +1,18 @@
+{
+  "model_size": "base",
+  "sample_size": 20,
+  "seed": 42,
+  "recordings_spanned": 14,
+  "wer": 1.008298755186722,
+  "script_consistency_rate": 0.1,
+  "hypothesis_script_distribution": {
+    "latin": 14,
+    "devanagari": 2,
+    "none": 4
+  },
+  "reference_script_distribution": {
+    "mixed": 6,
+    "devanagari": 12,
+    "latin": 2
+  }
+}
