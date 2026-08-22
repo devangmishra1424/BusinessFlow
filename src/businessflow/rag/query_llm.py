@@ -99,7 +99,21 @@ def expand_query(query: str, n_variants: int = 2) -> list[str]:
     """The original query plus up to n_variants alternate phrasings of
     the same underlying question -- widens recall for a query that uses
     different words than the KB doc that actually answers it. Falls
-    back to [query] on any Groq failure."""
+    back to [query] on any Groq failure.
+
+    A/B'd against the full retrieval_benchmark.py suite: no clear
+    aggregate win (a small recall@1 gain offset by a recall@5 loss), so
+    check_policy doesn't enable this by default. But high per-query
+    variance hides in that wash -- found live, a single hard, indirectly-
+    phrased query ("is there someone I can talk to about a payment
+    that's not showing up on my end", genuinely meant as a dispute) had
+    the reranker score the correct doc a razor-thin -6.65 vs the wrong
+    one's -6.85 without expansion (confirmed neither BM25 nor the
+    embedding stage favored the correct doc either -- not a reranker-
+    specific bug, a genuinely hard case for every stage), and a clean
+    -3.92 vs -6.78 WITH expansion. A future improvement worth building:
+    only expand when the top result's own score is ambiguous (near a
+    threshold), rather than always-on or always-off."""
     try:
         completion = client().chat.completions.create(
             model=MODEL,

@@ -36,5 +36,11 @@ jobs:
           pip install -r requirements.txt
           pip install -e .
 
+      - name: Seed the policy knowledge base
+        # The retriever tests assume this has already been run (same
+        # requirement as running locally) -- data/kb/*.md is real,
+        # tracked content, but the Chroma index built from it is not.
+        run: python -m scripts.seed_kb
+
       - name: Run tests
         run: pytest tests/ -v

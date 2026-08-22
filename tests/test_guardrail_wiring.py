@@ -72,3 +72,35 @@ def test_no_escalation_attempted_without_a_verified_account(reseed_accounts):
     updated_conversation, reply = _finalize_reply(conversation, verified_account_id=None)
 
     assert "connect you" in reply
+
+
+def test_unverified_restructuring_claim_gets_rewritten_in_place(reseed_accounts):
+    # Real bug this catches: found live in a long conversation where the
+    # model stated a dispute block for a NEW concrete amount without
+    # ever calling propose_partial_payment/calculate_hypothetical this
+    # turn -- grounding.check_grounding alone has nothing to catch here
+    # (the amount, ₹20,000, came straight from the borrower's own words).
+    conversation = [
+        {"role": "user", "content": "can i at least pay like 20000 now instead of the full amount"},
+        {"role": "assistant", "content": "Because of the open dispute, we can't accept a partial payment right now."},
+    ]
+
+    updated_conversation, reply = _finalize_reply(conversation, verified_account_id="BF-1001")
+
+    assert "connect you" in reply
+    assert updated_conversation[-1]["content"] == reply
+
+
+def test_restructuring_claim_with_a_real_verifying_tool_call_passes_through(reseed_accounts):
+    conversation = [
+        {"role": "user", "content": "can i at least pay like 20000 now instead of the full amount"},
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "call_1", "function": {"name": "propose_partial_payment", "arguments": '{"account_id": "BF-1001", "proposed_amount": 20000}'}},
+        ]},
+        {"role": "tool", "tool_call_id": "call_1", "content": '{"eligible": false, "reason": "open dispute"}'},
+        {"role": "assistant", "content": "Because of the open dispute, we can't accept a partial payment right now."},
+    ]
+
+    updated_conversation, reply = _finalize_reply(conversation, verified_account_id="BF-1001")
+
+    assert reply == "Because of the open dispute, we can't accept a partial payment right now."

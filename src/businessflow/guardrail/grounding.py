@@ -79,7 +79,7 @@ def extract_rupee_amounts(text: str) -> set[float]:
     return amounts
 
 
-def _extract_shorthand_amounts(text: str) -> set[float]:
+def extract_shorthand_amounts(text: str) -> set[float]:
     amounts = set()
     for m in _SHORTHAND_THOUSAND_RE.finditer(text):
         try:
@@ -94,7 +94,7 @@ def _extract_shorthand_amounts(text: str) -> set[float]:
     return amounts
 
 
-def _extract_plain_numbers(text: str) -> set[float]:
+def extract_plain_numbers(text: str) -> set[float]:
     numbers = set()
     for m in _PLAIN_NUMBER_RE.finditer(text):
         try:
@@ -136,8 +136,8 @@ def check_grounding(reply_text: str, conversation: list[dict]) -> GroundingFailu
     grounded_urls = extract_urls(grounded_text)
     grounded_amounts = (
         extract_rupee_amounts(grounded_text)
-        | _extract_plain_numbers(grounded_text)
-        | _extract_shorthand_amounts(grounded_text)
+        | extract_plain_numbers(grounded_text)
+        | extract_shorthand_amounts(grounded_text)
     )
 
     reply_urls = extract_urls(reply_text)

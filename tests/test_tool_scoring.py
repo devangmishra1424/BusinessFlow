@@ -220,3 +220,20 @@ def test_print_regression_delta_handles_no_previous_run(capsys):
     print_regression_delta(None, {"precision": 0.9})
     output = capsys.readouterr().out
     assert "first" in output
+
+
+def test_print_regression_delta_lower_is_better_flags_an_increase(capsys):
+    # A latency-style metric -- getting SLOWER (higher) is the regression.
+    print_regression_delta({"p50_seconds": 1.0}, {"p50_seconds": 2.0}, metrics=("p50_seconds",), lower_is_better=True)
+    output = capsys.readouterr().out
+    assert "REGRESSION" in output
+
+
+def test_print_regression_delta_lower_is_better_does_not_flag_a_speedup(capsys):
+    # Getting FASTER (lower) must not be flagged as a regression just
+    # because the raw delta is negative -- that's the whole point of
+    # lower_is_better, and using the default sense here would get this
+    # backwards.
+    print_regression_delta({"p50_seconds": 2.0}, {"p50_seconds": 1.0}, metrics=("p50_seconds",), lower_is_better=True)
+    output = capsys.readouterr().out
+    assert "REGRESSION" not in output

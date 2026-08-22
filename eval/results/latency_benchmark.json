@@ -1,0 +1,112 @@
+{
+  "summary": {
+    "run_count": 10,
+    "degraded_run_count": 2,
+    "clean": {
+      "run_count": 8,
+      "p50_seconds": 4.0,
+      "p90_seconds": 28.503,
+      "max_seconds": 38.5,
+      "mean_seconds": 12.529
+    },
+    "raw_all_runs": {
+      "run_count": 10,
+      "p50_seconds": 4.0,
+      "p90_seconds": 25.647,
+      "max_seconds": 38.5,
+      "mean_seconds": 10.645
+    },
+    "clean_mean_seconds_by_tool_call_count": {
+      "0": 1.875,
+      "1": 14.051
+    }
+  },
+  "results": [
+    {
+      "scenario_id": "no_tool_greeting_en",
+      "elapsed_seconds": 1.875,
+      "tool_call_count": 0,
+      "tools_called": [],
+      "key_switches_during_turn": 0
+    },
+    {
+      "scenario_id": "no_tool_greeting_en",
+      "elapsed_seconds": 1.515,
+      "tool_call_count": 0,
+      "tools_called": [],
+      "key_switches_during_turn": 1
+    },
+    {
+      "scenario_id": "single_tool_balance_en",
+      "elapsed_seconds": 4.703,
+      "tool_call_count": 1,
+      "tools_called": [
+        "get_payment_status"
+      ],
+      "key_switches_during_turn": 3
+    },
+    {
+      "scenario_id": "single_tool_balance_en",
+      "elapsed_seconds": 3.156,
+      "tool_call_count": 1,
+      "tools_called": [
+        "get_payment_status"
+      ],
+      "key_switches_during_turn": 0
+    },
+    {
+      "scenario_id": "single_tool_promise_en",
+      "elapsed_seconds": 3.469,
+      "tool_call_count": 1,
+      "tools_called": [
+        "log_promise_to_pay"
+      ],
+      "key_switches_during_turn": 0
+    },
+    {
+      "scenario_id": "single_tool_promise_en",
+      "elapsed_seconds": 2.781,
+      "tool_call_count": 1,
+      "tools_called": [
+        "log_promise_to_pay"
+      ],
+      "key_switches_during_turn": 0
+    },
+    {
+      "scenario_id": "multi_tool_settlement_hi",
+      "elapsed_seconds": 21.703,
+      "tool_call_count": 1,
+      "tools_called": [
+        "calculate_hypothetical"
+      ],
+      "key_switches_during_turn": 0
+    },
+    {
+      "scenario_id": "multi_tool_settlement_hi",
+      "elapsed_seconds": 24.219,
+      "tool_call_count": 1,
+      "tools_called": [
+        "get_payment_status"
+      ],
+      "key_switches_during_turn": 0
+    },
+    {
+      "scenario_id": "policy_question_en",
+      "elapsed_seconds": 38.5,
+      "tool_call_count": 1,
+      "tools_called": [
+        "check_policy"
+      ],
+      "key_switches_during_turn": 0
+    },
+    {
+      "scenario_id": "policy_question_en",
+      "elapsed_seconds": 4.531,
+      "tool_call_count": 1,
+      "tools_called": [
+        "check_policy"
+      ],
+      "key_switches_during_turn": 0
+    }
+  ]
+}

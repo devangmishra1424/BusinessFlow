@@ -5,6 +5,7 @@ prompt telling the model to reply in Hindi MUST also tell it to use
 Devanagari, every time, not just when someone happens to remember.
 """
 
+import os
 import time
 
 import pytest
@@ -76,10 +77,19 @@ def reset_fallback_key_switch(monkeypatch):
     ALTERNATE_GROQ_KEY{N} this process's actual .env may have loaded --
     without this, a test asserting "no more fallbacks configured" would
     silently see whatever real fallback keys happen to be in .env right
-    now, not the clean slate it's written to expect."""
+    now, not the clean slate it's written to expect.
+
+    Ensures GROQ_API_KEY itself is set to a fake value if it isn't
+    already -- found via CI (which has no real .env at all): a test
+    reading client().api_key at index 0 raised RuntimeError there
+    instead of asserting anything, since these tests only ever check
+    which key was SELECTED, never make a real Groq call, so a fake
+    primary key is exactly as good as a real one here."""
     for n in range(2, client_module._MAX_FALLBACK_KEY_SUFFIX + 1):
         monkeypatch.delenv(f"ALTERNATE_GROQ_KEY{n}", raising=False)
     monkeypatch.delenv("ALTERNATE_GROQ_KEY", raising=False)
+    if not os.environ.get("GROQ_API_KEY"):
+        monkeypatch.setenv("GROQ_API_KEY", "gsk_fake_primary_key_for_this_test")
 
     original_index = client_module._current_key_index
     original_switched_at = client_module._switched_at
@@ -144,6 +154,13 @@ def test_fallback_env_var_names_does_not_stop_at_the_first_gap(reset_fallback_ke
 
 def test_fallback_key_stays_active_before_cooldown_elapses(reset_fallback_key_switch, monkeypatch):
     monkeypatch.setenv("ALTERNATE_GROQ_KEY", "gsk_fake_fallback_key_for_this_test")
+    # Explicit reset, not an assumption -- found via the full suite (not
+    # this file in isolation): a real Groq call elsewhere that hits a
+    # real rate limit advances this same global _current_key_index, and
+    # nothing outside this file's own fixture resets it back down. This
+    # test's premise (switch_to_fallback_key() advances index 0 -> 1)
+    # only holds if it actually starts at 0.
+    client_module._current_key_index = 0
     client_module.switch_to_fallback_key()
     # Barely any time has passed -- still well inside the cooldown window.
     client_module._switched_at = time.time() - 60
@@ -157,6 +174,7 @@ def test_fallback_key_reverts_to_primary_after_cooldown_elapses(reset_fallback_k
     # forever even after the primary's daily quota reset the next day.
     monkeypatch.setenv("GROQ_API_KEY", "gsk_fake_primary_key_for_this_test")
     monkeypatch.setenv("ALTERNATE_GROQ_KEY", "gsk_fake_fallback_key_for_this_test")
+    client_module._current_key_index = 0  # same explicit-reset reasoning as the test above
     client_module.switch_to_fallback_key()
     client_module._switched_at = time.time() - client_module._FALLBACK_COOLDOWN_SECONDS - 1
 

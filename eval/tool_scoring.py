@@ -187,7 +187,12 @@ def record_run_history(name: str, summary: dict, results_dir: Path) -> dict | No
     return previous
 
 
-def print_regression_delta(previous: dict | None, current: dict, metrics: tuple[str, ...] = ("precision", "recall")) -> None:
+def print_regression_delta(
+    previous: dict | None, current: dict, metrics: tuple[str, ...] = ("precision", "recall"), lower_is_better: bool = False,
+) -> None:
+    """lower_is_better=True for metrics like latency, where a DECREASE is
+    the improvement -- using the default (higher-is-better) sense on
+    those would flag a real speedup as a regression."""
     if previous is None:
         print("(no previous run recorded -- this is the first)")
         return
@@ -195,5 +200,6 @@ def print_regression_delta(previous: dict | None, current: dict, metrics: tuple[
         if m not in previous or m not in current:
             continue
         delta = current[m] - previous[m]
-        flag = "  <-- REGRESSION" if delta < -0.01 else ""
+        got_worse = delta > 0.01 if lower_is_better else delta < -0.01
+        flag = "  <-- REGRESSION" if got_worse else ""
         print(f"  {m}: {previous[m]} -> {current[m]} ({delta:+.4f}){flag}")

@@ -8,12 +8,19 @@ code-switched-looking input, not an exact transcript match).
 
 from pathlib import Path
 
+import pytest
+
 from businessflow.audio.asr import transcribe
 from businessflow.audio.io import load_wav_as_tensor
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 
 
+@pytest.mark.skipif(
+    not (_FIXTURES / "sample_speech_en.wav").exists(),
+    reason="fixture not present -- generated once locally via Windows SAPI TTS (scripts don't ship it; "
+           "*.wav is gitignored), and voice is out of scope for now anyway",
+)
 def test_transcribes_clean_english_accurately():
     audio = load_wav_as_tensor(str(_FIXTURES / "sample_speech_en.wav"))
     text = transcribe(audio, model_size="small", language="en").lower()
@@ -23,6 +30,11 @@ def test_transcribes_clean_english_accurately():
     assert "three" in text
 
 
+@pytest.mark.skipif(
+    not (_FIXTURES / "sample_speech.wav").exists(),
+    reason="fixture not present -- generated once locally via Windows SAPI TTS (scripts don't ship it; "
+           "*.wav is gitignored), and voice is out of scope for now anyway",
+)
 def test_transcribes_something_on_code_switched_sample():
     audio = load_wav_as_tensor(str(_FIXTURES / "sample_speech.wav"))
     text = transcribe(audio, model_size="small")

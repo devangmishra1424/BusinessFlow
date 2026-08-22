@@ -15,6 +15,7 @@ import langfuse
 from businessflow.accounts import store
 from businessflow.agent.client import MODEL, build_system_prompt, client, switch_to_fallback_key
 from businessflow.guardrail import grounding
+from businessflow.guardrail.unverified_restructuring import check_unverified_restructuring_claim
 from businessflow.memory import conversation_memory
 from businessflow.tools import mcp
 
@@ -126,21 +127,42 @@ async def _execute_tool_call(tool_call, verified_account_id: str | None = None) 
     return json.dumps(result.structured_content, ensure_ascii=False)
 
 
+def _index_of_last_user_message(conversation: list[dict]) -> int:
+    for i in range(len(conversation) - 1, -1, -1):
+        if conversation[i].get("role") == "user":
+            return i
+    return 0
+
+
 def _finalize_reply(conversation: list[dict], verified_account_id: str | None) -> tuple[list[dict], str]:
     """The Guardrail: runs on every final reply, both normal exits and
     the MAX_TOOL_ROUNDS-forced one. conversation[-1] is the assistant
     message just appended -- checked against the whole conversation (not
     just this turn), then rewritten in place if it fails, so the stored
-    transcript reflects what was actually said, not the rejected draft."""
+    transcript reflects what was actually said, not the rejected draft.
+
+    Two independent checks, since they catch different failure modes:
+    grounding.check_grounding (a stated URL/₹ amount not traceable to
+    anything real) and check_unverified_restructuring_claim (a concrete
+    restructuring/partial-payment proposal that never got checked via a
+    real tool call this turn -- found live when two separate prompt
+    fixes for the same pattern didn't hold up in a long conversation)."""
     reply_text = conversation[-1]["content"]
     failure = grounding.check_grounding(reply_text, conversation)
+
+    if not failure:
+        turn_start = _index_of_last_user_message(conversation)
+        user_message = conversation[turn_start].get("content") or ""
+        tools_called_this_turn = {name for name, _ in extract_new_tool_calls(conversation, turn_start)}
+        failure = check_unverified_restructuring_claim(user_message, tools_called_this_turn)
+
     if not failure:
         return conversation, reply_text
 
-    logger.warning("guardrail: blocked an ungrounded reply -- %s", failure.describe())
+    logger.warning("guardrail: blocked a reply -- %s", failure.describe())
     store.log_event(verified_account_id, "guardrail_failed", {"reply": reply_text, "reason": failure.describe()})
     if verified_account_id:
-        store.create_escalation(verified_account_id, f"Guardrail blocked an ungrounded reply: {failure.describe()}")
+        store.create_escalation(verified_account_id, f"Guardrail blocked a reply: {failure.describe()}")
 
     safe_reply = "Let me connect you with someone who can confirm those exact details before we go further."
     conversation[-1]["content"] = safe_reply
