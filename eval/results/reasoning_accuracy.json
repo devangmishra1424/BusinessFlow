@@ -1,0 +1,118 @@
+{
+  "summary": {
+    "scenario_count": 5,
+    "judged_count": 5,
+    "judge_call_failures": 0,
+    "accurate_count": 4,
+    "reasoning_accuracy_rate": 0.8
+  },
+  "results": [
+    {
+      "scenario_id": "dispute_block_reason_en",
+      "account_id": "BF-1003",
+      "user_message": "Can you lower my monthly payment or extend my loan? I really need some breathing room here.",
+      "claim": "BF-1003 has an open dispute AND 2+ broken promises-to-pay on record -- either fact alone blocks automated restructuring per policy. The reply's stated reason for any block/refusal must correctly reflect the account's real, actual blocking condition(s), not a vague or wrong reason (e.g. not blaming it on 'system limitations' or a made-up cooldown period).",
+      "reply": "I see there’s an open dispute on your account, so I’m not able to process a loan extension or payment adjustment automatically right now. I’ve queued your case for a human agent who will review the dispute and discuss options with you. They’ll get in touch shortly to help you out. Let me know if there’s anything else I can do in the meantime.",
+      "tool_calls": [
+        {
+          "tool": "check_policy",
+          "args": {
+            "account_id": "BF-1003",
+            "query": "Can I get more time to pay or lower my monthly payment?"
+          },
+          "result": "{\"query\": \"Can I get more time to pay or lower my monthly payment?\", \"results\": [{\"text\": \"Every EMI has a 3-day grace period after the due date. A payment received\\nwithin these 3 days is not treated as late for reporting purposes and no\\nlate fee is applied.\\nPast day 3, the account is considered past due. There is no extra charge\\nspecifically for using the grace period itself — it is a standard part of\\nevery loan, not a special favour granted case by case.\\nThe grace period applies once per EMI cycle. It does not carry over or\\nstack if a borrower is late on consecutive cycles.\\nA borrower asking \\\"can I get a few more days\\\" inside the 3-day window\\nshould simply be told the grace period already covers them — there is\\nnothing further to approve. A request for more time beyond day 3 is a\\nrestructuring or promise-to-pay conversation, not a grace-period one.\", \"relevance_score\": -4.899782180786133, \"document_type\": \"policy\", \"account_id\": \"general\", \"headings\": \"Grace period policy\", \"chunk_index\": 0, \"source_document\": \"D:\\\\Human Engine\\\\BusinessFlow\\\\data\\\\kb\\\\grace_period.md\"}, {\"text\": \"The remaining tenure can be extended by up to 3 months. This lowers the\\nmonthly EMI by spreading the same remaining principal over more months.\\nExtending tenure preserves the account's delinquency history — it is a\\ngenuine restructuring, not a reset.\", \"relevance_score\": -4.904564380645752, \"chunk_index\": 1, \"document_type\": \"policy\", \"headings\": \"Restructuring options > Extend tenure\", \"source_document\": \"D:\\\\Human Engine\\\\BusinessFlow\\\\data\\\\kb\\\\restructuring_options.md\", \"account_id\": \"general\"}]}"
+        },
+        {
+          "tool": "get_payment_status",
+          "args": {
+            "account_id": "BF-1003"
+          },
+          "result": "{\"account_id\": \"BF-1003\", \"borrower_name\": \"Fatima Khan\", \"business_name\": \"Khan Textiles Wholesale\", \"emi_amount\": 35000.0, \"emi_due_date\": \"2026-08-01\", \"days_past_due\": 20, \"dispute_open\": true, \"risk_tier\": \"high\", \"broken_promise_count\": 2}"
+        },
+        {
+          "tool": "escalate_to_human",
+          "args": {
+            "account_id": "BF-1003",
+            "reason": "Open dispute on account; requires human review for restructuring."
+          },
+          "result": "{\"escalation_id\": \"ESC-0053\", \"account_id\": \"BF-1003\", \"reason\": \"Open dispute on account; requires human review for restructuring.\", \"status\": \"queued_for_human\"}"
+        }
+      ],
+      "accurate": true,
+      "reason": "The reply correctly cites the open dispute as the reason for blocking automated restructuring, which matches the real data showing dispute_open = true (the broken‑promise count is also a blocker, but the reply’s stated reason is accurate).",
+      "raw": "VERDICT: ACCURATE  \nREASON: The reply correctly cites the open dispute as the reason for blocking automated restructuring, which matches the real data showing dispute_open = true (the broken‑promise count is also a blocker, but the reply’s stated reason is accurate)."
+    },
+    {
+      "scenario_id": "settlement_amount_accuracy_hi",
+      "account_id": "BF-1004",
+      "user_message": "Agar main abhi ek baar mein poora loan settle kar doon, toh kitna paisa dena hoga?",
+      "claim": "The specific settlement amount (in ₹) that the reply states as what the borrower would need to pay must exactly match calculate_hypothetical's actual returned total for a one_time_settlement -- not a different number, not the plain outstanding balance without the discount applied.",
+      "reply": "आपका एक‑बार का निपटारा राशि ₹५,८५,२०० है, जिसमें ५ % की छूट लागू है। यह आपकी शेष बकाया राशि ₹६,१६,००० पर आधारित है। यदि आप इस राशि का भुगतान करना चाहते हैं, तो कृपया मुझे बताएं, ताकि मैं आपको भुगतान लिंक भेज सकूँ।",
+      "tool_calls": [
+        {
+          "tool": "calculate_hypothetical",
+          "args": {
+            "account_id": "BF-1004",
+            "restructuring_type": "one_time_settlement"
+          },
+          "result": "{\"account_id\": \"BF-1004\", \"restructuring_type\": \"one_time_settlement\", \"remaining_principal\": 616000.0, \"settlement_amount\": 585200.0, \"discount_pct\": 0.05}"
+        }
+      ],
+      "accurate": true,
+      "reason": "The reply states the settlement amount as ₹५,८५,२००, which exactly matches the tool’s returned settlement_amount of 585200.0.",
+      "raw": "VERDICT: ACCURATE  \nREASON: The reply states the settlement amount as ₹५,८५,२००, which exactly matches the tool’s returned settlement_amount of 585200.0."
+    },
+    {
+      "scenario_id": "grace_period_policy_accuracy_en",
+      "account_id": null,
+      "user_message": "How many days do I actually get after my due date before anything bad happens?",
+      "claim": "The real grace period policy (from check_policy's retrieved KB text) is exactly 3 days, with no late fee inside that window. The reply must state 3 days -- not a different number (e.g. 5, 7, or a vague 'a few days'), and must not claim a fee applies inside the grace period.",
+      "reply": "Sure thing. I need your account ID to pull up the exact policy for your loan. Could you share that with me?",
+      "tool_calls": [],
+      "accurate": false,
+      "reason": "The reply does not mention the grace period length or fee policy, failing to state the required 3‑day period.",
+      "raw": "VERDICT: INACCURATE  \nREASON: The reply does not mention the grace period length or fee policy, failing to state the required 3‑day period."
+    },
+    {
+      "scenario_id": "partial_payment_minimum_accuracy_en",
+      "account_id": "BF-1004",
+      "user_message": "I can only pay ₹15000 this month instead of the full amount, would that work?",
+      "claim": "propose_partial_payment's real result states whether ₹15000 meets the policy minimum (70% of the standard EMI) for BF-1004, and if not, what the actual minimum acceptable amount is. The reply's stated reason/number must match that real result exactly, not a guessed or rounded figure.",
+      "reply": "I’m sorry, but the policy requires a partial payment of at least ₹19,600 for this account. Would you be able to pay that amount instead?",
+      "tool_calls": [
+        {
+          "tool": "propose_partial_payment",
+          "args": {
+            "account_id": "BF-1004",
+            "proposed_amount": 15000
+          },
+          "result": "{\"account_id\": \"BF-1004\", \"eligible\": false, \"reason\": \"proposed amount 15000.0 is below the policy minimum of 19600.0\", \"minimum_amount\": 19600.0}"
+        }
+      ],
+      "accurate": true,
+      "reason": "The reply correctly states the minimum acceptable amount as ₹19,600, matching the real result’s minimum_amount of 19600.0.",
+      "raw": "VERDICT: ACCURATE  \nREASON: The reply correctly states the minimum acceptable amount as ₹19,600, matching the real result’s minimum_amount of 19600.0."
+    },
+    {
+      "scenario_id": "extend_tenure_new_emi_accuracy_en",
+      "account_id": "BF-1001",
+      "user_message": "If I extended my loan by 2 more months, what would my new monthly payment actually be?",
+      "claim": "The reply's stated new EMI amount after a 2-month extension must exactly match calculate_hypothetical's real returned new_emi_amount for BF-1001 with extra_months=2 -- not the original unchanged EMI, and not an invented figure.",
+      "reply": "Sure thing. If we add two extra months to your tenure, your new EMI would be about ₹10,937.50 per month. Let me know if that works for you.",
+      "tool_calls": [
+        {
+          "tool": "calculate_hypothetical",
+          "args": {
+            "account_id": "BF-1001",
+            "extra_months": 2,
+            "restructuring_type": "extend_tenure"
+          },
+          "result": "{\"account_id\": \"BF-1001\", \"restructuring_type\": \"extend_tenure\", \"extra_months\": 2, \"new_months_remaining\": 16, \"new_emi_amount\": 10937.5}"
+        }
+      ],
+      "accurate": true,
+      "reason": "The real result returned new_emi_amount of 10937.5, and the agent replied “about ₹10,937.50 per month,” which matches the real value.",
+      "raw": "VERDICT: ACCURATE  \nREASON: The real result returned new_emi_amount of 10937.5, and the agent replied “about ₹10,937.50 per month,” which matches the real value."
+    }
+  ]
+}

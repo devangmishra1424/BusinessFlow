@@ -7,6 +7,10 @@ retrieval. Keep both in sync by hand — the KB text is not generated from here.
 
 GRACE_PERIOD_DAYS = 3
 
+# How many days before an EMI is due the proactive outbound heads-up
+# reminder goes out -- outbound/decide.py's own deadline-proximity check.
+HEADS_UP_DAYS_BEFORE_DUE = 2
+
 # A promise-to-pay is "kept" if payment lands within this many days of the
 # promised date, not only on the exact date.
 PROMISE_TOLERANCE_DAYS = 2

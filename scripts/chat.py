@@ -12,7 +12,13 @@ Run: python -m scripts.chat --account BF-1001 --key 482913 --language en
 import argparse
 import sys
 
-from businessflow.agent.loop import AccessDeniedError, run_turn_with_memory, start_conversation, verify_and_start_conversation
+from businessflow.agent.loop import (
+    AccessDeniedError,
+    AccountLockedError,
+    run_turn_with_memory,
+    start_conversation,
+    verify_and_start_conversation,
+)
 
 
 def main():
@@ -35,6 +41,9 @@ def main():
             conversation = verify_and_start_conversation(args.language, args.account, args.key)
         except AccessDeniedError:
             print(f"wrong access key for account {args.account}")
+            return
+        except AccountLockedError as e:
+            print(str(e))
             return
     else:
         conversation = start_conversation(language=args.language, account_id=None)

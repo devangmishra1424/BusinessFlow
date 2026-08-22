@@ -13,7 +13,12 @@ import os
 import pytest
 
 from businessflow.accounts import store
-from businessflow.agent.loop import AccessDeniedError, _execute_tool_call, verify_and_start_conversation
+from businessflow.agent.loop import (
+    AccessDeniedError,
+    AccountLockedError,
+    _execute_tool_call,
+    verify_and_start_conversation,
+)
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("DATABASE_URL"),
@@ -55,6 +60,39 @@ def test_verify_and_start_conversation_succeeds_with_the_right_key(reseed_accoun
 def test_verify_and_start_conversation_raises_on_wrong_key(reseed_accounts):
     with pytest.raises(AccessDeniedError):
         verify_and_start_conversation("en", "BF-1001", "000000")
+
+
+def test_verify_and_start_conversation_locks_out_after_repeated_wrong_keys(reseed_accounts):
+    # The access key is a fixed 6-digit PIN with no other throttling --
+    # without a lockout, an attacker who knows an account_id could just
+    # try all million combinations against this one entry point.
+    for _ in range(5):
+        with pytest.raises(AccessDeniedError):
+            verify_and_start_conversation("en", "BF-1001", "000000")
+
+    with pytest.raises(AccountLockedError):
+        verify_and_start_conversation("en", "BF-1001", "482913")  # even the REAL key is now blocked
+
+
+def test_verify_and_start_conversation_does_not_lock_out_before_the_threshold(reseed_accounts):
+    for _ in range(4):
+        with pytest.raises(AccessDeniedError):
+            verify_and_start_conversation("en", "BF-1001", "000000")
+
+    conversation = verify_and_start_conversation("en", "BF-1001", "482913")
+    assert conversation[0]["role"] == "system"
+
+
+def test_lockout_is_scoped_to_the_specific_account(reseed_accounts):
+    # Failed attempts against one account must not lock out a different
+    # one -- a shared global counter would let one attacker's noise deny
+    # service to every other borrower.
+    for _ in range(5):
+        with pytest.raises(AccessDeniedError):
+            verify_and_start_conversation("en", "BF-1001", "000000")
+
+    conversation = verify_and_start_conversation("en", "BF-1002", "716044")
+    assert conversation[0]["role"] == "system"
 
 
 def test_tool_call_blocked_when_account_id_does_not_match_verified_session(reseed_accounts):

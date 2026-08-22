@@ -26,7 +26,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from businessflow.agent.loop import run_turn, start_conversation
-from eval.tool_scoring import ToolExpectation, extract_tool_calls, score_turn
+from eval.tool_scoring import (
+    ToolExpectation,
+    aggregate_results,
+    extract_tool_calls,
+    print_regression_delta,
+    record_run_history,
+    score_turn,
+)
 from scripts.seed_accounts import main as _reseed_demo_accounts
 
 _RESULTS_DIR = Path(__file__).resolve().parent / "results"
@@ -157,24 +164,13 @@ def run_scenario(scenario: Scenario) -> dict:
 def main():
     results = [run_scenario(s) for s in SCENARIOS]
 
-    total_required = sum(len(s.required) for s in SCENARIOS)
-    total_satisfied = sum(len(r["satisfied_required"]) for r in results)
-    total_forbidden_violations = sum(len(r["forbidden_violations"]) for r in results)
-
-    recall = total_satisfied / total_required if total_required else 1.0
-    denom = total_satisfied + total_forbidden_violations
-    precision = total_satisfied / denom if denom else 1.0
+    agg = aggregate_results(results)
     scenario_success_rate = sum(1 for r in results if r["passed"]) / len(results)
-
     summary = {
         "scenario_count": len(results),
         "scenarios_passed": sum(1 for r in results if r["passed"]),
-        "total_required_calls": total_required,
-        "total_satisfied_calls": total_satisfied,
-        "total_forbidden_violations": total_forbidden_violations,
-        "precision": round(precision, 4),
-        "recall": round(recall, 4),
         "scenario_success_rate": round(scenario_success_rate, 4),
+        **agg,
     }
 
     print(json.dumps(summary, indent=2, ensure_ascii=False))
@@ -186,6 +182,10 @@ def main():
             print(f"    missed required calls: {r['missed_required']}")
         if r["forbidden_violations"]:
             print(f"    forbidden calls made: {r['forbidden_violations']}")
+
+    print("\n=== vs previous run ===")
+    previous = record_run_history("tool_calling_benchmark", summary, _RESULTS_DIR)
+    print_regression_delta(previous, summary, metrics=("precision", "recall", "scenario_success_rate"))
 
     _RESULTS_DIR.mkdir(exist_ok=True)
     out_path = _RESULTS_DIR / "tool_calling_benchmark.json"

@@ -29,7 +29,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from businessflow.agent.loop import run_turn, start_conversation
-from eval.tool_scoring import ToolExpectation, extract_tool_calls, score_turn
+from eval.tool_scoring import (
+    ToolExpectation,
+    aggregate_results,
+    extract_tool_calls,
+    print_regression_delta,
+    record_run_history,
+    score_turn,
+)
 from scripts.seed_accounts import main as _reseed_demo_accounts
 
 _RESULTS_DIR = Path(__file__).resolve().parent / "results"
@@ -251,23 +258,11 @@ def main():
     results = [run_scenario(s) for s in SCENARIOS]
 
     all_turns = [t for r in results for t in r["turns"]]
-    total_required = sum(len(t["satisfied_required"]) + len(t["missed_required"]) for t in all_turns)
-    total_satisfied = sum(len(t["satisfied_required"]) for t in all_turns)
-    total_forbidden_violations = sum(len(t["forbidden_violations"]) for t in all_turns)
-
-    recall = total_satisfied / total_required if total_required else 1.0
-    denom = total_satisfied + total_forbidden_violations
-    precision = total_satisfied / denom if denom else 1.0
-
+    agg = aggregate_results(all_turns)
     summary = {
         "scenario_count": len(results),
         "scenarios_passed": sum(1 for r in results if r["passed"]),
-        "turn_count": len(all_turns),
-        "total_required_calls": total_required,
-        "total_satisfied_calls": total_satisfied,
-        "total_forbidden_violations": total_forbidden_violations,
-        "precision": round(precision, 4),
-        "recall": round(recall, 4),
+        **agg,
     }
 
     print(json.dumps(summary, indent=2, ensure_ascii=False))
@@ -280,6 +275,10 @@ def main():
                 print(f"    turn {i + 1} missed required calls: {t['missed_required']}")
             if t["forbidden_violations"]:
                 print(f"    turn {i + 1} forbidden calls made: {t['forbidden_violations']}")
+
+    print("\n=== vs previous run ===")
+    previous = record_run_history("realistic_conversation_benchmark", summary, _RESULTS_DIR)
+    print_regression_delta(previous, summary)
 
     _RESULTS_DIR.mkdir(exist_ok=True)
     out_path = _RESULTS_DIR / "realistic_conversation_benchmark.json"

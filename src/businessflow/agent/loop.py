@@ -7,6 +7,7 @@ which just talks without checking anything against real data.
 import asyncio
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 
 import groq
 import langfuse
@@ -36,29 +37,34 @@ _MALFORMED_TOOL_CALL_RETRIES = 2
 
 @langfuse.observe(name="groq_completion", as_type="generation")
 def _create_completion(**kwargs):
-    switched_this_call = False
-    for attempt in range(_MALFORMED_TOOL_CALL_RETRIES + 1):
-        groq_client = client()  # re-fetched each attempt -- picks up the fallback key transparently once switched
+    # Two independent retry budgets, deliberately not sharing one counter:
+    # rate-limit switching is bounded by however many real fallback keys
+    # are configured (switch_to_fallback_key() itself returns False once
+    # they're all tried -- no separate cap needed here), while malformed-
+    # tool-call retries are capped at _MALFORMED_TOOL_CALL_RETRIES
+    # regardless of how many keys got switched through along the way.
+    malformed_tool_call_attempts = 0
+    while True:
+        groq_client = client()  # re-fetched each attempt -- picks up whichever key is currently active
         try:
             return groq_client.chat.completions.create(**kwargs)
         except groq.RateLimitError:
-            # The primary key's daily quota is exhausted (this is exactly
-            # what we hit repeatedly during eval runs this session) --
-            # switch to the fallback key once, not part of the
-            # malformed-tool-call retry budget below.
-            if switched_this_call or not switch_to_fallback_key():
+            # This key's daily quota is exhausted (this is exactly what we
+            # hit repeatedly during eval runs this session) -- advance to
+            # the next configured fallback key, if any are left untried.
+            if not switch_to_fallback_key():
                 raise
-            switched_this_call = True
-            logger.warning("primary Groq key rate-limited -- switched to the fallback key")
+            logger.warning("Groq key rate-limited -- switched to the next configured fallback key")
         except groq.BadRequestError as e:
             code = (e.body or {}).get("error", {}).get("code") if isinstance(e.body, dict) else None
-            if code != "tool_use_failed" or attempt == _MALFORMED_TOOL_CALL_RETRIES:
+            if code != "tool_use_failed" or malformed_tool_call_attempts >= _MALFORMED_TOOL_CALL_RETRIES:
                 raise
             # Worth watching in production: if this fires often, the model
             # is malforming tool calls more than the rare, expected rate --
             # a real signal to investigate the model/prompt, not just retry
             # forever.
-            logger.warning("retrying after malformed tool-call generation (attempt %d)", attempt + 1)
+            malformed_tool_call_attempts += 1
+            logger.warning("retrying after malformed tool-call generation (attempt %d)", malformed_tool_call_attempts)
 
 
 async def _tool_specs() -> list[dict]:
@@ -229,13 +235,35 @@ class AccessDeniedError(Exception):
     the caller a plain "wrong key" message, not a stack trace."""
 
 
+class AccountLockedError(Exception):
+    """Raised by verify_and_start_conversation when an account has had
+    too many failed access-key attempts recently. The access key is a
+    fixed 6-digit PIN -- only a million possibilities and no per-attempt
+    throttling otherwise -- so without this, anyone who knows an
+    account_id could brute-force it by just calling this repeatedly."""
+
+
+_MAX_FAILED_ACCESS_ATTEMPTS = 5
+_ACCESS_LOCKOUT_WINDOW_MINUTES = 15
+
+
 def verify_and_start_conversation(language: str, account_id: str, access_key: str) -> list[dict]:
     """The real entry point for a caller (CLI, browser API) that wants to
     talk about a specific account: checks the account's fixed key first,
     and only starts the conversation (with recap) if it matches. Raises
-    AccessDeniedError otherwise -- there's no conversation to hand back
-    for an unverified account."""
+    AccessDeniedError if the key is wrong, or AccountLockedError if this
+    account has already failed _MAX_FAILED_ACCESS_ATTEMPTS times in the
+    last _ACCESS_LOCKOUT_WINDOW_MINUTES -- there's no conversation to
+    hand back in either case."""
+    since = datetime.now(timezone.utc) - timedelta(minutes=_ACCESS_LOCKOUT_WINDOW_MINUTES)
+    recent_failures = store.count_recent_events(account_id, "access_key_failed", since)
+    if recent_failures >= _MAX_FAILED_ACCESS_ATTEMPTS:
+        raise AccountLockedError(
+            f"too many failed access attempts for account {account_id} -- try again in "
+            f"{_ACCESS_LOCKOUT_WINDOW_MINUTES} minutes"
+        )
     if not store.verify_account_key(account_id, access_key):
+        store.log_event(account_id, "access_key_failed", {})
         raise AccessDeniedError(f"wrong access key for account {account_id}")
     return start_conversation_with_recap(language, account_id)
 
@@ -255,4 +283,30 @@ def extract_new_tool_calls(conversation: list[dict], turn_start: int) -> list[tu
                 except json.JSONDecodeError:
                     args = {}
                 calls.append((name, args))
+    return calls
+
+
+def extract_tool_calls_with_results(conversation: list[dict], turn_start: int) -> list[dict]:
+    """Like extract_new_tool_calls, but paired with each call's actual
+    result -- the ground truth a reasoning-accuracy check needs (did the
+    reply's claims match what the tool really returned), which name+args
+    alone doesn't carry. Results are matched back to their call via
+    tool_call_id, the same key loop.py itself uses when appending the
+    "role": "tool" message."""
+    results_by_call_id = {
+        msg["tool_call_id"]: msg["content"] for msg in conversation[turn_start:] if msg.get("role") == "tool"
+    }
+    calls = []
+    for msg in conversation[turn_start:]:
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            for tc in msg["tool_calls"]:
+                try:
+                    args = json.loads(tc["function"]["arguments"])
+                except json.JSONDecodeError:
+                    args = {}
+                calls.append({
+                    "tool": tc["function"]["name"],
+                    "args": args,
+                    "result": results_by_call_id.get(tc["id"]),
+                })
     return calls

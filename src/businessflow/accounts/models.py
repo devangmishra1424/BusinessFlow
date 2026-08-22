@@ -7,7 +7,7 @@ money — principal/EMI amounts are illustrative figures on synthetic accounts.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 
 
 @dataclass
@@ -24,6 +24,16 @@ class PromiseToPay:
     promised_amount: float
     # None until the promised_date has passed and is checked against payment_history.
     kept: bool | None = None
+
+
+@dataclass
+class Escalation:
+    escalation_id: str
+    account_id: str
+    reason: str
+    status: str  # "queued_for_human" | ... (whatever a real human queue sets it to)
+    created_at: datetime
+    resolved_at: datetime | None = None
 
 
 @dataclass

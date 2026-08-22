@@ -1,0 +1,36 @@
+"""On-demand orchestrator: decide -> compose -> send for every account
+that needs a reminder today. Idempotent against being run twice in one
+day for the same account+kind -- checks the events log for an existing
+reminder_sent event of that kind today before sending again, reusing
+the events table rather than adding a new dedup table (same approach
+already used everywhere else in this project that logs activity).
+
+No scheduler here -- blueprint §13's own explicit "no scheduler" choice
+for the on-demand report feature applies just as well here. Point a
+real OS/cloud cron at scripts/run_outbound_pass.py once real hosting
+exists; that's deferred alongside Telegram/voice/hosting, not forgotten.
+"""
+
+from datetime import datetime, time, timezone
+
+from businessflow.accounts import store
+from businessflow.outbound.compose import compose_message
+from businessflow.outbound.decide import decide_reminders
+from businessflow.outbound.send import send_reminder
+
+
+def _already_sent_today(account_id: str, kind: str) -> bool:
+    since_midnight = datetime.combine(store.current_date(), time.min, tzinfo=timezone.utc)
+    return store.has_recent_event_with_detail(account_id, "reminder_sent", since_midnight, "kind", kind)
+
+
+def run_daily_outbound_pass(account_ids: list[str] | None = None) -> list[dict]:
+    sent = []
+    for reminder in decide_reminders(account_ids):
+        if _already_sent_today(reminder.account_id, reminder.kind):
+            continue
+        account = store.get_account_or_raise(reminder.account_id)
+        message = compose_message(account, reminder)
+        send_reminder(reminder.account_id, reminder.kind, message)
+        sent.append({"account_id": reminder.account_id, "kind": reminder.kind, "days": reminder.days, "message": message})
+    return sent

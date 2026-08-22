@@ -1,13 +1,76 @@
 {
   "summary": {
     "scenario_count": 11,
-    "scenarios_passed": 9,
+    "scenarios_passed": 11,
+    "scenario_success_rate": 1.0,
+    "turn_count": 11,
     "total_required_calls": 10,
-    "total_satisfied_calls": 8,
+    "total_satisfied_calls": 10,
     "total_forbidden_violations": 0,
+    "total_neutral_calls": 2,
     "precision": 1.0,
-    "recall": 0.8,
-    "scenario_success_rate": 0.8182
+    "recall": 1.0,
+    "required_any_total": 0,
+    "required_any_satisfied": 0,
+    "required_any_missed": 0,
+    "per_tool": {
+      "calculate_hypothetical": {
+        "required_count": 2,
+        "satisfied": 2,
+        "missed": 0,
+        "recall": 1.0,
+        "forbidden_violations": 0
+      },
+      "check_policy": {
+        "required_count": 1,
+        "satisfied": 1,
+        "missed": 0,
+        "recall": 1.0,
+        "forbidden_violations": 0
+      },
+      "escalate_to_human": {
+        "required_count": 1,
+        "satisfied": 1,
+        "missed": 0,
+        "recall": 1.0,
+        "forbidden_violations": 0
+      },
+      "flag_dispute": {
+        "required_count": 1,
+        "satisfied": 1,
+        "missed": 0,
+        "recall": 1.0,
+        "forbidden_violations": 0
+      },
+      "generate_payment_link": {
+        "required_count": 1,
+        "satisfied": 1,
+        "missed": 0,
+        "recall": 1.0,
+        "forbidden_violations": 0
+      },
+      "get_payment_status": {
+        "required_count": 1,
+        "satisfied": 1,
+        "missed": 0,
+        "recall": 1.0,
+        "forbidden_violations": 0
+      },
+      "log_promise_to_pay": {
+        "required_count": 1,
+        "satisfied": 1,
+        "missed": 0,
+        "recall": 1.0,
+        "forbidden_violations": 0
+      },
+      "propose_partial_payment": {
+        "required_count": 2,
+        "satisfied": 2,
+        "missed": 0,
+        "recall": 1.0,
+        "forbidden_violations": 0
+      }
+    }
   },
   "results": [
     {
@@ -15,7 +78,7 @@
       "account_id": "BF-1001",
       "language": "en",
       "user_message": "What's my current balance and how many days late am I?",
-      "reply": "Your balance is ₹12,500, and you’re 3 days past due. If you need help making a payment or have any questions, just let me know.",
+      "reply": "Your current balance is ₹12,500, and you're 3 days late.",
       "actual_tool_calls": [
         {
           "tool": "get_payment_status",
@@ -28,6 +91,10 @@
         "get_payment_status"
       ],
       "missed_required": [],
+      "satisfied_required_tools": [
+        "get_payment_status"
+      ],
+      "missed_required_tools": [],
       "forbidden_violations": [],
       "neutral_calls": [],
       "passed": true
@@ -37,7 +104,7 @@
       "account_id": "BF-1001",
       "language": "en",
       "user_message": "I will pay ₹12500 by August 25 2026, I promise.",
-      "reply": "Got it. Your promise to pay ₹12,500 by 25 August 2026 is logged. If you need anything else, just let me know.",
+      "reply": "Great, I’ve logged your promise to pay ₹12,500 by August 25, 2026. We’ll keep a record of this. If anything changes or you need any help, just let me know.",
       "actual_tool_calls": [
         {
           "tool": "log_promise_to_pay",
@@ -52,6 +119,10 @@
         "log_promise_to_pay"
       ],
       "missed_required": [],
+      "satisfied_required_tools": [
+        "log_promise_to_pay"
+      ],
+      "missed_required_tools": [],
       "forbidden_violations": [],
       "neutral_calls": [],
       "passed": true
@@ -61,13 +132,13 @@
       "account_id": "BF-1004",
       "language": "hi",
       "user_message": "Maine yeh EMI pehle hi UPI se pay kar diya tha last week, lekin account mein nahi dikh raha. Main is charge ko dispute karna chahta hoon.",
-      "reply": "समझ गया। आपका विवाद फ़्लैग कर दिया गया है। एक ग्राहक सेवा प्रतिनिधि शीघ्र ही आपसे संपर्क करेगा। यदि आपके पास रसीद या भुगतान का प्रमाण है, तो कृपया उसे हमें भेजें ताकि जाँच प्रक्रिया तेज़ हो सके। धन्यवाद।",
+      "reply": "समझ गया। आपका विवाद फ़्लैग लगा दिया गया है। एक ग्राहक सेवा प्रतिनिधि जल्द ही आपके खाते की जाँच करेगा और आपसे संपर्क करेगा। यदि आपको और सहायता चाहिए तो बताइए।",
       "actual_tool_calls": [
         {
           "tool": "flag_dispute",
           "args": {
             "account_id": "BF-1004",
-            "reason": "Borrower claims payment not reflected and wants to dispute the charge."
+            "reason": "Payment not reflected, dispute charge"
           }
         }
       ],
@@ -75,6 +146,10 @@
         "flag_dispute"
       ],
       "missed_required": [],
+      "satisfied_required_tools": [
+        "flag_dispute"
+      ],
+      "missed_required_tools": [],
       "forbidden_violations": [],
       "neutral_calls": [],
       "passed": true
@@ -84,7 +159,7 @@
       "account_id": "BF-1004",
       "language": "en",
       "user_message": "Can you send me a payment link for the full ₹28000 I owe this month?",
-      "reply": "Here’s the link to pay ₹28,000. Just click and follow the prompts: https://demo.businessflow.local/pay/BF-1004?amount=28000.0. Let me know if you run into any issues.",
+      "reply": "Sure thing! Here’s your payment link for ₹28,000: https://demo.businessflow.local/pay/BF-1004?amount=28000.0. Just click the link, confirm the amount, and you’re all set. Let me know if you need anything else.",
       "actual_tool_calls": [
         {
           "tool": "generate_payment_link",
@@ -98,6 +173,10 @@
         "generate_payment_link"
       ],
       "missed_required": [],
+      "satisfied_required_tools": [
+        "generate_payment_link"
+      ],
+      "missed_required_tools": [],
       "forbidden_violations": [],
       "neutral_calls": [],
       "passed": true
@@ -107,7 +186,7 @@
       "account_id": "BF-1002",
       "language": "hi",
       "user_message": "Main is mahine sirf 18000 rupaye de sakta hoon, poora amount nahi. Kya yeh chalega?",
-      "reply": "हां, 18,000 रुपये का आंशिक भुगतान स्वीकार कर लिया गया है। आप इस राशि का भुगतान इस महीने कर सकते हैं। भुगतान लिंक भेजने के लिए मुझे एक क्षण दें।",
+      "reply": "हाँ, 18,000 रुपये का प्रस्ताव स्वीकार कर लिया गया है। अब आप इस राशि के लिए भुगतान लिंक प्राप्त कर सकते हैं। आप आगे क्या करना चाहेंगे?",
       "actual_tool_calls": [
         {
           "tool": "propose_partial_payment",
@@ -121,6 +200,10 @@
         "propose_partial_payment"
       ],
       "missed_required": [],
+      "satisfied_required_tools": [
+        "propose_partial_payment"
+      ],
+      "missed_required_tools": [],
       "forbidden_violations": [],
       "neutral_calls": [],
       "passed": true
@@ -130,22 +213,42 @@
       "account_id": "BF-1004",
       "language": "en",
       "user_message": "I can only pay ₹15000 this month, is that okay?",
-      "reply": "When would you like to pay ₹15,000?",
-      "actual_tool_calls": [],
-      "satisfied_required": [],
-      "missed_required": [
+      "reply": "I’m sorry, but ₹15,000 is below our policy minimum of ₹19,600 for a partial payment. Could you let me know a higher amount you’d be able to pay this month?",
+      "actual_tool_calls": [
+        {
+          "tool": "get_payment_status",
+          "args": {
+            "account_id": "BF-1004"
+          }
+        },
+        {
+          "tool": "propose_partial_payment",
+          "args": {
+            "account_id": "BF-1004",
+            "proposed_amount": 15000
+          }
+        }
+      ],
+      "satisfied_required": [
         "propose_partial_payment"
       ],
+      "missed_required": [],
+      "satisfied_required_tools": [
+        "propose_partial_payment"
+      ],
+      "missed_required_tools": [],
       "forbidden_violations": [],
-      "neutral_calls": [],
-      "passed": false
+      "neutral_calls": [
+        "get_payment_status"
+      ],
+      "passed": true
     },
     {
       "scenario_id": "hypothetical_extend_en",
       "account_id": "BF-1001",
       "language": "en",
       "user_message": "If I extended my loan by 2 more months, what would my new EMI be?",
-      "reply": "Your new EMI would be ₹10,937.50.",
+      "reply": "Your new EMI would be ₹10,937.50 if you extend the loan by two months.",
       "actual_tool_calls": [
         {
           "tool": "calculate_hypothetical",
@@ -160,6 +263,10 @@
         "calculate_hypothetical"
       ],
       "missed_required": [],
+      "satisfied_required_tools": [
+        "calculate_hypothetical"
+      ],
+      "missed_required_tools": [],
       "forbidden_violations": [],
       "neutral_calls": [],
       "passed": true
@@ -169,7 +276,7 @@
       "account_id": "BF-1004",
       "language": "hi",
       "user_message": "Agar main abhi ek baar mein poora loan settle kar doon, toh kitna paisa dena hoga?",
-      "reply": "बिलकुल, अगर आप अभी एक बार में पूरा बकाया निपटा दें तो आपको लगभग ₹५,८५,२०० का भुगतान करना पड़ेगा। यह ५% की छूट पर आधारित है। क्या आप अभी इस राशि को निपटाने के लिए तैयार हैं?",
+      "reply": "आपके खाते की शेष राशि ६,१६,००० रुपये है। एक‑बार में निपटारे पर आपको ५,८५,२०० रुपये का एकमुश्त भुगतान करना होगा, जो ५ प्रतिशत की छूट के बाद का मूल्य है। यह राशि आपको शेष बकाया और ब्याज दोनों के लिए चुकानी होगी।",
       "actual_tool_calls": [
         {
           "tool": "calculate_hypothetical",
@@ -183,6 +290,10 @@
         "calculate_hypothetical"
       ],
       "missed_required": [],
+      "satisfied_required_tools": [
+        "calculate_hypothetical"
+      ],
+      "missed_required_tools": [],
       "forbidden_violations": [],
       "neutral_calls": [],
       "passed": true
@@ -192,32 +303,42 @@
       "account_id": "BF-1003",
       "language": "en",
       "user_message": "This dispute has been open forever and nobody's helping me -- I want to talk to a real person right now.",
-      "reply": "I’ve flagged the dispute on your account so a human can review it right away. A team member will reach out to you shortly to discuss the issue and provide the assistance you need. Thank you for your patience.",
+      "reply": "I’ve forwarded your request to a human agent right away. They’ll be in touch soon to help resolve the dispute. Thank you for your patience.",
       "actual_tool_calls": [
         {
-          "tool": "flag_dispute",
+          "tool": "get_payment_status",
+          "args": {
+            "account_id": "BF-1003"
+          }
+        },
+        {
+          "tool": "escalate_to_human",
           "args": {
             "account_id": "BF-1003",
-            "reason": "Borrower states dispute has been open forever and wants to talk to a real person"
+            "reason": "User says dispute has been open forever and wants to talk to a real person"
           }
         }
       ],
-      "satisfied_required": [],
-      "missed_required": [
+      "satisfied_required": [
         "escalate_to_human"
       ],
+      "missed_required": [],
+      "satisfied_required_tools": [
+        "escalate_to_human"
+      ],
+      "missed_required_tools": [],
       "forbidden_violations": [],
       "neutral_calls": [
-        "flag_dispute"
+        "get_payment_status"
       ],
-      "passed": false
+      "passed": true
     },
     {
       "scenario_id": "policy_question_en",
       "account_id": null,
       "language": "en",
       "user_message": "What is your grace period policy before late fees kick in?",
-      "reply": "We’re giving every borrower a 3‑day grace period after the due date. If you pay within those 3 days, it’s treated as on‑time and no late fee is applied. Once you go past day 3, the account is considered past‑due and the standard late‑fee policy kicks in. The grace period doesn’t roll over or stack, and it can’t be extended beyond the 3 days unless we discuss a restructuring. Let me know if you’re wondering about a specific payment cycle or need help with a particular date.",
+      "reply": "Our policy gives you a 3‑day grace period after each EMI due date. If you pay within those three days, the payment is considered on time and no late fee is applied. After day 3 the account is marked past‑due and the late fee applies. That grace period doesn’t carry over or stack across multiple cycles. If you need more time beyond the three days, we’ll need to discuss a promise‑to‑pay or restructuring.",
       "actual_tool_calls": [
         {
           "tool": "check_policy",
@@ -231,6 +352,10 @@
         "check_policy"
       ],
       "missed_required": [],
+      "satisfied_required_tools": [
+        "check_policy"
+      ],
+      "missed_required_tools": [],
       "forbidden_violations": [],
       "neutral_calls": [],
       "passed": true
@@ -240,10 +365,12 @@
       "account_id": null,
       "language": "en",
       "user_message": "Hi, who am I speaking with, and what languages can you help me in?",
-      "reply": "Hello! I’m an collections agent from your lender. I can chat with you in English and Hindi – let me know which one you’d prefer. How can I help you today?",
+      "reply": "Hey there! I’m Maya, your friendly collections assistant. I can help you in English and Hindi. How can I assist you today?",
       "actual_tool_calls": [],
       "satisfied_required": [],
       "missed_required": [],
+      "satisfied_required_tools": [],
+      "missed_required_tools": [],
       "forbidden_violations": [],
       "neutral_calls": [],
       "passed": true

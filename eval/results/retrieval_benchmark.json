@@ -1,0 +1,824 @@
+{
+  "expand_false": {
+    "overall": {
+      "n": 33,
+      "recall@1": 0.7879,
+      "recall@3": 0.9091,
+      "recall@5": 0.9697,
+      "mrr": 0.8571
+    },
+    "by_style": {
+      "clean": {
+        "n": 10,
+        "recall@1": 0.7,
+        "recall@3": 0.9,
+        "recall@5": 1.0,
+        "mrr": 0.82
+      },
+      "devanagari": {
+        "n": 2,
+        "recall@1": 1.0,
+        "recall@3": 1.0,
+        "recall@5": 1.0,
+        "mrr": 1.0
+      },
+      "hinglish": {
+        "n": 9,
+        "recall@1": 0.8889,
+        "recall@3": 1.0,
+        "recall@5": 1.0,
+        "mrr": 0.9444
+      },
+      "run_on_venting": {
+        "n": 3,
+        "recall@1": 1.0,
+        "recall@3": 1.0,
+        "recall@5": 1.0,
+        "mrr": 1.0
+      },
+      "typo_slang": {
+        "n": 4,
+        "recall@1": 0.75,
+        "recall@3": 0.75,
+        "recall@5": 0.75,
+        "mrr": 0.75
+      },
+      "vague_colloquial": {
+        "n": 5,
+        "recall@1": 0.6,
+        "recall@3": 0.8,
+        "recall@5": 1.0,
+        "mrr": 0.7167
+      }
+    },
+    "by_language": {
+      "en": {
+        "n": 22,
+        "recall@1": 0.7273,
+        "recall@3": 0.8636,
+        "recall@5": 0.9545,
+        "mrr": 0.8083
+      },
+      "hi": {
+        "n": 2,
+        "recall@1": 1.0,
+        "recall@3": 1.0,
+        "recall@5": 1.0,
+        "mrr": 1.0
+      },
+      "hinglish": {
+        "n": 9,
+        "recall@1": 0.8889,
+        "recall@3": 1.0,
+        "recall@5": 1.0,
+        "mrr": 0.9444
+      }
+    },
+    "rows": [
+      {
+        "query": "is there someone I can talk to about a payment that's not showing up on my end",
+        "style": "clean",
+        "language": "en",
+        "acceptable_headings": [
+          "Dispute handling"
+        ],
+        "rank": 2,
+        "top_result_headings": "Grace period policy"
+      },
+      {
+        "query": "yo i defo already paid tht EMI last wk trust me, sumthing wrong w ur system, pls fix???",
+        "style": "typo_slang",
+        "language": "en",
+        "acceptable_headings": [
+          "Dispute handling"
+        ],
+        "rank": null,
+        "top_result_headings": "Restructuring options > Partial payment for a single cycle"
+      },
+      {
+        "query": "mera jo late fee laga hai na wo galat hai yaar, maine to time pe paisa diya tha",
+        "style": "hinglish",
+        "language": "hinglish",
+        "acceptable_headings": [
+          "Dispute handling"
+        ],
+        "rank": 1,
+        "top_result_headings": "Dispute handling policy"
+      },
+      {
+        "query": "somethings off with my account balance, doesnt look right to me at all",
+        "style": "vague_colloquial",
+        "language": "en",
+        "acceptable_headings": [
+          "Dispute handling"
+        ],
+        "rank": 1,
+        "top_result_headings": "Dispute handling policy"
+      },
+      {
+        "query": "ok so this is driving me crazy the amount you guys are showing is just wrong i paid already and idk why its still saying pending this cant be right can someone look into this",
+        "style": "run_on_venting",
+        "language": "en",
+        "acceptable_headings": [
+          "Dispute handling"
+        ],
+        "rank": 1,
+        "top_result_headings": "Dispute handling policy"
+      },
+      {
+        "query": "when does this actually get handed off to an actual human being",
+        "style": "clean",
+        "language": "en",
+        "acceptable_headings": [
+          "Escalation policy"
+        ],
+        "rank": 1,
+        "top_result_headings": "Escalation policy"
+      },
+      {
+        "query": "agar mai baar baar promise tod du to kya hoga, insaan se baat hogi kya",
+        "style": "hinglish",
+        "language": "hinglish",
+        "acceptable_headings": [
+          "Escalation policy",
+          "What blocks an automated offer"
+        ],
+        "rank": 1,
+        "top_result_headings": "Restructuring options > What blocks an automated offer"
+      },
+      {
+        "query": "can this get bumped up to a real person or nah",
+        "style": "vague_colloquial",
+        "language": "en",
+        "acceptable_headings": [
+          "Escalation policy"
+        ],
+        "rank": 1,
+        "top_result_headings": "Escalation policy"
+      },
+      {
+        "query": "अगर मैं दो बार वादा तोड़ दूं तो क्या होगा",
+        "style": "devanagari",
+        "language": "hi",
+        "acceptable_headings": [
+          "Escalation policy",
+          "What blocks an automated offer"
+        ],
+        "rank": 1,
+        "top_result_headings": "Restructuring options > What blocks an automated offer"
+      },
+      {
+        "query": "if I promise to pay by the 25th and I actually pay on the 27th does that still count",
+        "style": "clean",
+        "language": "en",
+        "acceptable_headings": [
+          "Promise to pay"
+        ],
+        "rank": 1,
+        "top_result_headings": "General FAQ > Promise to pay"
+      },
+      {
+        "query": "does it still count if im lyk 2 days off from wat i promised",
+        "style": "typo_slang",
+        "language": "en",
+        "acceptable_headings": [
+          "Promise to pay"
+        ],
+        "rank": 1,
+        "top_result_headings": "General FAQ > Promise to pay"
+      },
+      {
+        "query": "maine 20 tak dene ka bola tha, 2 din late ho gaya to chalega kya",
+        "style": "hinglish",
+        "language": "hinglish",
+        "acceptable_headings": [
+          "Promise to pay"
+        ],
+        "rank": 2,
+        "top_result_headings": "Grace period policy"
+      },
+      {
+        "query": "why is an AI calling me, doesn't the bank just auto-deduct this every month anyway",
+        "style": "clean",
+        "language": "en",
+        "acceptable_headings": [
+          "NACH auto-debit mandate"
+        ],
+        "rank": 1,
+        "top_result_headings": "General FAQ > NACH auto-debit mandate"
+      },
+      {
+        "query": "isnt this supposed to come out on its own why am i even hearing from u about it",
+        "style": "vague_colloquial",
+        "language": "en",
+        "acceptable_headings": [
+          "NACH auto-debit mandate"
+        ],
+        "rank": 3,
+        "top_result_headings": "Escalation policy"
+      },
+      {
+        "query": "mera to auto debit hai na, phir ye call kyu aa rahi hai mujhe",
+        "style": "hinglish",
+        "language": "hinglish",
+        "acceptable_headings": [
+          "NACH auto-debit mandate"
+        ],
+        "rank": 1,
+        "top_result_headings": "General FAQ > NACH auto-debit mandate"
+      },
+      {
+        "query": "can you just waive this interest for me, just this once",
+        "style": "clean",
+        "language": "en",
+        "acceptable_headings": [
+          "What the agent cannot do"
+        ],
+        "rank": 1,
+        "top_result_headings": "General FAQ > What the agent cannot do"
+      },
+      {
+        "query": "look i dont have the money can u just like remove the interest or lower the rate or something i really need a break here",
+        "style": "run_on_venting",
+        "language": "en",
+        "acceptable_headings": [
+          "What the agent cannot do"
+        ],
+        "rank": 1,
+        "top_result_headings": "General FAQ > What the agent cannot do"
+      },
+      {
+        "query": "interest rate thoda kam kar do na please, itna zyada nahi de sakta",
+        "style": "hinglish",
+        "language": "hinglish",
+        "acceptable_headings": [
+          "What the agent cannot do"
+        ],
+        "rank": 1,
+        "top_result_headings": "General FAQ > What the agent cannot do"
+      },
+      {
+        "query": "is there any buffer time before it's actually counted as late",
+        "style": "clean",
+        "language": "en",
+        "acceptable_headings": [
+          "Grace period"
+        ],
+        "rank": 1,
+        "top_result_headings": "Grace period policy"
+      },
+      {
+        "query": "wil i get charged a late fee if im jst 2 days late paying",
+        "style": "typo_slang",
+        "language": "en",
+        "acceptable_headings": [
+          "Grace period"
+        ],
+        "rank": 1,
+        "top_result_headings": "Grace period policy"
+      },
+      {
+        "query": "thoda time mil sakta hai kya bina late fee lagaye",
+        "style": "hinglish",
+        "language": "hinglish",
+        "acceptable_headings": [
+          "Grace period"
+        ],
+        "rank": 1,
+        "top_result_headings": "Grace period policy"
+      },
+      {
+        "query": "क्या मुझे कुछ और दिन मिल सकते हैं बिना जुर्माने के",
+        "style": "devanagari",
+        "language": "hi",
+        "acceptable_headings": [
+          "Grace period"
+        ],
+        "rank": 1,
+        "top_result_headings": "Grace period policy"
+      },
+      {
+        "query": "can you stretch out my loan so the monthly amount is smaller",
+        "style": "clean",
+        "language": "en",
+        "acceptable_headings": [
+          "Extend tenure"
+        ],
+        "rank": 2,
+        "top_result_headings": "Restructuring options > One-time settlement"
+      },
+      {
+        "query": "is there a way to make the monthly hit smaller even if it takes longer overall",
+        "style": "vague_colloquial",
+        "language": "en",
+        "acceptable_headings": [
+          "Extend tenure"
+        ],
+        "rank": 1,
+        "top_result_headings": "Restructuring options > Extend tenure"
+      },
+      {
+        "query": "EMI kam karne ka koi tarika hai kya, chahe time zyada lag jaye",
+        "style": "hinglish",
+        "language": "hinglish",
+        "acceptable_headings": [
+          "Extend tenure"
+        ],
+        "rank": 1,
+        "top_result_headings": "Restructuring options > Extend tenure"
+      },
+      {
+        "query": "if I pay it all off right now in one go do I get any kind of discount",
+        "style": "clean",
+        "language": "en",
+        "acceptable_headings": [
+          "One-time settlement"
+        ],
+        "rank": 1,
+        "top_result_headings": "Restructuring options > One-time settlement"
+      },
+      {
+        "query": "honestly im so done with this loan can i just pay the whole remaining thing today and be done with it forever",
+        "style": "run_on_venting",
+        "language": "en",
+        "acceptable_headings": [
+          "One-time settlement"
+        ],
+        "rank": 1,
+        "top_result_headings": "Restructuring options > One-time settlement"
+      },
+      {
+        "query": "poora loan ek baar mein khatam karna hai, discount milega kya usme",
+        "style": "hinglish",
+        "language": "hinglish",
+        "acceptable_headings": [
+          "One-time settlement"
+        ],
+        "rank": 1,
+        "top_result_headings": "Restructuring options > One-time settlement"
+      },
+      {
+        "query": "why can't you just restructure my loan right now, whats the holdup",
+        "style": "clean",
+        "language": "en",
+        "acceptable_headings": [
+          "What blocks an automated offer",
+          "Escalation policy"
+        ],
+        "rank": 5,
+        "top_result_headings": "Restructuring options"
+      },
+      {
+        "query": "how come the system wont let this go through for me",
+        "style": "vague_colloquial",
+        "language": "en",
+        "acceptable_headings": [
+          "What blocks an automated offer"
+        ],
+        "rank": 4,
+        "top_result_headings": "General FAQ > NACH auto-debit mandate"
+      },
+      {
+        "query": "whats the least amount I could pay this month and still be okay",
+        "style": "clean",
+        "language": "en",
+        "acceptable_headings": [
+          "Partial payment for a single cycle"
+        ],
+        "rank": 1,
+        "top_result_headings": "Restructuring options > Partial payment for a single cycle"
+      },
+      {
+        "query": "is mahine thoda kam de doon to chalega kya, poora nahi hai mere paas abhi",
+        "style": "hinglish",
+        "language": "hinglish",
+        "acceptable_headings": [
+          "Partial payment for a single cycle"
+        ],
+        "rank": 1,
+        "top_result_headings": "Restructuring options > Partial payment for a single cycle"
+      },
+      {
+        "query": "wats the min i can pay rn instead of the full emi amount",
+        "style": "typo_slang",
+        "language": "en",
+        "acceptable_headings": [
+          "Partial payment for a single cycle"
+        ],
+        "rank": 1,
+        "top_result_headings": "Restructuring options > Partial payment for a single cycle"
+      }
+    ]
+  },
+  "expand_true": {
+    "overall": {
+      "n": 33,
+      "recall@1": 0.8182,
+      "recall@3": 0.9091,
+      "recall@5": 0.9091,
+      "mrr": 0.8636
+    },
+    "by_style": {
+      "clean": {
+        "n": 10,
+        "recall@1": 0.7,
+        "recall@3": 0.9,
+        "recall@5": 0.9,
+        "mrr": 0.8
+      },
+      "devanagari": {
+        "n": 2,
+        "recall@1": 1.0,
+        "recall@3": 1.0,
+        "recall@5": 1.0,
+        "mrr": 1.0
+      },
+      "hinglish": {
+        "n": 9,
+        "recall@1": 0.8889,
+        "recall@3": 1.0,
+        "recall@5": 1.0,
+        "mrr": 0.9444
+      },
+      "run_on_venting": {
+        "n": 3,
+        "recall@1": 1.0,
+        "recall@3": 1.0,
+        "recall@5": 1.0,
+        "mrr": 1.0
+      },
+      "typo_slang": {
+        "n": 4,
+        "recall@1": 0.75,
+        "recall@3": 0.75,
+        "recall@5": 0.75,
+        "mrr": 0.75
+      },
+      "vague_colloquial": {
+        "n": 5,
+        "recall@1": 0.8,
+        "recall@3": 0.8,
+        "recall@5": 0.8,
+        "mrr": 0.8
+      }
+    },
+    "by_language": {
+      "en": {
+        "n": 22,
+        "recall@1": 0.7727,
+        "recall@3": 0.8636,
+        "recall@5": 0.8636,
+        "mrr": 0.8182
+      },
+      "hi": {
+        "n": 2,
+        "recall@1": 1.0,
+        "recall@3": 1.0,
+        "recall@5": 1.0,
+        "mrr": 1.0
+      },
+      "hinglish": {
+        "n": 9,
+        "recall@1": 0.8889,
+        "recall@3": 1.0,
+        "recall@5": 1.0,
+        "mrr": 0.9444
+      }
+    },
+    "rows": [
+      {
+        "query": "is there someone I can talk to about a payment that's not showing up on my end",
+        "style": "clean",
+        "language": "en",
+        "acceptable_headings": [
+          "Dispute handling"
+        ],
+        "rank": 2,
+        "top_result_headings": "Escalation policy"
+      },
+      {
+        "query": "yo i defo already paid tht EMI last wk trust me, sumthing wrong w ur system, pls fix???",
+        "style": "typo_slang",
+        "language": "en",
+        "acceptable_headings": [
+          "Dispute handling"
+        ],
+        "rank": null,
+        "top_result_headings": "Restructuring options"
+      },
+      {
+        "query": "mera jo late fee laga hai na wo galat hai yaar, maine to time pe paisa diya tha",
+        "style": "hinglish",
+        "language": "hinglish",
+        "acceptable_headings": [
+          "Dispute handling"
+        ],
+        "rank": 1,
+        "top_result_headings": "Dispute handling policy"
+      },
+      {
+        "query": "somethings off with my account balance, doesnt look right to me at all",
+        "style": "vague_colloquial",
+        "language": "en",
+        "acceptable_headings": [
+          "Dispute handling"
+        ],
+        "rank": 1,
+        "top_result_headings": "Dispute handling policy"
+      },
+      {
+        "query": "ok so this is driving me crazy the amount you guys are showing is just wrong i paid already and idk why its still saying pending this cant be right can someone look into this",
+        "style": "run_on_venting",
+        "language": "en",
+        "acceptable_headings": [
+          "Dispute handling"
+        ],
+        "rank": 1,
+        "top_result_headings": "Dispute handling policy"
+      },
+      {
+        "query": "when does this actually get handed off to an actual human being",
+        "style": "clean",
+        "language": "en",
+        "acceptable_headings": [
+          "Escalation policy"
+        ],
+        "rank": 1,
+        "top_result_headings": "Escalation policy"
+      },
+      {
+        "query": "agar mai baar baar promise tod du to kya hoga, insaan se baat hogi kya",
+        "style": "hinglish",
+        "language": "hinglish",
+        "acceptable_headings": [
+          "Escalation policy",
+          "What blocks an automated offer"
+        ],
+        "rank": 1,
+        "top_result_headings": "Restructuring options > What blocks an automated offer"
+      },
+      {
+        "query": "can this get bumped up to a real person or nah",
+        "style": "vague_colloquial",
+        "language": "en",
+        "acceptable_headings": [
+          "Escalation policy"
+        ],
+        "rank": 1,
+        "top_result_headings": "Escalation policy"
+      },
+      {
+        "query": "अगर मैं दो बार वादा तोड़ दूं तो क्या होगा",
+        "style": "devanagari",
+        "language": "hi",
+        "acceptable_headings": [
+          "Escalation policy",
+          "What blocks an automated offer"
+        ],
+        "rank": 1,
+        "top_result_headings": "Restructuring options > What blocks an automated offer"
+      },
+      {
+        "query": "if I promise to pay by the 25th and I actually pay on the 27th does that still count",
+        "style": "clean",
+        "language": "en",
+        "acceptable_headings": [
+          "Promise to pay"
+        ],
+        "rank": 1,
+        "top_result_headings": "General FAQ > Promise to pay"
+      },
+      {
+        "query": "does it still count if im lyk 2 days off from wat i promised",
+        "style": "typo_slang",
+        "language": "en",
+        "acceptable_headings": [
+          "Promise to pay"
+        ],
+        "rank": 1,
+        "top_result_headings": "General FAQ > Promise to pay"
+      },
+      {
+        "query": "maine 20 tak dene ka bola tha, 2 din late ho gaya to chalega kya",
+        "style": "hinglish",
+        "language": "hinglish",
+        "acceptable_headings": [
+          "Promise to pay"
+        ],
+        "rank": 2,
+        "top_result_headings": "Grace period policy"
+      },
+      {
+        "query": "why is an AI calling me, doesn't the bank just auto-deduct this every month anyway",
+        "style": "clean",
+        "language": "en",
+        "acceptable_headings": [
+          "NACH auto-debit mandate"
+        ],
+        "rank": 1,
+        "top_result_headings": "General FAQ > NACH auto-debit mandate"
+      },
+      {
+        "query": "isnt this supposed to come out on its own why am i even hearing from u about it",
+        "style": "vague_colloquial",
+        "language": "en",
+        "acceptable_headings": [
+          "NACH auto-debit mandate"
+        ],
+        "rank": 1,
+        "top_result_headings": "General FAQ > NACH auto-debit mandate"
+      },
+      {
+        "query": "mera to auto debit hai na, phir ye call kyu aa rahi hai mujhe",
+        "style": "hinglish",
+        "language": "hinglish",
+        "acceptable_headings": [
+          "NACH auto-debit mandate"
+        ],
+        "rank": 1,
+        "top_result_headings": "General FAQ > NACH auto-debit mandate"
+      },
+      {
+        "query": "can you just waive this interest for me, just this once",
+        "style": "clean",
+        "language": "en",
+        "acceptable_headings": [
+          "What the agent cannot do"
+        ],
+        "rank": 1,
+        "top_result_headings": "General FAQ > What the agent cannot do"
+      },
+      {
+        "query": "look i dont have the money can u just like remove the interest or lower the rate or something i really need a break here",
+        "style": "run_on_venting",
+        "language": "en",
+        "acceptable_headings": [
+          "What the agent cannot do"
+        ],
+        "rank": 1,
+        "top_result_headings": "General FAQ > What the agent cannot do"
+      },
+      {
+        "query": "interest rate thoda kam kar do na please, itna zyada nahi de sakta",
+        "style": "hinglish",
+        "language": "hinglish",
+        "acceptable_headings": [
+          "What the agent cannot do"
+        ],
+        "rank": 1,
+        "top_result_headings": "General FAQ > What the agent cannot do"
+      },
+      {
+        "query": "is there any buffer time before it's actually counted as late",
+        "style": "clean",
+        "language": "en",
+        "acceptable_headings": [
+          "Grace period"
+        ],
+        "rank": 1,
+        "top_result_headings": "Grace period policy"
+      },
+      {
+        "query": "wil i get charged a late fee if im jst 2 days late paying",
+        "style": "typo_slang",
+        "language": "en",
+        "acceptable_headings": [
+          "Grace period"
+        ],
+        "rank": 1,
+        "top_result_headings": "Grace period policy"
+      },
+      {
+        "query": "thoda time mil sakta hai kya bina late fee lagaye",
+        "style": "hinglish",
+        "language": "hinglish",
+        "acceptable_headings": [
+          "Grace period"
+        ],
+        "rank": 1,
+        "top_result_headings": "Grace period policy"
+      },
+      {
+        "query": "क्या मुझे कुछ और दिन मिल सकते हैं बिना जुर्माने के",
+        "style": "devanagari",
+        "language": "hi",
+        "acceptable_headings": [
+          "Grace period"
+        ],
+        "rank": 1,
+        "top_result_headings": "Grace period policy"
+      },
+      {
+        "query": "can you stretch out my loan so the monthly amount is smaller",
+        "style": "clean",
+        "language": "en",
+        "acceptable_headings": [
+          "Extend tenure"
+        ],
+        "rank": 1,
+        "top_result_headings": "Restructuring options > Extend tenure"
+      },
+      {
+        "query": "is there a way to make the monthly hit smaller even if it takes longer overall",
+        "style": "vague_colloquial",
+        "language": "en",
+        "acceptable_headings": [
+          "Extend tenure"
+        ],
+        "rank": 1,
+        "top_result_headings": "Restructuring options > Extend tenure"
+      },
+      {
+        "query": "EMI kam karne ka koi tarika hai kya, chahe time zyada lag jaye",
+        "style": "hinglish",
+        "language": "hinglish",
+        "acceptable_headings": [
+          "Extend tenure"
+        ],
+        "rank": 1,
+        "top_result_headings": "Restructuring options > Extend tenure"
+      },
+      {
+        "query": "if I pay it all off right now in one go do I get any kind of discount",
+        "style": "clean",
+        "language": "en",
+        "acceptable_headings": [
+          "One-time settlement"
+        ],
+        "rank": 1,
+        "top_result_headings": "Restructuring options > One-time settlement"
+      },
+      {
+        "query": "honestly im so done with this loan can i just pay the whole remaining thing today and be done with it forever",
+        "style": "run_on_venting",
+        "language": "en",
+        "acceptable_headings": [
+          "One-time settlement"
+        ],
+        "rank": 1,
+        "top_result_headings": "Restructuring options > One-time settlement"
+      },
+      {
+        "query": "poora loan ek baar mein khatam karna hai, discount milega kya usme",
+        "style": "hinglish",
+        "language": "hinglish",
+        "acceptable_headings": [
+          "One-time settlement"
+        ],
+        "rank": 1,
+        "top_result_headings": "Restructuring options > One-time settlement"
+      },
+      {
+        "query": "why can't you just restructure my loan right now, whats the holdup",
+        "style": "clean",
+        "language": "en",
+        "acceptable_headings": [
+          "What blocks an automated offer",
+          "Escalation policy"
+        ],
+        "rank": null,
+        "top_result_headings": "Restructuring options"
+      },
+      {
+        "query": "how come the system wont let this go through for me",
+        "style": "vague_colloquial",
+        "language": "en",
+        "acceptable_headings": [
+          "What blocks an automated offer"
+        ],
+        "rank": null,
+        "top_result_headings": "General FAQ > NACH auto-debit mandate"
+      },
+      {
+        "query": "whats the least amount I could pay this month and still be okay",
+        "style": "clean",
+        "language": "en",
+        "acceptable_headings": [
+          "Partial payment for a single cycle"
+        ],
+        "rank": 2,
+        "top_result_headings": "Restructuring options > Extend tenure"
+      },
+      {
+        "query": "is mahine thoda kam de doon to chalega kya, poora nahi hai mere paas abhi",
+        "style": "hinglish",
+        "language": "hinglish",
+        "acceptable_headings": [
+          "Partial payment for a single cycle"
+        ],
+        "rank": 1,
+        "top_result_headings": "Restructuring options > Partial payment for a single cycle"
+      },
+      {
+        "query": "wats the min i can pay rn instead of the full emi amount",
+        "style": "typo_slang",
+        "language": "en",
+        "acceptable_headings": [
+          "Partial payment for a single cycle"
+        ],
+        "rank": 1,
+        "top_result_headings": "Restructuring options > Partial payment for a single cycle"
+      }
+    ]
+  }
+}

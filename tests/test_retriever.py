@@ -26,6 +26,13 @@ def retriever():
         # document per query.
         ("what happens if I break a promise to pay twice", ["Escalation policy", "What blocks an automated offer"]),
         ("can you lower my monthly payment for a while", ["Restructuring options"]),
+        # Pure Devanagari -- "can I get a few more days without a penalty."
+        # Verified via eval/retrieval_benchmark.py that this specific query
+        # regressed to rank 3 (wrong chunk at #1) before the no-BM25-tokens
+        # rerank-skip fix in retriever.py, since the English-only reranker
+        # was demoting a chunk the multilingual embedding stage had already
+        # ranked correctly.
+        ("क्या मुझे कुछ और दिन मिल सकते हैं बिना जुर्माने के", ["Grace period"]),
     ],
 )
 def test_retrieves_the_right_document(retriever, query, acceptable_headings):
@@ -39,6 +46,21 @@ def test_general_docs_are_visible_regardless_of_account_id():
     results = retriever.retrieve("can I get a few more days to pay", top_k=1, account_id="BF-1001")
     assert results
     assert results[0]["account_id"] == "general"
+
+
+def test_a_query_with_no_bm25_tokens_still_returns_well_formed_results(retriever):
+    # An empty _tokenize(query) (punctuation-only, or pure Devanagari --
+    # the tokenizer regex is [a-z0-9]+) makes BM25Okapi.get_scores([])
+    # return an all-zero-tie array; sorted() on ties is stable, so
+    # without the empty-token guard in retriever.py this silently became
+    # "whichever chunks were ingested first" rather than a real signal.
+    # This doesn't assert a specific ranking (that's eval/retrieval_
+    # benchmark.py's job) -- just that the guard doesn't crash or return
+    # malformed output on the exact input that triggers it.
+    ranked = retriever.retrieve("??? !!! ...", top_k=2)
+    assert isinstance(ranked, list)
+    assert len(ranked) <= 2
+    assert all("headings" in r and "text" in r for r in ranked)
 
 
 def test_one_borrowers_documents_are_not_visible_to_another():

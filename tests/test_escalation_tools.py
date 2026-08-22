@@ -28,3 +28,22 @@ def test_escalate_to_human_creates_a_real_escalation(reseed_accounts):
 def test_escalate_to_human_raises_on_unknown_account(reseed_accounts):
     with pytest.raises(ValueError, match="No account found"):
         escalate_to_human(account_id="BF-9999", reason="anything")
+
+
+def test_escalate_to_human_is_idempotent_against_an_identical_repeat_call(reseed_accounts):
+    # A retry, or the model escalating for the same stated reason twice in
+    # one turn, should produce one ticket for a human to work, not two.
+    first = escalate_to_human(account_id="BF-1003", reason="Borrower demands a human, dispute unresolved")
+    second = escalate_to_human(account_id="BF-1003", reason="Borrower demands a human, dispute unresolved")
+
+    assert second["escalation_id"] == first["escalation_id"]
+
+
+def test_escalate_to_human_with_a_different_reason_opens_a_genuinely_new_ticket(reseed_accounts):
+    # Idempotency must only collapse true repeats -- a second, distinct
+    # reason to escalate the same account is real new information for
+    # the human on the other end, not noise to dedupe away.
+    first = escalate_to_human(account_id="BF-1003", reason="Borrower demands a human, dispute unresolved")
+    second = escalate_to_human(account_id="BF-1003", reason="Borrower also asked about a totally separate loan")
+
+    assert second["escalation_id"] != first["escalation_id"]

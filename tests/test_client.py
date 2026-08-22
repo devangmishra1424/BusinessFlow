@@ -19,10 +19,27 @@ def test_prompt_requires_checking_dispute_block_before_asking_restructuring_spec
     assert "restructuring specifics" in prompt
 
 
+def test_prompt_requires_checking_a_concrete_proposed_amount_rather_than_stating_the_block_from_memory():
+    # Found live via eval/tool_calling_benchmark.py and eval/
+    # realistic_conversation_benchmark.py: given a concrete proposed
+    # amount on a dispute-blocked account, the model sometimes stated
+    # the block directly (sometimes citing an ungrounded specific
+    # number the Guardrail then had to block) instead of calling
+    # propose_partial_payment to get the real, grounded reason/minimum.
+    prompt = build_system_prompt(language="en")
+    assert "never a substitute for checking a real number" in prompt
+
+
 def test_prompt_requires_grounding_policy_claims_in_check_policy():
     prompt = build_system_prompt(language="en")
     assert "check_policy" in prompt
     assert "from memory" in prompt
+
+
+def test_prompt_declines_legal_advice_and_offers_escalation():
+    prompt = build_system_prompt(language="en")
+    assert "legal advice" in prompt
+    assert "escalate" in prompt
 
 
 def test_hindi_prompt_requires_devanagari_script():
@@ -52,20 +69,28 @@ def test_prompt_without_account_id_says_no_account_access():
 
 
 @pytest.fixture
-def reset_fallback_key_switch():
-    """_using_fallback_key/_fallback_switched_at are process-wide, global
-    state -- reset both after the test regardless of outcome, so nothing
-    leaks into any other test that calls client()."""
-    original_flag = client_module._using_fallback_key
-    original_switched_at = client_module._fallback_switched_at
+def reset_fallback_key_switch(monkeypatch):
+    """_current_key_index/_switched_at are process-wide, global state --
+    reset both after the test regardless of outcome, so nothing leaks
+    into any other test that calls client(). Also clears every real
+    ALTERNATE_GROQ_KEY{N} this process's actual .env may have loaded --
+    without this, a test asserting "no more fallbacks configured" would
+    silently see whatever real fallback keys happen to be in .env right
+    now, not the clean slate it's written to expect."""
+    for n in range(2, client_module._MAX_FALLBACK_KEY_SUFFIX + 1):
+        monkeypatch.delenv(f"ALTERNATE_GROQ_KEY{n}", raising=False)
+    monkeypatch.delenv("ALTERNATE_GROQ_KEY", raising=False)
+
+    original_index = client_module._current_key_index
+    original_switched_at = client_module._switched_at
     yield
-    client_module._using_fallback_key = original_flag
-    client_module._fallback_switched_at = original_switched_at
+    client_module._current_key_index = original_index
+    client_module._switched_at = original_switched_at
 
 
 def test_switch_to_fallback_key_changes_which_key_client_returns(reset_fallback_key_switch, monkeypatch):
     monkeypatch.setenv("ALTERNATE_GROQ_KEY", "gsk_fake_fallback_key_for_this_test")
-    client_module._using_fallback_key = False
+    client_module._current_key_index = 0
     primary = client_module.client()
 
     switched = client_module.switch_to_fallback_key()
@@ -77,16 +102,51 @@ def test_switch_to_fallback_key_changes_which_key_client_returns(reset_fallback_
 
 def test_switch_to_fallback_key_returns_false_when_none_configured(reset_fallback_key_switch, monkeypatch):
     monkeypatch.delenv("ALTERNATE_GROQ_KEY", raising=False)
-    client_module._using_fallback_key = False
+    client_module._current_key_index = 0
 
     assert client_module.switch_to_fallback_key() is False
+
+
+def test_switch_to_fallback_key_advances_through_multiple_configured_fallbacks(reset_fallback_key_switch, monkeypatch):
+    # Real scenario this fixes: with only ONE fallback slot, a second
+    # rate limit in a row had nowhere left to go. With several
+    # ALTERNATE_GROQ_KEY{N} configured, it should keep advancing.
+    monkeypatch.setenv("ALTERNATE_GROQ_KEY", "gsk_fake_fallback_1")
+    monkeypatch.setenv("ALTERNATE_GROQ_KEY2", "gsk_fake_fallback_2")
+    monkeypatch.setenv("ALTERNATE_GROQ_KEY3", "gsk_fake_fallback_3")
+    client_module._current_key_index = 0
+
+    assert client_module.switch_to_fallback_key() is True
+    assert client_module.client().api_key == "gsk_fake_fallback_1"
+
+    assert client_module.switch_to_fallback_key() is True
+    assert client_module.client().api_key == "gsk_fake_fallback_2"
+
+    assert client_module.switch_to_fallback_key() is True
+    assert client_module.client().api_key == "gsk_fake_fallback_3"
+
+    # All three configured fallbacks now tried -- nowhere left to go.
+    assert client_module.switch_to_fallback_key() is False
+
+
+def test_fallback_env_var_names_does_not_stop_at_the_first_gap(reset_fallback_key_switch, monkeypatch):
+    # ALTERNATE_GROQ_KEY2 missing, but 3 and 4 ARE set -- a naive
+    # "stop at the first unset one" scan would miss 3 and 4 entirely.
+    monkeypatch.setenv("ALTERNATE_GROQ_KEY", "gsk_fake_fallback_1")
+    monkeypatch.delenv("ALTERNATE_GROQ_KEY2", raising=False)
+    monkeypatch.setenv("ALTERNATE_GROQ_KEY3", "gsk_fake_fallback_3")
+    monkeypatch.setenv("ALTERNATE_GROQ_KEY4", "gsk_fake_fallback_4")
+
+    names = client_module._fallback_env_var_names()
+
+    assert names == ["ALTERNATE_GROQ_KEY", "ALTERNATE_GROQ_KEY3", "ALTERNATE_GROQ_KEY4"]
 
 
 def test_fallback_key_stays_active_before_cooldown_elapses(reset_fallback_key_switch, monkeypatch):
     monkeypatch.setenv("ALTERNATE_GROQ_KEY", "gsk_fake_fallback_key_for_this_test")
     client_module.switch_to_fallback_key()
     # Barely any time has passed -- still well inside the cooldown window.
-    client_module._fallback_switched_at = time.time() - 60
+    client_module._switched_at = time.time() - 60
 
     assert client_module.client().api_key == "gsk_fake_fallback_key_for_this_test"
 
@@ -98,7 +158,7 @@ def test_fallback_key_reverts_to_primary_after_cooldown_elapses(reset_fallback_k
     monkeypatch.setenv("GROQ_API_KEY", "gsk_fake_primary_key_for_this_test")
     monkeypatch.setenv("ALTERNATE_GROQ_KEY", "gsk_fake_fallback_key_for_this_test")
     client_module.switch_to_fallback_key()
-    client_module._fallback_switched_at = time.time() - client_module._FALLBACK_COOLDOWN_SECONDS - 1
+    client_module._switched_at = time.time() - client_module._FALLBACK_COOLDOWN_SECONDS - 1
 
     assert client_module.client().api_key == "gsk_fake_primary_key_for_this_test"
-    assert client_module._using_fallback_key is False
+    assert client_module._current_key_index == 0

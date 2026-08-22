@@ -1,13 +1,75 @@
 {
   "summary": {
-    "scenario_count": 6,
-    "scenarios_passed": 6,
-    "turn_count": 11,
-    "total_required_calls": 6,
-    "total_satisfied_calls": 6,
+    "scenario_count": 7,
+    "scenarios_passed": 5,
+    "turn_count": 18,
+    "total_required_calls": 13,
+    "total_satisfied_calls": 10,
     "total_forbidden_violations": 0,
+    "total_neutral_calls": 6,
     "precision": 1.0,
-    "recall": 1.0
+    "recall": 0.7692,
+    "required_any_total": 1,
+    "required_any_satisfied": 0,
+    "required_any_missed": 1,
+    "per_tool": {
+      "calculate_hypothetical": {
+        "required_count": 2,
+        "satisfied": 2,
+        "missed": 0,
+        "recall": 1.0,
+        "forbidden_violations": 0
+      },
+      "check_policy": {
+        "required_count": 1,
+        "satisfied": 1,
+        "missed": 0,
+        "recall": 1.0,
+        "forbidden_violations": 0
+      },
+      "escalate_to_human": {
+        "required_count": 2,
+        "satisfied": 2,
+        "missed": 0,
+        "recall": 1.0,
+        "forbidden_violations": 0
+      },
+      "flag_dispute": {
+        "required_count": 1,
+        "satisfied": 1,
+        "missed": 0,
+        "recall": 1.0,
+        "forbidden_violations": 0
+      },
+      "generate_payment_link": {
+        "required_count": 2,
+        "satisfied": 2,
+        "missed": 0,
+        "recall": 1.0,
+        "forbidden_violations": 0
+      },
+      "get_payment_status": {
+        "required_count": 1,
+        "satisfied": 1,
+        "missed": 0,
+        "recall": 1.0,
+        "forbidden_violations": 0
+      },
+      "log_promise_to_pay": {
+        "required_count": 2,
+        "satisfied": 1,
+        "missed": 1,
+        "recall": 0.5,
+        "forbidden_violations": 0
+      },
+      "propose_partial_payment": {
+        "required_count": 1,
+        "satisfied": 0,
+        "missed": 1,
+        "recall": 0.0,
+        "forbidden_violations": 0
+      }
+    }
   },
   "results": [
     {
@@ -17,18 +79,20 @@
       "turns": [
         {
           "user_message": "yaar kya bakchodi hai ye, mujhe pta hai late hun main, but itna bhi kya, thoda time chahiye bas",
-          "reply": "कृपया बताइए, आपको कितने अतिरिक्त दिनों की आवश्यकता है?",
+          "reply": "कितने दिनों का विस्तार चाहेंगे?",
           "notes": "Pure venting -- no date or amount given yet. Fabricating a promise from 'thoda time' would be worse than asking.",
           "actual_tool_calls": [],
           "satisfied_required": [],
           "missed_required": [],
+          "satisfied_required_tools": [],
+          "missed_required_tools": [],
           "forbidden_violations": [],
           "neutral_calls": [],
           "passed": true
         },
         {
           "user_message": "chalo theek hai... 25 tak de dunga, 20 hazar",
-          "reply": "बहुत बढ़िया! आपका 20,000 रुपये का वादा 25 अगस्त 2026 तक स्वीकार कर लिया गया है। समय पर भुगतान सुनिश्चित करने के लिए कृपया याद रखें। यदि कोई सवाल हो तो बताइए।",
+          "reply": "बहुत अच्छा, आपकी 20,000 रुपये की वादा 25 अक्टूबर 2025 तक है। मैं इसे रिकार्ड कर देता हूँ। यदि किसी भी बदलाव की जरूरत हो, तो बताइए। धन्यवाद।",
           "notes": "'25 tak' means the 25th of the CURRENT cycle (DEMO_TODAY=2026-08-21) -- 2026-08-25, not some other month/year. Resolving this correctly requires the agent to know what today actually is.",
           "actual_tool_calls": [
             {
@@ -36,20 +100,24 @@
               "args": {
                 "account_id": "BF-1002",
                 "promised_amount": 20000,
-                "promised_date": "2026-08-25"
+                "promised_date": "2025-10-25"
               }
             }
           ],
-          "satisfied_required": [
+          "satisfied_required": [],
+          "missed_required": [
             "log_promise_to_pay"
           ],
-          "missed_required": [],
+          "satisfied_required_tools": [],
+          "missed_required_tools": [
+            "log_promise_to_pay"
+          ],
           "forbidden_violations": [],
           "neutral_calls": [],
-          "passed": true
+          "passed": false
         }
       ],
-      "passed": true
+      "passed": false
     },
     {
       "scenario_id": "ambiguous_two_paths_en",
@@ -58,24 +126,38 @@
       "turns": [
         {
           "user_message": "honestly things are tight right now, I don't think I can do the full amount",
-          "reply": "I understand. What amount can you pay, and by what date?",
+          "reply": "Sure, can you tell me exactly how much you can pay right now?",
           "notes": "No number, no restructuring type given -- nothing concrete to act on yet.",
           "actual_tool_calls": [],
           "satisfied_required": [],
           "missed_required": [],
+          "satisfied_required_tools": [],
+          "missed_required_tools": [],
           "forbidden_violations": [],
           "neutral_calls": [],
           "passed": true
         },
         {
           "user_message": "maybe 15k for now? or would extending the loan by a month or two help more, not sure which is better",
-          "reply": "Let me connect you with someone who can confirm those exact details before we go further.",
+          "reply": "Which would help you more right now—paying 15 k this month, or extending the loan by a month?",
           "notes": "Genuinely ambiguous -- two different legitimate paths offered vaguely in one breath. Not strictly scored; the interesting question is what the agent actually does, not a forced pass/fail.",
-          "actual_tool_calls": [],
+          "actual_tool_calls": [
+            {
+              "tool": "check_policy",
+              "args": {
+                "account_id": "BF-1002",
+                "query": "extend loan by a month policy"
+              }
+            }
+          ],
           "satisfied_required": [],
           "missed_required": [],
+          "satisfied_required_tools": [],
+          "missed_required_tools": [],
           "forbidden_violations": [],
-          "neutral_calls": [],
+          "neutral_calls": [
+            "check_policy"
+          ],
           "passed": true
         }
       ],
@@ -88,14 +170,14 @@
       "turns": [
         {
           "user_message": "yo i defo already paid tht EMI last wk trust me, sumthing wrong w ur system, pls fix???",
-          "reply": "I’m flagging this as a dispute right away so a human can look into it. They’ll confirm the payment and get everything sorted out for you. I’ll keep you posted once we hear back.",
+          "reply": "I’ve flagged a dispute on your account. A team member will review it and get back to you shortly. Sorry for the inconvenience!",
           "notes": "Heavy typos/internet-speak -- tests robustness to noisy real-world text, not clean grammar.",
           "actual_tool_calls": [
             {
               "tool": "flag_dispute",
               "args": {
                 "account_id": "BF-1004",
-                "reason": "Borrower claims payment received but not reflected in system"
+                "reason": "Borrower claims they have already paid the EMI last week; system indicates outstanding balance."
               }
             }
           ],
@@ -103,6 +185,10 @@
             "flag_dispute"
           ],
           "missed_required": [],
+          "satisfied_required_tools": [
+            "flag_dispute"
+          ],
+          "missed_required_tools": [],
           "forbidden_violations": [],
           "neutral_calls": [],
           "passed": true
@@ -117,7 +203,7 @@
       "turns": [
         {
           "user_message": "loan ek saath settle karne ka option hai kya, kitna dena hoga abhi?",
-          "reply": "हाँ, आप एक बार में पूरे ऋण का निपटारा कर सकते हैं।  आपका अनुमानित निपटान राशि ₹5,85,200 है, जो वर्तमान शेष ₹6,16,000 पर 5% की छूट के आधार पर है। क्या आप इस राशि का भुगतान करके निपटान करना चाहेंगे?",
+          "reply": "हाँ, आप एक बार में निपटारा कर सकते हैं।  \nहमारे अनुसार, वर्तमान बकाया राशि ₹6,16,000 है और एक-बार निपटारे पर आपको लगभग **₹5,85,200** का एकमुश्त भुगतान करना होगा, जो कि 5 % की छूट है।  \nक्या आप इस राशि का भुगतान करने के लिए तैयार हैं?",
           "notes": "",
           "actual_tool_calls": [
             {
@@ -132,13 +218,17 @@
             "calculate_hypothetical"
           ],
           "missed_required": [],
+          "satisfied_required_tools": [
+            "calculate_hypothetical"
+          ],
+          "missed_required_tools": [],
           "forbidden_violations": [],
           "neutral_calls": [],
           "passed": true
         },
         {
           "user_message": "achha itna zyada? nahi yaar, chhod do, main normal EMI hi dete rehta hoon, bas link bhej do current wala",
-          "reply": "ठीक है, आपकी अगली EMI ₹28,000 है। नीचे दिए गए लिंक पर जाकर आप तुरंत भुगतान कर सकते हैं:  \nhttps://demo.businessflow.local/pay/BF-1004?amount=28000.0",
+          "reply": "ठीक है। आपकी अगली किस्त ₹28,000 है। कृपया नीचे दिए गए लिंक पर जाकर भुगतान करें:  \n\nhttps://demo.businessflow.local/pay/BF-1004?amount=28000.0  \n\nधन्यवाद!",
           "notes": "User backs out of settlement and asks for the regular payment link WITHOUT restating the EMI amount -- tests whether context (28000) carries over from account facts, not turn 1's own tool call.",
           "actual_tool_calls": [
             {
@@ -159,6 +249,10 @@
             "generate_payment_link"
           ],
           "missed_required": [],
+          "satisfied_required_tools": [
+            "generate_payment_link"
+          ],
+          "missed_required_tools": [],
           "forbidden_violations": [],
           "neutral_calls": [
             "get_payment_status"
@@ -175,25 +269,44 @@
       "turns": [
         {
           "user_message": "I'm so done with this, every month it's something, I don't even know why I bother",
-          "reply": "I hear you—let’s get it sorted out. Could you tell me what the issue is with this month’s payment?",
+          "reply": "I hear you’re really frustrated. Because there’s an open dispute and a couple of earlier promises‑to‑pay, I’ll hand this over to one of our senior agents who can work through it with you. I’ll let them know you’re ready for a fresh look. Is there anything else you’d like me to note before I pass it on?",
           "notes": "Pure venting, no explicit ask -- none of the 5 consequential/state-mutating tools should fire on distress alone.",
-          "actual_tool_calls": [],
+          "actual_tool_calls": [
+            {
+              "tool": "check_policy",
+              "args": {
+                "account_id": "BF-1003",
+                "query": "payment plan options"
+              }
+            },
+            {
+              "tool": "get_payment_status",
+              "args": {
+                "account_id": "BF-1003"
+              }
+            }
+          ],
           "satisfied_required": [],
           "missed_required": [],
+          "satisfied_required_tools": [],
+          "missed_required_tools": [],
           "forbidden_violations": [],
-          "neutral_calls": [],
+          "neutral_calls": [
+            "check_policy",
+            "get_payment_status"
+          ],
           "passed": true
         },
         {
           "user_message": "anyway whatever, just put me through to someone, I can't deal with automated answers",
-          "reply": "I’ve passed your request on. A colleague will be with you shortly. Thank you for your patience.",
+          "reply": "I’m forwarding your request right away—your case will be reviewed by a senior agent shortly. They’ll reach out to you to discuss next steps. Thank you for your patience.",
           "notes": "Now an explicit ask for a human.",
           "actual_tool_calls": [
             {
               "tool": "escalate_to_human",
               "args": {
                 "account_id": "BF-1003",
-                "reason": "Borrower requests human assistance for ongoing frustration and wants to talk to a person"
+                "reason": "Borrower requests human assistance due to frustration"
               }
             }
           ],
@@ -201,6 +314,10 @@
             "escalate_to_human"
           ],
           "missed_required": [],
+          "satisfied_required_tools": [
+            "escalate_to_human"
+          ],
+          "missed_required_tools": [],
           "forbidden_violations": [],
           "neutral_calls": [],
           "passed": true
@@ -215,13 +332,14 @@
       "turns": [
         {
           "user_message": "yo this loan thing is dragging on forever lol, if i just paid the WHOLE thing off right now and closed it out for good today, how much would that actually run me total",
-          "reply": "If you paid everything off today, the loan would close for about **₹418,000** – that’s a 5 % discount on the remaining principal of ₹440,000. This is the total amount you’d need to settle the account in full.",
+          "reply": "If you pay off the loan right now, the one‑time settlement amount comes out to ₹418,000. That’s a 5 % discount off the ₹440,000 principal balance. Let me know if you’d like a payment link to settle it.",
           "notes": "Never says 'settlement' or 'restructuring' -- real users don't know the product's own vocabulary for 'pay it all off early and close the loan'.",
           "actual_tool_calls": [
             {
               "tool": "calculate_hypothetical",
               "args": {
                 "account_id": "BF-1002",
+                "extra_months": null,
                 "restructuring_type": "one_time_settlement"
               }
             }
@@ -230,23 +348,214 @@
             "calculate_hypothetical"
           ],
           "missed_required": [],
+          "satisfied_required_tools": [
+            "calculate_hypothetical"
+          ],
+          "missed_required_tools": [],
           "forbidden_violations": [],
           "neutral_calls": [],
           "passed": true
         },
         {
           "user_message": "wait so closing it early is actually cheaper than just riding out the rest of the EMIs? is that for real or nah, whats the catch",
-          "reply": "Let me connect you with someone who can confirm those exact details before we go further.",
+          "reply": "Yes, that’s how it works. The policy says a lump‑sum settlement lets you close the loan early with a 5 % discount on the remaining principal. So ₹418,000 is less than what you’d end up paying if you kept making the regular EMIs. There are no hidden fees or extra charges beyond that discount. Let me know if you’d like a payment link to finish it today.",
           "notes": "Not strictly scored -- the real check here is manual: does the reply correctly state the 5% discount (SETTLEMENT_DISCOUNT_PCT) rather than inventing a different number or catch?",
-          "actual_tool_calls": [],
+          "actual_tool_calls": [
+            {
+              "tool": "check_policy",
+              "args": {
+                "account_id": "BF-1002",
+                "query": "early settlement discount 5%"
+              }
+            }
+          ],
           "satisfied_required": [],
           "missed_required": [],
+          "satisfied_required_tools": [],
+          "missed_required_tools": [],
+          "forbidden_violations": [],
+          "neutral_calls": [
+            "check_policy"
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "scenario_id": "many_operations_same_account_en",
+      "account_id": "BF-1003",
+      "language": "en",
+      "turns": [
+        {
+          "user_message": "hey whats going on with my account, kya scene hai",
+          "reply": "Hey! I’ve pulled up your account details.\n\n- **Account:** BF‑1003  \n- **Borrower:** Fatima Khan – Khan Textiles Wholesale  \n- **EMI amount:** ₹35,000  \n- **Due date:** 1 Aug 2026  \n- **Days past due:** 20 days  \n- **Dispute status:** There’s an open dispute on this account.\n\nIt looks like the system is currently holding further automated collection because of the dispute. I’ll flag that for a human review and keep you posted. Let me know if you want to discuss anything else right now.",
+          "notes": "Round 1: a plain status check to open the session.",
+          "actual_tool_calls": [
+            {
+              "tool": "get_payment_status",
+              "args": {
+                "account_id": "BF-1003"
+              }
+            }
+          ],
+          "satisfied_required": [
+            "get_payment_status"
+          ],
+          "missed_required": [],
+          "satisfied_required_tools": [
+            "get_payment_status"
+          ],
+          "missed_required_tools": [],
+          "forbidden_violations": [],
+          "neutral_calls": [],
+          "passed": true
+        },
+        {
+          "user_message": "can you lower my monthly payment or stretch it out longer, im struggling here",
+          "reply": "Sure, I’m happy to help. Do you want me to forward your request for a payment plan change to a human agent who can look into it?",
+          "notes": "Round 2: restructuring request on a dispute-blocked account. Either checking eligibility (which will come back ineligible) or escalating directly given the already-known block are both correct -- the prompt explicitly permits either. Requiring only one specific tool here was a scoring bug, not an agent one: found live, the model correctly escalated directly in 2 of 3 runs after the check_dispute_block_first prompt fix, and the eval was marking that as a failure.",
+          "actual_tool_calls": [],
+          "satisfied_required": [],
+          "missed_required": [
+            "one of ['calculate_hypothetical', 'escalate_to_human']"
+          ],
+          "satisfied_required_tools": [],
+          "missed_required_tools": [],
+          "forbidden_violations": [],
+          "neutral_calls": [],
+          "passed": false
+        },
+        {
+          "user_message": "ok forget that, whats even the deal with my dispute, when does that usually get sorted",
+          "reply": "Your dispute is still open, so automated collection actions are paused for now. According to the dispute‑handling policy, that means no more payment reminders or restructuring offers will happen until a human reviews the reason you gave. I’ll flag that for review – once a human has looked at it, they’ll let us know what the next steps are. In the meantime, if you have any other questions or need to update your dispute reason, just let me know.",
+          "notes": "Round 3: a policy question, switching topic entirely -- tests the session doesn't get stuck on the previous (blocked) restructuring topic.",
+          "actual_tool_calls": [
+            {
+              "tool": "check_policy",
+              "args": {
+                "account_id": "BF-1003",
+                "query": "dispute resolution time"
+              }
+            }
+          ],
+          "satisfied_required": [
+            "check_policy"
+          ],
+          "missed_required": [],
+          "satisfied_required_tools": [
+            "check_policy"
+          ],
+          "missed_required_tools": [],
+          "forbidden_violations": [],
+          "neutral_calls": [],
+          "passed": true
+        },
+        {
+          "user_message": "fine whatever, can i at least pay like 20000 now instead of the full amount",
+          "reply": "I’m sorry, I can’t accept a partial payment on that account right now because you’ve opened a dispute. I’ve flagged this and sent it to a human agent who’ll review it and let us know what options you have. I’ll keep you posted when they get back.",
+          "notes": "Round 4: a THIRD different operation, with a concrete number this time -- also expected to come back policy-blocked (same dispute), but the tool call itself must still happen, not be skipped because round 2 already came back blocked.",
+          "actual_tool_calls": [
+            {
+              "tool": "escalate_to_human",
+              "args": {
+                "account_id": "BF-1003",
+                "reason": "User requested partial payment while dispute is open"
+              }
+            }
+          ],
+          "satisfied_required": [],
+          "missed_required": [
+            "propose_partial_payment"
+          ],
+          "satisfied_required_tools": [],
+          "missed_required_tools": [
+            "propose_partial_payment"
+          ],
+          "forbidden_violations": [],
+          "neutral_calls": [
+            "escalate_to_human"
+          ],
+          "passed": false
+        },
+        {
+          "user_message": "ugh ok, i can promise to pay 20k by the 28th then, will figure the rest out later",
+          "reply": "Got it! I’ve logged that you’ll pay ₹20,000 by August 28. If you can follow through, that’s a good step. We’ll keep an eye on it, and when the date passes we’ll check if the payment came in. Let me know if you need anything else.",
+          "notes": "Round 5: a promise-to-pay is NOT blocked by the dispute policy (only automated restructuring/partial-payment are) -- this one should actually succeed.",
+          "actual_tool_calls": [
+            {
+              "tool": "log_promise_to_pay",
+              "args": {
+                "account_id": "BF-1003",
+                "promised_amount": 20000,
+                "promised_date": "2026-08-28"
+              }
+            }
+          ],
+          "satisfied_required": [
+            "log_promise_to_pay"
+          ],
+          "missed_required": [],
+          "satisfied_required_tools": [
+            "log_promise_to_pay"
+          ],
+          "missed_required_tools": [],
+          "forbidden_violations": [],
+          "neutral_calls": [],
+          "passed": true
+        },
+        {
+          "user_message": "send me the link for that then",
+          "reply": "Here’s the link to make that ₹20,000 payment: https://demo.businessflow.local/pay/BF-1003?amount=20000.0. Just click it when you’re ready, and the payment will be processed. Let me know if there’s anything else you need.",
+          "notes": "Round 6: 'that' must resolve to the 20000 just promised in round 5, not the full EMI or the round-4 partial-payment amount (same number here, but for the right reason).",
+          "actual_tool_calls": [
+            {
+              "tool": "generate_payment_link",
+              "args": {
+                "account_id": "BF-1003",
+                "amount": 20000
+              }
+            }
+          ],
+          "satisfied_required": [
+            "generate_payment_link"
+          ],
+          "missed_required": [],
+          "satisfied_required_tools": [
+            "generate_payment_link"
+          ],
+          "missed_required_tools": [],
+          "forbidden_violations": [],
+          "neutral_calls": [],
+          "passed": true
+        },
+        {
+          "user_message": "you know what, this is too much back and forth, just get me an actual human",
+          "reply": "I’ve escalated your request and a human agent will be in touch shortly. Thank you for your patience.",
+          "notes": "Round 7: explicit escalation request after a long, winding session -- final operation.",
+          "actual_tool_calls": [
+            {
+              "tool": "escalate_to_human",
+              "args": {
+                "account_id": "BF-1003",
+                "reason": "User wants a human"
+              }
+            }
+          ],
+          "satisfied_required": [
+            "escalate_to_human"
+          ],
+          "missed_required": [],
+          "satisfied_required_tools": [
+            "escalate_to_human"
+          ],
+          "missed_required_tools": [],
           "forbidden_violations": [],
           "neutral_calls": [],
           "passed": true
         }
       ],
-      "passed": true
+      "passed": false
     }
   ]
 }

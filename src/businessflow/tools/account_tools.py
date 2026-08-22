@@ -34,13 +34,16 @@ def log_promise_to_pay(account_id: str, promised_date: str, promised_amount: flo
     a tolerance band of a few days either side -- not the exact date."""
     store.get_account_or_raise(account_id)  # raises if the account doesn't exist
     parsed_date = date.fromisoformat(promised_date)
-    store.add_promise(account_id, made_on=store.current_date(), promised_date=parsed_date, promised_amount=promised_amount)
+    newly_logged = store.add_promise(
+        account_id, made_on=store.current_date(), promised_date=parsed_date, promised_amount=promised_amount
+    )
     return {
         "account_id": account_id,
         "promised_date": parsed_date.isoformat(),
         "promised_amount": promised_amount,
         "tolerance_days": PROMISE_TOLERANCE_DAYS,
         "logged": True,
+        "already_logged": not newly_logged,  # True if this exact promise was already on record today
     }
 
 
@@ -49,9 +52,10 @@ def flag_dispute(account_id: str, reason: str) -> dict:
     """Open a dispute flag on the account so no further automated collection
     action is taken on it until a human reviews the reason given."""
     store.get_account_or_raise(account_id)  # raises if the account doesn't exist
-    store.open_dispute(account_id, reason)
+    newly_opened = store.open_dispute(account_id, reason)
     return {
         "account_id": account_id,
         "dispute_open": True,
         "reason": reason,
+        "already_open": not newly_opened,  # True if the account already had a dispute open
     }

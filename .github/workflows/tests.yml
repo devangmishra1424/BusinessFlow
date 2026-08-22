@@ -1,0 +1,40 @@
+name: tests
+
+"on":
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    # Real Groq/Postgres/ASR calls, no mocking -- this is genuinely slow
+    # (observed ~2 hours locally with a warm model cache). Give it real
+    # headroom rather than hitting GitHub's default 6h/job cap partway
+    # through a run and losing the whole thing.
+    timeout-minutes: 240
+    env:
+      # Every one of these is optional: tests that need it are gated by
+      # their own pytest.mark.skipif and simply skip if it's unset,
+      # exactly like running locally without a filled-in .env. Add the
+      # real secrets under Settings -> Secrets and variables -> Actions
+      # to actually exercise the Groq/Postgres/auth-gated tests in CI.
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      ALTERNATE_GROQ_KEY: ${{ secrets.ALTERNATE_GROQ_KEY }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      OPS_API_KEY: ${{ secrets.OPS_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Run tests
+        run: pytest tests/ -v

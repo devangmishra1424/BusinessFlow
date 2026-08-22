@@ -10,6 +10,9 @@ conversation gets) is unaffected, since that's persisted to Postgres via
 memory/conversation_memory.py independently of this in-memory state.
 
 Run: uvicorn businessflow.channels.browser_api:app --reload
+(defaults to port 8000). The ops dashboard API (ops/api.py) is a
+separate FastAPI app on port 8001 -- run both side by side, they don't
+share state or a port.
 """
 
 import uuid
@@ -21,6 +24,7 @@ from pydantic import BaseModel
 
 from businessflow.agent.loop import (
     AccessDeniedError,
+    AccountLockedError,
     extract_new_tool_calls,
     run_turn_with_memory,
     start_conversation,
@@ -85,6 +89,8 @@ def start_conversation_endpoint(req: StartConversationRequest):
             conversation = verify_and_start_conversation(req.language, req.account_id, req.access_key)
         except AccessDeniedError:
             raise HTTPException(status_code=401, detail=f"wrong access key for account {req.account_id}") from None
+        except AccountLockedError as e:
+            raise HTTPException(status_code=429, detail=str(e)) from None
     else:
         conversation = start_conversation(language=req.language, account_id=None)
 
