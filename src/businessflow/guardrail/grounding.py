@@ -1,0 +1,141 @@
+"""The Guardrail: a mechanical check that anything stated in a reply --
+a URL, a currency amount -- actually traces back to a real tool result
+or the borrower's own words somewhere in this conversation, not
+something the model invented.
+
+This is the architectural piece the original blueprint called for as a
+distinct step before speaking ("ground before speaking... before
+synthesis") that had been missing from the actual build -- its absence
+is exactly what let the agent fabricate a fake payment link earlier this
+session (see eval/realistic_conversation_benchmark.py's
+settlement_then_backpedal_hi scenario: it invented
+"https://payments.example.com/..." instead of calling generate_payment_link).
+
+Deliberately narrow: checks URLs and rupee amounts specifically, not
+every digit in the reply -- a blanket "every number must be grounded"
+check would false-positive on ordinary descriptive numbers ("3 days",
+"a 5% discount") and make the guardrail useless through over-triggering.
+URLs and money are the two categories where an invented value is
+genuinely dangerous.
+
+Known, accepted trade-off: this checks literal values, not derived
+arithmetic. Found live -- the model correctly computed "you'd save
+₹22,000" from two real, grounded tool numbers (₹440,000 owed minus a
+₹418,000 settlement), and got blocked anyway, since "22000" itself
+never appears in any tool result. Verifying arbitrary arithmetic
+correctness would need real computation, not a text-matching check, and
+risks its own bugs -- favoring occasionally blocking a correct computed
+number over letting a genuinely invented one through is the deliberate
+choice here, not an oversight.
+"""
+
+import re
+
+_URL_RE = re.compile(r"https?://\S+")
+# Allows a single embedded space between digit groups -- found live: the
+# model wrote a Devanagari-numeral amount as "₹५ ८५,२००" (meant to be one
+# number, ५,८५,२०० = 585200) with a stray space instead of a separator.
+# Without this, [\d,]+ stops at the space and captures only "५" (5) as
+# its own isolated "amount", which correctly matches nothing -- a false
+# positive from the regex being too strict, not a real hallucination.
+_RUPEE_AMOUNT_RE = re.compile(r"₹\s*([\d,]+(?: [\d,]+)*(?:\.\d+)?)")
+_PLAIN_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
+# Real borrowers write "15k" or "1.5L", not "15000" or "150000" -- found
+# live: a user said "maybe 15k for now?", the model correctly asked
+# "will you pay ₹15,000...?" (the exact hedge-handling behavior meant to
+# happen), and the guardrail blocked its own correct question because
+# "15k" and "15000" don't look alike as plain text.
+_SHORTHAND_THOUSAND_RE = re.compile(r"(\d+(?:\.\d+)?)\s*[kK]\b")
+_SHORTHAND_LAKH_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:l|L|lakh|lakhs)\b")
+
+
+def extract_urls(text: str) -> set[str]:
+    # Trailing punctuation/markup isn't part of the URL -- strip it
+    # before comparing, or the match never lines up with the clean URL
+    # from a real tool result. Found live, one character at a time, each
+    # a genuine case: '"' (a URL embedded in a tool result's own JSON
+    # string, followed by a closing quote), '>' (the model wrapped a real
+    # link in angle brackets, <https://...>). Covering the wider set of
+    # common wrappers/sentence punctuation up front instead of continuing
+    # to patch this one character at a time.
+    return {u.rstrip("\">.,!?。）')]}*`;:") for u in _URL_RE.findall(text)}
+
+
+def extract_rupee_amounts(text: str) -> set[float]:
+    amounts = set()
+    for m in _RUPEE_AMOUNT_RE.finditer(text):
+        try:
+            amounts.add(float(m.group(1).replace(",", "").replace(" ", "")))
+        except ValueError:
+            continue
+    return amounts
+
+
+def _extract_shorthand_amounts(text: str) -> set[float]:
+    amounts = set()
+    for m in _SHORTHAND_THOUSAND_RE.finditer(text):
+        try:
+            amounts.add(float(m.group(1)) * 1_000)
+        except ValueError:
+            continue
+    for m in _SHORTHAND_LAKH_RE.finditer(text):
+        try:
+            amounts.add(float(m.group(1)) * 100_000)
+        except ValueError:
+            continue
+    return amounts
+
+
+def _extract_plain_numbers(text: str) -> set[float]:
+    numbers = set()
+    for m in _PLAIN_NUMBER_RE.finditer(text):
+        try:
+            numbers.add(float(m.group(0)))
+        except ValueError:
+            continue
+    return numbers
+
+
+class GroundingFailure:
+    def __init__(self, ungrounded_urls: set[str], ungrounded_amounts: set[float]):
+        self.ungrounded_urls = ungrounded_urls
+        self.ungrounded_amounts = ungrounded_amounts
+
+    def __bool__(self) -> bool:
+        return bool(self.ungrounded_urls or self.ungrounded_amounts)
+
+    def describe(self) -> str:
+        parts = []
+        if self.ungrounded_urls:
+            parts.append(f"URL(s) not from any real tool result: {sorted(self.ungrounded_urls)}")
+        if self.ungrounded_amounts:
+            parts.append(f"amount(s) not from any real tool result or the borrower's own words: {sorted(self.ungrounded_amounts)}")
+        return "; ".join(parts)
+
+
+def check_grounding(reply_text: str, conversation: list[dict]) -> GroundingFailure:
+    """conversation is the FULL conversation so far (not just this turn) --
+    a value established two turns ago via a real tool call is still
+    grounded now; scoping to "this turn only" would false-positive on
+    ordinary multi-turn context reuse (e.g. restating an EMI amount
+    fetched earlier without re-calling the tool)."""
+    grounded_text_parts = [
+        msg["content"] for msg in conversation
+        if msg.get("role") in ("tool", "user") and isinstance(msg.get("content"), str)
+    ]
+    grounded_text = " ".join(grounded_text_parts)
+
+    grounded_urls = extract_urls(grounded_text)
+    grounded_amounts = (
+        extract_rupee_amounts(grounded_text)
+        | _extract_plain_numbers(grounded_text)
+        | _extract_shorthand_amounts(grounded_text)
+    )
+
+    reply_urls = extract_urls(reply_text)
+    reply_amounts = extract_rupee_amounts(reply_text)
+
+    ungrounded_urls = {u for u in reply_urls if u not in grounded_urls}
+    ungrounded_amounts = {a for a in reply_amounts if not any(abs(a - g) < 0.01 for g in grounded_amounts)}
+
+    return GroundingFailure(ungrounded_urls, ungrounded_amounts)

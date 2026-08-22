@@ -133,6 +133,78 @@ SCENARIOS = [
             ),
         ],
     ),
+    Scenario(
+        "messy_early_payoff_question_en", "BF-1002", "en",
+        turns=[
+            Turn(
+                "yo this loan thing is dragging on forever lol, if i just paid the WHOLE thing off right now "
+                "and closed it out for good today, how much would that actually run me total",
+                required=[ToolExpectation("calculate_hypothetical", {
+                    "account_id": "BF-1002", "restructuring_type": "one_time_settlement",
+                })],
+                notes="Never says 'settlement' or 'restructuring' -- real users don't know the product's own "
+                      "vocabulary for 'pay it all off early and close the loan'.",
+            ),
+            Turn(
+                "wait so closing it early is actually cheaper than just riding out the rest of the EMIs? "
+                "is that for real or nah, whats the catch",
+                notes="Not strictly scored -- the real check here is manual: does the reply correctly state the "
+                      "5% discount (SETTLEMENT_DISCOUNT_PCT) rather than inventing a different number or catch?",
+            ),
+        ],
+    ),
+    Scenario(
+        "many_operations_same_account_en", "BF-1003", "en",
+        notes="Multiple rounds, multiple DIFFERENT operations, all on the SAME account/data point within one "
+              "session -- BF-1003 has a real open dispute + 2 broken promises seeded in, so several of these "
+              "should come back policy-blocked, not just succeed. Tests session coherence across many operations, "
+              "not just a single exchange.",
+        turns=[
+            Turn(
+                "hey whats going on with my account, kya scene hai",
+                required=[ToolExpectation("get_payment_status", {"account_id": "BF-1003"})],
+                notes="Round 1: a plain status check to open the session.",
+            ),
+            Turn(
+                "can you lower my monthly payment or stretch it out longer, im struggling here",
+                required=[ToolExpectation("calculate_hypothetical", {"account_id": "BF-1003"})],
+                notes="Round 2: restructuring request -- BF-1003's open dispute should make this come back "
+                      "ineligible (DISPUTE_BLOCKS_AUTOMATED_RESTRUCTURING), but the tool should still get called.",
+            ),
+            Turn(
+                "ok forget that, whats even the deal with my dispute, when does that usually get sorted",
+                required=[ToolExpectation("check_policy")],
+                notes="Round 3: a policy question, switching topic entirely -- tests the session doesn't get "
+                      "stuck on the previous (blocked) restructuring topic.",
+            ),
+            Turn(
+                "fine whatever, can i at least pay like 20000 now instead of the full amount",
+                required=[ToolExpectation("propose_partial_payment", {"account_id": "BF-1003", "proposed_amount": 20000})],
+                notes="Round 4: a THIRD different operation, with a concrete number this time -- also expected "
+                      "to come back policy-blocked (same dispute), but the tool call itself must still happen, "
+                      "not be skipped because round 2 already came back blocked.",
+            ),
+            Turn(
+                "ugh ok, i can promise to pay 20k by the 28th then, will figure the rest out later",
+                required=[ToolExpectation("log_promise_to_pay", {
+                    "account_id": "BF-1003", "promised_amount": 20000, "promised_date": "2026-08-28",
+                })],
+                notes="Round 5: a promise-to-pay is NOT blocked by the dispute policy (only automated "
+                      "restructuring/partial-payment are) -- this one should actually succeed.",
+            ),
+            Turn(
+                "send me the link for that then",
+                required=[ToolExpectation("generate_payment_link", {"account_id": "BF-1003", "amount": 20000})],
+                notes="Round 6: 'that' must resolve to the 20000 just promised in round 5, not the full EMI or "
+                      "the round-4 partial-payment amount (same number here, but for the right reason).",
+            ),
+            Turn(
+                "you know what, this is too much back and forth, just get me an actual human",
+                required=[ToolExpectation("escalate_to_human", {"account_id": "BF-1003"})],
+                notes="Round 7: explicit escalation request after a long, winding session -- final operation.",
+            ),
+        ],
+    ),
 ]
 
 

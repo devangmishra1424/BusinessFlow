@@ -111,6 +111,17 @@ def create_escalation(account_id: str, reason: str) -> str:
     return escalation_id
 
 
+def verify_account_key(account_id: str, access_key: str) -> bool:
+    """Checks a borrower-supplied key against the account's fixed PIN
+    (assigned at seed time -- there's no real sign-up flow here). Used
+    once, at conversation start, to gate access to that account's data;
+    never returns the key itself, only whether it matched."""
+    row = get_connection().execute(
+        "select access_key from accounts where account_id = %s", (account_id,)
+    ).fetchone()
+    return row is not None and row["access_key"] == access_key
+
+
 def log_event(account_id: str | None, event_type: str, details: dict) -> None:
     get_connection().execute(
         "insert into events (account_id, event_type, details) values (%s, %s, %s)",

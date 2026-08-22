@@ -10,6 +10,9 @@ from businessflow.accounts.store import DEMO_TODAY
 
 _ACCOUNT_IDS = ["BF-1001", "BF-1002", "BF-1003", "BF-1004"]
 
+# Fixed, known PINs for the demo accounts -- there's no real sign-up flow
+# here, so the key has to be assigned at seed time instead, and handed to
+# whoever's demoing this rather than generated fresh per "sign up".
 _ACCOUNTS = [
     {
         "account_id": "BF-1001",
@@ -26,6 +29,7 @@ _ACCOUNTS = [
         "nach_mandate_active": True,
         "dispute_open": False,
         "risk_tier": "low",
+        "access_key": "482913",
     },
     {
         "account_id": "BF-1002",
@@ -42,6 +46,7 @@ _ACCOUNTS = [
         "nach_mandate_active": False,
         "dispute_open": False,
         "risk_tier": "medium",
+        "access_key": "716044",
     },
     {
         "account_id": "BF-1003",
@@ -58,6 +63,7 @@ _ACCOUNTS = [
         "nach_mandate_active": False,
         "dispute_open": True,  # disputes an incorrectly applied late fee
         "risk_tier": "high",
+        "access_key": "930571",
     },
     {
         "account_id": "BF-1004",
@@ -74,6 +80,7 @@ _ACCOUNTS = [
         "nach_mandate_active": True,
         "dispute_open": False,
         "risk_tier": "medium",
+        "access_key": "205839",
     },
 ]
 
@@ -114,11 +121,11 @@ def main():
             insert into accounts (
                 account_id, borrower_name, business_name, phone_number, language_preference,
                 loan_type, principal_amount, emi_amount, tenure_months, months_remaining,
-                emi_due_date, nach_mandate_active, dispute_open, risk_tier
+                emi_due_date, nach_mandate_active, dispute_open, risk_tier, access_key
             ) values (
                 %(account_id)s, %(borrower_name)s, %(business_name)s, %(phone_number)s, %(language_preference)s,
                 %(loan_type)s, %(principal_amount)s, %(emi_amount)s, %(tenure_months)s, %(months_remaining)s,
-                %(emi_due_date)s, %(nach_mandate_active)s, %(dispute_open)s, %(risk_tier)s
+                %(emi_due_date)s, %(nach_mandate_active)s, %(dispute_open)s, %(risk_tier)s, %(access_key)s
             )
             """,
             a,
@@ -138,6 +145,9 @@ def main():
 
     print(f"seeded {len(_ACCOUNTS)} accounts, {len(_PAYMENT_HISTORY)} payment records, {len(_PROMISES)} promises")
     print(f"DEMO_TODAY anchor: {DEMO_TODAY}")
+    print("\naccount_id + access_key pairs for the demo:")
+    for a in _ACCOUNTS:
+        print(f"  {a['account_id']}  key={a['access_key']}  ({a['borrower_name']})")
 
 
 if __name__ == "__main__":

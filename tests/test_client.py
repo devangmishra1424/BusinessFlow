@@ -11,6 +11,12 @@ from businessflow.agent import client as client_module
 from businessflow.agent.client import build_system_prompt
 
 
+def test_prompt_requires_grounding_policy_claims_in_check_policy():
+    prompt = build_system_prompt(language="en")
+    assert "check_policy" in prompt
+    assert "from memory" in prompt
+
+
 def test_hindi_prompt_requires_devanagari_script():
     prompt = build_system_prompt(language="hi")
 

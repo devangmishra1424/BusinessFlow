@@ -31,8 +31,8 @@ def test_health():
 
 
 @_pg_skip
-def test_start_conversation_returns_a_real_id_and_echoes_request():
-    response = client.post("/conversations", json={"account_id": "BF-1001", "language": "en"})
+def test_start_conversation_returns_a_real_id_and_echoes_request(reseed_accounts):
+    response = client.post("/conversations", json={"account_id": "BF-1001", "access_key": "482913", "language": "en"})
 
     assert response.status_code == 200
     body = response.json()
@@ -49,6 +49,20 @@ def test_start_conversation_works_with_no_account_id():
     assert response.json()["account_id"] is None
 
 
+@_pg_skip
+def test_start_conversation_requires_access_key_for_an_account(reseed_accounts):
+    response = client.post("/conversations", json={"account_id": "BF-1001", "language": "en"})
+
+    assert response.status_code == 401
+
+
+@_pg_skip
+def test_start_conversation_rejects_wrong_access_key(reseed_accounts):
+    response = client.post("/conversations", json={"account_id": "BF-1001", "access_key": "000000", "language": "en"})
+
+    assert response.status_code == 401
+
+
 def test_start_conversation_rejects_invalid_language():
     response = client.post("/conversations", json={"language": "fr"})
 
@@ -63,8 +77,8 @@ def test_send_message_to_nonexistent_conversation_returns_404():
 
 
 @_pg_skip
-def test_send_empty_message_returns_400():
-    start = client.post("/conversations", json={"account_id": "BF-1001", "language": "en"})
+def test_send_empty_message_returns_400(reseed_accounts):
+    start = client.post("/conversations", json={"account_id": "BF-1001", "access_key": "482913", "language": "en"})
     conversation_id = start.json()["conversation_id"]
 
     response = client.post(f"/conversations/{conversation_id}/messages", json={"message": "   "})

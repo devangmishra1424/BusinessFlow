@@ -13,6 +13,7 @@ import langfuse
 
 from businessflow.accounts import store
 from businessflow.agent.client import MODEL, build_system_prompt, client, switch_to_fallback_key
+from businessflow.guardrail import grounding
 from businessflow.memory import conversation_memory
 from businessflow.tools import mcp
 
@@ -76,7 +77,7 @@ async def _tool_specs() -> list[dict]:
 
 
 @langfuse.observe(name="tool_call", as_type="tool")
-async def _execute_tool_call(tool_call) -> str:
+async def _execute_tool_call(tool_call, verified_account_id: str | None = None) -> str:
     tool_name = tool_call.function.name
     try:
         arguments = json.loads(tool_call.function.arguments)
@@ -84,6 +85,23 @@ async def _execute_tool_call(tool_call) -> str:
         return json.dumps({"error": f"invalid arguments JSON from model: {e}"})
 
     account_id = arguments.get("account_id")
+
+    # verified_account_id is only ever non-None for a session that went
+    # through verify_and_start_conversation -- old callers (evals, tests,
+    # anything not opting into auth) pass nothing and get the old,
+    # unenforced behavior unchanged. A general/no-account tool call
+    # (account_id=None, e.g. a plain check_policy) is always allowed --
+    # nothing account-specific to protect there.
+    if verified_account_id is not None and account_id is not None and account_id != verified_account_id:
+        store.log_event(verified_account_id, "account_verification_blocked", {
+            "tool": tool_name, "attempted_account_id": account_id,
+        })
+        return json.dumps({
+            "error": (
+                f"account {account_id} is not verified for this session -- "
+                f"ask the caller for {account_id}'s access key before discussing or acting on it."
+            ),
+        })
 
     try:
         result = await mcp.call_tool(tool_name, arguments)
@@ -102,8 +120,29 @@ async def _execute_tool_call(tool_call) -> str:
     return json.dumps(result.structured_content, ensure_ascii=False)
 
 
+def _finalize_reply(conversation: list[dict], verified_account_id: str | None) -> tuple[list[dict], str]:
+    """The Guardrail: runs on every final reply, both normal exits and
+    the MAX_TOOL_ROUNDS-forced one. conversation[-1] is the assistant
+    message just appended -- checked against the whole conversation (not
+    just this turn), then rewritten in place if it fails, so the stored
+    transcript reflects what was actually said, not the rejected draft."""
+    reply_text = conversation[-1]["content"]
+    failure = grounding.check_grounding(reply_text, conversation)
+    if not failure:
+        return conversation, reply_text
+
+    logger.warning("guardrail: blocked an ungrounded reply -- %s", failure.describe())
+    store.log_event(verified_account_id, "guardrail_failed", {"reply": reply_text, "reason": failure.describe()})
+    if verified_account_id:
+        store.create_escalation(verified_account_id, f"Guardrail blocked an ungrounded reply: {failure.describe()}")
+
+    safe_reply = "Let me connect you with someone who can confirm those exact details before we go further."
+    conversation[-1]["content"] = safe_reply
+    return conversation, safe_reply
+
+
 @langfuse.observe(name="agent_turn", as_type="agent")
-async def _run_turn_async(conversation: list[dict]) -> tuple[list[dict], str]:
+async def _run_turn_async(conversation: list[dict], verified_account_id: str | None = None) -> tuple[list[dict], str]:
     tools = await _tool_specs()
 
     for _ in range(MAX_TOOL_ROUNDS):
@@ -112,10 +151,10 @@ async def _run_turn_async(conversation: list[dict]) -> tuple[list[dict], str]:
         conversation.append(message.model_dump(exclude_none=True))
 
         if not message.tool_calls:
-            return conversation, message.content
+            return _finalize_reply(conversation, verified_account_id)
 
         for tool_call in message.tool_calls:
-            result_json = await _execute_tool_call(tool_call)
+            result_json = await _execute_tool_call(tool_call, verified_account_id)
             conversation.append({
                 "role": "tool",
                 "tool_call_id": tool_call.id,
@@ -134,19 +173,23 @@ async def _run_turn_async(conversation: list[dict]) -> tuple[list[dict], str]:
     completion = _create_completion(model=MODEL, messages=conversation)
     final_text = completion.choices[0].message.content
     conversation.append({"role": "assistant", "content": final_text})
-    return conversation, final_text
+    return _finalize_reply(conversation, verified_account_id)
 
 
 def start_conversation(language: str = "en", account_id: str | None = None) -> list[dict]:
     return [{"role": "system", "content": build_system_prompt(language, account_id)}]
 
 
-def run_turn(conversation: list[dict]) -> tuple[list[dict], str]:
+def run_turn(conversation: list[dict], verified_account_id: str | None = None) -> tuple[list[dict], str]:
     """Runs one user turn (the latest message in conversation must already
     be the user's) to completion, including any tool calls the model
     makes along the way. Returns the updated conversation and the final
-    assistant reply text."""
-    return asyncio.run(_run_turn_async(conversation))
+    assistant reply text.
+
+    verified_account_id, when given, blocks any tool call that tries to
+    touch a DIFFERENT account_id than this one -- existing callers that
+    don't pass it get the original, unenforced behavior unchanged."""
+    return asyncio.run(_run_turn_async(conversation, verified_account_id))
 
 
 def start_conversation_with_recap(language: str = "en", account_id: str | None = None) -> list[dict]:
@@ -164,8 +207,10 @@ def start_conversation_with_recap(language: str = "en", account_id: str | None =
 
 def run_turn_with_memory(conversation: list[dict], account_id: str | None) -> tuple[list[dict], str]:
     """Like run_turn, but also persists this turn to cross-session memory
-    so a future conversation with this account can recap it. Additive --
-    run_turn itself is unchanged for existing callers.
+    so a future conversation with this account can recap it, AND enforces
+    that no tool call in this turn touches a different account_id than
+    this one (see verify_and_start_conversation) -- additive, run_turn
+    itself is unchanged for existing callers.
 
     Logs the user's message BEFORE running the turn, not after -- tool
     calls get logged mid-turn (accounts/store.log_event, called from
@@ -173,9 +218,26 @@ def run_turn_with_memory(conversation: list[dict], account_id: str | None) -> tu
     timestamp it *later* than the tool call it prompted, scrambling the
     recap's chronological order."""
     conversation_memory.log_turn(account_id, "user", conversation[-1]["content"])
-    conversation, reply = run_turn(conversation)
+    conversation, reply = run_turn(conversation, verified_account_id=account_id)
     conversation_memory.log_turn(account_id, "assistant", reply)
     return conversation, reply
+
+
+class AccessDeniedError(Exception):
+    """Raised by verify_and_start_conversation when the supplied key
+    doesn't match the account -- callers (CLI, browser API) should show
+    the caller a plain "wrong key" message, not a stack trace."""
+
+
+def verify_and_start_conversation(language: str, account_id: str, access_key: str) -> list[dict]:
+    """The real entry point for a caller (CLI, browser API) that wants to
+    talk about a specific account: checks the account's fixed key first,
+    and only starts the conversation (with recap) if it matches. Raises
+    AccessDeniedError otherwise -- there's no conversation to hand back
+    for an unverified account."""
+    if not store.verify_account_key(account_id, access_key):
+        raise AccessDeniedError(f"wrong access key for account {account_id}")
+    return start_conversation_with_recap(language, account_id)
 
 
 def extract_new_tool_calls(conversation: list[dict], turn_start: int) -> list[tuple[str, dict]]:

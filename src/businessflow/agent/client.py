@@ -22,7 +22,7 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "You are a collections agent for an Indian SMB lender, speaking to a "
     "borrower. {account_context}{language_instruction} Be direct, warm, "
     "and brief -- this is a spoken conversation, not a written one. "
-    "{commitment_discipline} {dispute_handling} {read_only_tools}"
+    "{commitment_discipline} {dispute_handling} {read_only_tools} {no_fabricated_links} {ground_policy_claims}"
 )
 
 # Real borrowers hedge ("maybe 15k", "not sure which is better") instead of
@@ -65,6 +65,34 @@ _READ_ONLY_TOOLS = (
     "-- call them directly to answer a status or 'what if' question, "
     "never ask the borrower to state a balance or figure the tool "
     "already looks up itself."
+)
+
+# Found live via eval/realistic_conversation_benchmark.py: after backing
+# out of a settlement offer and asking for "the regular link", the model
+# had already fetched the real EMI via get_payment_status but then wrote
+# out its OWN made-up URL instead of calling generate_payment_link --
+# presented as a real link, even though it isn't one that actually works.
+_NO_FABRICATED_LINKS = (
+    "Never write out a payment link yourself, not even as an example -- "
+    "a URL you compose is not real and will not work. Always call "
+    "generate_payment_link to get the actual link before mentioning one."
+)
+
+# Found live via eval/realistic_conversation_benchmark.py's
+# many_operations_same_account_en scenario: asked how long a dispute
+# "usually" takes to resolve, the model stated "5-7 business days" --
+# a specific, confident-sounding number that appears nowhere in the real
+# policy docs and was never checked (check_policy wasn't called that
+# turn). The Guardrail (guardrail/grounding.py) only checks URLs and
+# rupee amounts, so a plain-text claim like this slips through it
+# entirely -- this has to be caught here, in the prompt, instead.
+_GROUND_POLICY_CLAIMS = (
+    "Never state a specific policy detail -- a fee, a timeline, a "
+    "resolution window, how long something 'usually' takes -- from "
+    "memory. Call check_policy first and ground the answer in what it "
+    "actually returns; if it doesn't have an answer, say you're not "
+    "sure and will find out, rather than giving a plausible-sounding "
+    "number."
 )
 
 _NO_ACCOUNT_CONTEXT = (
@@ -126,6 +154,8 @@ def build_system_prompt(language: str = "en", account_id: str | None = None) -> 
         commitment_discipline=_COMMITMENT_DISCIPLINE,
         dispute_handling=_DISPUTE_HANDLING,
         read_only_tools=_READ_ONLY_TOOLS,
+        no_fabricated_links=_NO_FABRICATED_LINKS,
+        ground_policy_claims=_GROUND_POLICY_CLAIMS,
     )
 
 

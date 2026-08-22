@@ -19,7 +19,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from businessflow.agent.loop import extract_new_tool_calls, run_turn_with_memory, start_conversation_with_recap
+from businessflow.agent.loop import (
+    AccessDeniedError,
+    extract_new_tool_calls,
+    run_turn_with_memory,
+    start_conversation,
+    verify_and_start_conversation,
+)
 
 app = FastAPI(title="BusinessFlow Chat API")
 
@@ -38,6 +44,7 @@ _conversations: dict[str, dict] = {}
 
 class StartConversationRequest(BaseModel):
     account_id: str | None = None
+    access_key: str | None = None  # required if account_id is given
     language: str = "en"
 
 
@@ -71,7 +78,16 @@ def start_conversation_endpoint(req: StartConversationRequest):
     if req.language not in ("en", "hi"):
         raise HTTPException(status_code=400, detail="language must be 'en' or 'hi'")
 
-    conversation = start_conversation_with_recap(language=req.language, account_id=req.account_id)
+    if req.account_id:
+        if not req.access_key:
+            raise HTTPException(status_code=401, detail=f"access_key is required to talk about account {req.account_id}")
+        try:
+            conversation = verify_and_start_conversation(req.language, req.account_id, req.access_key)
+        except AccessDeniedError:
+            raise HTTPException(status_code=401, detail=f"wrong access key for account {req.account_id}") from None
+    else:
+        conversation = start_conversation(language=req.language, account_id=None)
+
     conversation_id = str(uuid.uuid4())
     _conversations[conversation_id] = {
         "account_id": req.account_id,
