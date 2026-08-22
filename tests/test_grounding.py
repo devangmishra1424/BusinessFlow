@@ -23,6 +23,17 @@ def test_extract_urls_strips_angle_bracket_wrapping():
     assert extract_urls(text) == {"https://demo.businessflow.local/pay/BF-1003?amount=20000.0"}
 
 
+def test_extract_urls_handles_markdown_link_syntax():
+    # Real bug, found live: the model wrote a Markdown link with no
+    # whitespace between the link text and the href --
+    # "[https://...20000.0](https://...20000.0)" -- which a bare \S+
+    # swallows straight through the "](" into one long, unmatchable
+    # "URL". Excluding [ and ] from the URL body fixes it.
+    text = ("Here: [https://demo.businessflow.local/pay/BF-1003?amount=20000.0]"
+            "(https://demo.businessflow.local/pay/BF-1003?amount=20000.0)")
+    assert extract_urls(text) == {"https://demo.businessflow.local/pay/BF-1003?amount=20000.0"}
+
+
 def test_extract_rupee_amounts_handles_commas():
     text = "Your balance is ₹1,40,000 and the fee is ₹500."
     assert extract_rupee_amounts(text) == {140000.0, 500.0}

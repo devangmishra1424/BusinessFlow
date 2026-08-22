@@ -31,7 +31,15 @@ choice here, not an oversight.
 
 import re
 
-_URL_RE = re.compile(r"https?://\S+")
+# Excludes [ and ] from the URL body entirely, not just as trailing
+# punctuation to strip -- found live: the model wrote a Markdown link,
+# "[https://...20000.0](https://...20000.0)", with no whitespace between
+# the link text and the href, so a bare \S+ swallowed straight through
+# the "](" into a second embedded URL, producing one long "URL" that
+# matches nothing. Stopping at [ and ] correctly yields two separate,
+# clean matches (the link text and the href) that a set naturally
+# deduplicates once trailing punctuation like the closing ')' is stripped.
+_URL_RE = re.compile(r"https?://[^\s\[\]]+")
 # Allows a single embedded space between digit groups -- found live: the
 # model wrote a Devanagari-numeral amount as "₹५ ८५,२००" (meant to be one
 # number, ५,८५,२०० = 585200) with a stray space instead of a separator.

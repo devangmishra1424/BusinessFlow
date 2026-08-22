@@ -44,6 +44,7 @@ _CONSEQUENTIAL_TOOLS = {
 class Turn:
     user_message: str
     required: list[ToolExpectation] = field(default_factory=list)
+    required_any: list[ToolExpectation] = field(default_factory=list)  # at least one must happen
     forbidden_tools: set[str] = field(default_factory=set)
     notes: str = ""
 
@@ -167,9 +168,16 @@ SCENARIOS = [
             ),
             Turn(
                 "can you lower my monthly payment or stretch it out longer, im struggling here",
-                required=[ToolExpectation("calculate_hypothetical", {"account_id": "BF-1003"})],
-                notes="Round 2: restructuring request -- BF-1003's open dispute should make this come back "
-                      "ineligible (DISPUTE_BLOCKS_AUTOMATED_RESTRUCTURING), but the tool should still get called.",
+                required_any=[
+                    ToolExpectation("calculate_hypothetical", {"account_id": "BF-1003"}),
+                    ToolExpectation("escalate_to_human", {"account_id": "BF-1003"}),
+                ],
+                notes="Round 2: restructuring request on a dispute-blocked account. Either checking eligibility "
+                      "(which will come back ineligible) or escalating directly given the already-known block "
+                      "are both correct -- the prompt explicitly permits either. Requiring only one specific "
+                      "tool here was a scoring bug, not an agent one: found live, the model correctly escalated "
+                      "directly in 2 of 3 runs after the check_dispute_block_first prompt fix, and the eval was "
+                      "marking that as a failure.",
             ),
             Turn(
                 "ok forget that, whats even the deal with my dispute, when does that usually get sorted",
@@ -221,7 +229,7 @@ def run_scenario(scenario: Scenario) -> dict:
         conversation, reply = run_turn(conversation)
 
         actual_calls = extract_tool_calls(conversation, turn_start)
-        scored = score_turn(actual_calls, turn.required, turn.forbidden_tools)
+        scored = score_turn(actual_calls, turn.required, turn.forbidden_tools, turn.required_any)
 
         turn_results.append({
             "user_message": turn.user_message,

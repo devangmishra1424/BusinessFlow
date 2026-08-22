@@ -4,6 +4,7 @@ tool-calling agent loop in agent/loop.py.
 """
 
 import os
+import time
 
 from dotenv import load_dotenv
 from groq import Groq
@@ -12,17 +13,24 @@ load_dotenv()
 
 MODEL = "openai/gpt-oss-20b"
 
-# Flips permanently once the primary key starts failing with a rate limit
-# -- a daily-token quota (what we actually hit, repeatedly, this session)
-# won't clear again until tomorrow, so there's no reason to keep retrying
-# the primary key for the rest of this process's life once that happens.
+# Flips when the primary key starts failing with a rate limit, and flips
+# back on its own after _FALLBACK_COOLDOWN_SECONDS -- Groq's quota here is
+# a daily (tokens-per-day) limit, so a fixed 24h cooldown before retrying
+# the primary matches when it actually has a real chance of having
+# cleared. Originally this was a one-way, permanent-for-the-process
+# switch; for a long-running server that's a real bug, not just an
+# inefficiency -- it would stay on the fallback forever even after the
+# primary's quota reset the next day.
 _using_fallback_key = False
+_fallback_switched_at: float | None = None
+_FALLBACK_COOLDOWN_SECONDS = 24 * 60 * 60
 
 _SYSTEM_PROMPT_TEMPLATE = (
     "You are a collections agent for an Indian SMB lender, speaking to a "
     "borrower. {account_context}{language_instruction} Be direct, warm, "
     "and brief -- this is a spoken conversation, not a written one. "
-    "{commitment_discipline} {dispute_handling} {read_only_tools} {no_fabricated_links} {ground_policy_claims}"
+    "{commitment_discipline} {dispute_handling} {read_only_tools} {no_fabricated_links} {ground_policy_claims} "
+    "{check_dispute_block_first}"
 )
 
 # Real borrowers hedge ("maybe 15k", "not sure which is better") instead of
@@ -65,6 +73,26 @@ _READ_ONLY_TOOLS = (
     "-- call them directly to answer a status or 'what if' question, "
     "never ask the borrower to state a balance or figure the tool "
     "already looks up itself."
+)
+
+# Found live via eval/realistic_conversation_benchmark.py's
+# many_operations_same_account_en scenario: asked to lower/stretch a
+# payment on an account it already knew (this same session) had an open
+# dispute, the model asked "how many extra months would you like?"
+# instead of checking eligibility first -- a dead-end question, since the
+# dispute was always going to block it regardless of the answer. The
+# same model correctly went straight to calling propose_partial_payment
+# (and got the same block) for a different restructuring ask two turns
+# later in that same conversation -- so this is a real, specific
+# inconsistency to close, not a hard model limitation.
+_CHECK_DISPUTE_BLOCK_FIRST = (
+    "If you already know (from get_payment_status or anything said "
+    "earlier this session) that an account has an open dispute or "
+    "repeated broken promises, don't ask for restructuring specifics "
+    "(how many months, how much lower) before checking -- go straight "
+    "to calculate_hypothetical or propose_partial_payment (or state the "
+    "block directly and offer escalation) instead of gathering details "
+    "for an offer you already know won't be approved."
 )
 
 # Found live via eval/realistic_conversation_benchmark.py: after backing
@@ -118,6 +146,11 @@ _LANGUAGE_INSTRUCTIONS = {
 
 
 def client() -> Groq:
+    global _using_fallback_key
+    if _using_fallback_key and _fallback_switched_at is not None:
+        if time.time() - _fallback_switched_at >= _FALLBACK_COOLDOWN_SECONDS:
+            _using_fallback_key = False  # cooldown elapsed -- give the primary another chance
+
     env_var = "ALTERNATE_GROQ_KEY" if _using_fallback_key else "GROQ_API_KEY"
     api_key = os.environ.get(env_var)
     if not api_key:
@@ -130,9 +163,10 @@ def switch_to_fallback_key() -> bool:
     limit. Returns True if there's actually a fallback key configured to
     switch to (ALTERNATE_GROQ_KEY in .env), False if there isn't -- the
     caller should let the original error propagate in that case."""
-    global _using_fallback_key
+    global _using_fallback_key, _fallback_switched_at
     if os.environ.get("ALTERNATE_GROQ_KEY"):
         _using_fallback_key = True
+        _fallback_switched_at = time.time()
         return True
     return False
 
@@ -156,6 +190,7 @@ def build_system_prompt(language: str = "en", account_id: str | None = None) -> 
         read_only_tools=_READ_ONLY_TOOLS,
         no_fabricated_links=_NO_FABRICATED_LINKS,
         ground_policy_claims=_GROUND_POLICY_CLAIMS,
+        check_dispute_block_first=_CHECK_DISPUTE_BLOCK_FIRST,
     )
 
 

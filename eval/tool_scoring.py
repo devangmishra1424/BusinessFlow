@@ -40,18 +40,40 @@ def args_match(actual: dict, required: dict) -> bool:
     return True
 
 
-def score_turn(actual_calls: list[tuple[str, dict]], required: list[ToolExpectation], forbidden_tools: set[str]) -> dict:
+def score_turn(
+    actual_calls: list[tuple[str, dict]],
+    required: list[ToolExpectation],
+    forbidden_tools: set[str],
+    required_any: list[ToolExpectation] = (),
+) -> dict:
     """Scores one turn's actual tool calls against what was required/forbidden.
     Tools that are neither required nor forbidden (e.g. a reasonable
     context-gathering get_payment_status call) are neutral -- not
-    penalized, not credited."""
+    penalized, not credited.
+
+    required_any is for genuinely equivalent alternatives (e.g. "check
+    eligibility, OR just escalate directly given a known policy block" --
+    both are correct, and requiring one specific tool when the prompt
+    itself explicitly permits either is a scoring bug, not an agent one.
+    At least one must be satisfied; default empty changes nothing for
+    existing callers."""
     forbidden = ALL_TOOL_NAMES if "*" in forbidden_tools else forbidden_tools
-    required_tool_names = {exp.tool_name for exp in required}
+    required_tool_names = {exp.tool_name for exp in required} | {exp.tool_name for exp in required_any}
 
     satisfied, missed = [], []
     for exp in required:
         hit = any(name == exp.tool_name and args_match(args, exp.required_args) for name, args in actual_calls)
         (satisfied if hit else missed).append(exp.tool_name)
+
+    if required_any:
+        any_hits = [
+            exp.tool_name for exp in required_any
+            if any(name == exp.tool_name and args_match(args, exp.required_args) for name, args in actual_calls)
+        ]
+        if any_hits:
+            satisfied.append(f"one of {[e.tool_name for e in required_any]} -> {any_hits[0]}")
+        else:
+            missed.append(f"one of {[e.tool_name for e in required_any]}")
 
     forbidden_violations = [name for name, _ in actual_calls if name in forbidden and name not in required_tool_names]
     neutral_calls = [name for name, _ in actual_calls if name not in forbidden and name not in required_tool_names]
