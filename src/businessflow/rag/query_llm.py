@@ -71,8 +71,12 @@ def needs_translation(query: str) -> bool:
 def translate_to_english(query: str) -> str:
     """Best-effort translation via the same Groq model the main agent
     uses. Falls back to the original query, unchanged, on any Groq
-    failure -- a failed translation should degrade retrieval quality,
-    not break it outright."""
+    failure OR if no Groq key is configured at all -- a failed/
+    unavailable translation should degrade retrieval quality, not break
+    it outright. Found via CI (which has no GROQ_API_KEY): client()
+    itself raises a plain RuntimeError when no key is configured, which
+    is a distinct failure point from an actual Groq API error but needs
+    the exact same graceful fallback."""
     try:
         completion = client().chat.completions.create(
             model=MODEL,
@@ -90,7 +94,7 @@ def translate_to_english(query: str) -> str:
         )
         translated = completion.choices[0].message.content
         return translated.strip() if translated else query
-    except groq.GroqError:
+    except (groq.GroqError, RuntimeError):
         logger.warning("query translation failed, retrieving with the original query instead", exc_info=True)
         return query
 
@@ -132,6 +136,6 @@ def expand_query(query: str, n_variants: int = 2) -> list[str]:
         content = completion.choices[0].message.content or ""
         variants = [line.strip() for line in content.splitlines() if line.strip()]
         return [query] + variants[:n_variants]
-    except groq.GroqError:
+    except (groq.GroqError, RuntimeError):
         logger.warning("query expansion failed, retrieving with only the original query", exc_info=True)
         return [query]

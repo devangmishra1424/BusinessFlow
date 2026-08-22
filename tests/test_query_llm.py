@@ -53,6 +53,23 @@ def test_translate_to_english_falls_back_to_original_query_on_groq_error(monkeyp
     assert result == "क्या मुझे कुछ और दिन मिल सकते हैं"
 
 
+def test_translate_to_english_falls_back_to_original_query_when_no_key_is_configured(monkeypatch):
+    # Real bug found via CI (which has no GROQ_API_KEY at all):
+    # client() itself raises a plain RuntimeError before ever reaching
+    # a Groq API call -- a distinct failure point from groq.GroqError,
+    # but needing the exact same graceful fallback. Without this, any
+    # environment with no/misconfigured key would hard-crash retrieval
+    # instead of just degrading it.
+    def _raise():
+        raise RuntimeError("GROQ_API_KEY is not set -- copy .env.example to .env and fill it in")
+
+    monkeypatch.setattr(query_llm, "client", _raise)
+
+    result = query_llm.translate_to_english("क्या मुझे कुछ और दिन मिल सकते हैं")
+
+    assert result == "क्या मुझे कुछ और दिन मिल सकते हैं"
+
+
 def test_expand_query_falls_back_to_original_only_on_groq_error(monkeypatch):
     def _raise(*args, **kwargs):
         raise groq.APIConnectionError(request=None)
@@ -61,6 +78,17 @@ def test_expand_query_falls_back_to_original_only_on_groq_error(monkeypatch):
         "completions": type("Completions", (), {"create": staticmethod(_raise)})()
     })()})()
     monkeypatch.setattr(query_llm, "client", lambda: fake_client)
+
+    result = query_llm.expand_query("can I get a few more days to pay")
+
+    assert result == ["can I get a few more days to pay"]
+
+
+def test_expand_query_falls_back_to_original_when_no_key_is_configured(monkeypatch):
+    def _raise():
+        raise RuntimeError("GROQ_API_KEY is not set -- copy .env.example to .env and fill it in")
+
+    monkeypatch.setattr(query_llm, "client", _raise)
 
     result = query_llm.expand_query("can I get a few more days to pay")
 
