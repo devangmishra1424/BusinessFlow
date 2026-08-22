@@ -1,0 +1,18 @@
+{
+  "model_size": "data/models/businessflow-whisper-finetuned",
+  "sample_size": 20,
+  "seed": 42,
+  "recordings_spanned": 14,
+  "wer": 0.8713692946058091,
+  "script_consistency_rate": 0.6,
+  "hypothesis_script_distribution": {
+    "devanagari": 12,
+    "mixed": 7,
+    "latin": 1
+  },
+  "reference_script_distribution": {
+    "mixed": 6,
+    "devanagari": 12,
+    "latin": 2
+  }
+}

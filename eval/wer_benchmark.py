@@ -105,7 +105,12 @@ def main(model_size: str = "base", sample_size: int = 400, seed: int = 42):
     print(f"hypothesis script distribution: {dict(hypothesis_scripts)}")
 
     _RESULTS_DIR.mkdir(exist_ok=True)
-    out_path = _RESULTS_DIR / f"mucs_test_{model_size}.json"
+    # model_size is sometimes a local filesystem path (a fine-tuned model
+    # directory, not a built-in size name like "base") -- embedding its
+    # separators straight into the filename would try to write through
+    # nonexistent nested directories instead of naming the result file.
+    safe_label = model_size.replace("/", "_").replace("\\", "_")
+    out_path = _RESULTS_DIR / f"mucs_test_{safe_label}.json"
     out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"saved to {out_path}")
 
