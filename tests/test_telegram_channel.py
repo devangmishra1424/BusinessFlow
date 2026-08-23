@@ -309,3 +309,31 @@ def test_handle_incoming_voice_allows_credential_shaped_transcript_once_a_sessio
     assert transcript == "BF-1001 482913"
     assert reply == "handled"
     assert calls == [(900013, "BF-1001 482913")]
+
+
+@_groq_skip
+def test_handle_incoming_voice_reaches_the_real_agent_loop_without_the_nested_event_loop_bug(monkeypatch):
+    # Regression test for a real bug found live (not in any test): every
+    # other handle_incoming_voice test monkeypatches handle_incoming_message
+    # itself, so none of them ever actually called into agent.loop.run_turn,
+    # which does asyncio.run(...) internally. That's harmless from a plain
+    # sync caller (which is all any other test is), but handle_incoming_voice
+    # is a coroutine -- when it's driven by python-telegram-bot's own running
+    # event loop (as it is for real, unlike asyncio.run() in a test), calling
+    # straight into that asyncio.run() raises "asyncio.run() cannot be
+    # called from a running event loop", and the borrower gets no reply at
+    # all. Only monkeypatching the decode step here (not
+    # handle_incoming_message) is what makes this test actually exercise the
+    # real chain and would have caught the bug.
+    monkeypatch.setattr(
+        telegram_bot, "_decode_and_transcribe_voice_note",
+        lambda raw, lang: "what is my current EMI amount",
+    )
+    fake_file = _FakeTelegramFile(b"unused")
+
+    transcript, reply = asyncio.run(
+        handle_incoming_voice(900014, fake_file, duration_seconds=3, language_hint="en")
+    )
+
+    assert transcript == "what is my current EMI amount"
+    assert reply  # a real, non-empty reply from the real agent loop

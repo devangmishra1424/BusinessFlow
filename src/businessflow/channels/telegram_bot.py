@@ -43,6 +43,7 @@ Run: python -m businessflow.channels.telegram_bot
 (needs TELEGRAM_BOT_TOKEN in .env -- get one from @BotFather on Telegram)
 """
 
+import asyncio
 import io
 import os
 import re
@@ -217,7 +218,14 @@ async def handle_incoming_voice(
             'e.g. "BF-1001 482913".'
         )
 
-    reply = handle_incoming_message(chat_id, transcript)
+    # to_thread: handle_incoming_message ultimately calls agent.loop.run_turn,
+    # which does asyncio.run(...) internally -- fine from a genuinely
+    # synchronous caller, but this coroutine is already running on
+    # python-telegram-bot's own event loop, and asyncio.run() refuses to
+    # start a second one inside an already-running loop. Running the whole
+    # synchronous call in a worker thread sidesteps that, without needing to
+    # add an async version of the agent loop.
+    reply = await asyncio.to_thread(handle_incoming_message, chat_id, transcript)
     return transcript, reply
 
 
@@ -247,7 +255,11 @@ async def on_english(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
-    reply = handle_incoming_message(chat_id, update.message.text)
+    # See handle_incoming_voice's comment on the same to_thread call --
+    # handle_incoming_message eventually calls agent.loop.run_turn, which
+    # asyncio.run()s internally, and that can't happen from inside a
+    # coroutine already running on this event loop.
+    reply = await asyncio.to_thread(handle_incoming_message, chat_id, update.message.text)
     await update.message.reply_text(reply)
 
 
