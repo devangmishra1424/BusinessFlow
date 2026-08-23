@@ -154,18 +154,27 @@ per-tool precision/recall aggregator and run-history/regression tracking are
 live-verified too -- it correctly flagged a real regression during today's
 work before a fix was confirmed.
 
-One known, honestly-unresolved gap found via that benchmark work: on a
-long, multi-turn conversation where an account's dispute/broken-promise
-block has already come up several times, the agent sometimes states a new
-concrete restructuring/partial-payment request is blocked from memory
-instead of calling the tool to verify it -- confirmed fixed in the
-single-turn case (`tool_calling_benchmark.py`, 11/11), but two separate
-prompt refinements did not move this specific multi-turn case
+One gap found via that benchmark work, since mitigated rather than fully
+eliminated: on a long, multi-turn conversation where an account's
+dispute/broken-promise block has already come up several times, the agent
+can still state a new concrete restructuring/partial-payment request is
+blocked from memory instead of calling the tool to verify it -- confirmed
+fixed in the single-turn case (`tool_calling_benchmark.py`, 11/11), but two
+separate prompt refinements did not move this specific multi-turn case
 (`realistic_conversation_benchmark.py`'s `many_operations_same_account_en`,
-round 4). Documented rather than silently patched over; a mechanical
-Guardrail-style check (verify against the real tool result before allowing
-the claim through) would likely be the more reliable fix than further
-prompt tuning, and is a good next step.
+round 4). Rather than a third prompt attempt, a mechanical Guardrail-style
+check was built instead (`guardrail/unverified_restructuring.py`, unit
+tested in `test_unverified_restructuring.py`): it fires whenever a
+concrete amount + restructuring language appears in the borrower's message
+with no verifying tool call that turn, and rewrites the reply to a safe
+"let me connect you with someone" deflection before it ever reaches the
+borrower. Confirmed live: re-running `many_operations_same_account_en`
+reproduced the exact underlying behavior (the model stated the block from
+memory again) and the guardrail caught and safely deflected it, which
+`realistic_conversation_benchmark.py` now scores as a pass via
+`accept_guardrail_intervention`. So the model's underlying tendency isn't
+eliminated, but the actual consequence -- an unverified claim reaching the
+borrower -- is.
 
 Query expansion (an optional `retrieve(..., expand=True)`) was built and
 measured, but left off by default -- A/B testing showed no clear win on this
