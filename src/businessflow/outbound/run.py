@@ -5,10 +5,13 @@ reminder_sent event of that kind today before sending again, reusing
 the events table rather than adding a new dedup table (same approach
 already used everywhere else in this project that logs activity).
 
-No scheduler here -- blueprint §13's own explicit "no scheduler" choice
-for the on-demand report feature applies just as well here. Point a
-real OS/cloud cron at scripts/run_outbound_pass.py once real hosting
-exists; that's deferred alongside Telegram/voice/hosting, not forgotten.
+No scheduler in THIS module -- it stays a plain, on-demand function, same
+as blueprint §13's own explicit "no scheduler" choice for the report
+feature. scripts/run_outbound_scheduler.py is the real trigger: a
+standalone, long-running process that calls run_daily_outbound_pass()
+once a day. Point a real OS/cloud cron at scripts/run_outbound_pass.py's
+main() instead once real hosting exists -- this function itself doesn't
+change either way.
 """
 
 from datetime import datetime, time, timezone

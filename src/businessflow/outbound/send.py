@@ -1,21 +1,23 @@
 """Stage 3: the "send" step.
 
-send_reminder is still a clearly-labeled stub, same convention as
-payment_tools.generate_payment_link's synthetic link -- the proactive
-outbound-reminder feature has no real trigger wired to call it yet, so
-there's nothing to actually deliver to.
+Both send_reminder and notify_restructuring_decision below share one real
+channel: channels/telegram_bot.py, python-telegram-bot -- this project's
+"zero real outbound-channel credentials" was true once, not any more.
+Each sends for real when the account has a linked telegram_chat_id
+(accounts.store.set_telegram_chat_id, written once a borrower verifies
+over Telegram), and falls back to a logged event -- visible to an
+operator via observability/metrics.py even with nowhere to actually
+deliver to -- when there's no chat to reach (a browser-only borrower, or
+one who never verified over Telegram).
 
-notify_restructuring_decision below is different: a real channel now
-exists (channels/telegram_bot.py, python-telegram-bot -- this project's
-"zero real outbound-channel credentials" was true when send_reminder was
-written, not any more), and this is that channel's first outbound (not
-just reply-to-an-incoming-message) use. It sends for real when the
-account has a linked telegram_chat_id (accounts.store.set_telegram_chat_id,
-written once a borrower verifies over Telegram), and falls back to a
-logged event -- same shape as send_reminder -- when there's no chat to
-reach (a browser-only borrower, or one who never verified over Telegram).
+send_reminder itself is still synchronous -- its callers (outbound/run.py,
+scripts/run_outbound_pass.py, scripts/run_outbound_scheduler.py) are none
+of them already inside an event loop, so asyncio.run() here is safe (this
+is exactly the nested-run() crash channels/telegram_bot.py hit earlier
+this session, which only happens when the caller already has a loop).
 """
 
+import asyncio
 import logging
 import os
 
@@ -25,10 +27,6 @@ from telegram.error import TelegramError
 from businessflow.accounts import store
 
 logger = logging.getLogger(__name__)
-
-
-def send_reminder(account_id: str, kind: str, message: str) -> None:
-    store.log_event(account_id, "reminder_sent", {"kind": kind, "message": message})
 
 
 async def _send_telegram_message(chat_id: int, text: str) -> bool:
@@ -50,20 +48,24 @@ async def _send_telegram_message(chat_id: int, text: str) -> bool:
         return False
 
 
-async def notify_restructuring_decision(account_id: str, approved: bool, message: str) -> bool:
-    """Called from ops/api.py right after a human approves or rejects a
-    restructuring request. Returns True if the borrower was actually
-    reached over Telegram -- always also logs the attempt (delivered or
-    not) as a real event, so an operator can see what happened even when
-    there was nowhere to actually send it."""
+async def _deliver_and_log(account_id: str, message: str, event_type: str, extra_details: dict) -> bool:
     account = store.get_account(account_id)
     delivered = False
     if account and account.telegram_chat_id:
         delivered = await _send_telegram_message(account.telegram_chat_id, message)
 
-    store.log_event(
-        account_id,
-        "restructuring_decision_notified",
-        {"approved": approved, "message": message, "delivered_via_telegram": delivered},
-    )
+    store.log_event(account_id, event_type, {**extra_details, "message": message, "delivered_via_telegram": delivered})
     return delivered
+
+
+def send_reminder(account_id: str, kind: str, message: str) -> bool:
+    """Called from outbound/run.py's daily pass. Returns True if the
+    borrower was actually reached over Telegram (see module docstring)."""
+    return asyncio.run(_deliver_and_log(account_id, message, "reminder_sent", {"kind": kind}))
+
+
+async def notify_restructuring_decision(account_id: str, approved: bool, message: str) -> bool:
+    """Called from ops/api.py right after a human approves or rejects a
+    restructuring request. Returns True if the borrower was actually
+    reached over Telegram."""
+    return await _deliver_and_log(account_id, message, "restructuring_decision_notified", {"approved": approved})

@@ -148,6 +148,46 @@ def test_run_daily_outbound_pass_does_not_resend_the_same_reminder_twice_in_one_
 
 
 @_pg_skip
+def test_send_reminder_falls_back_to_a_logged_event_with_no_linked_telegram_chat(reseed_accounts):
+    # BF-1001 has no telegram_chat_id after a reseed -- nothing to
+    # actually deliver to, so this exercises the real logged-fallback
+    # path, not a network call to Telegram.
+    from datetime import datetime, timedelta, timezone
+
+    from businessflow.accounts import store
+    from businessflow.outbound.send import send_reminder
+
+    since = datetime.now(timezone.utc) - timedelta(seconds=2)
+    delivered = send_reminder("BF-1001", "heads_up", "Your EMI is due soon.")
+
+    assert delivered is False
+    row = store.get_connection().execute(
+        "select details from events where account_id = %s and event_type = 'reminder_sent' "
+        "and created_at >= %s order by created_at desc limit 1",
+        ("BF-1001", since),
+    ).fetchone()
+    assert row["details"]["kind"] == "heads_up"
+    assert row["details"]["delivered_via_telegram"] is False
+
+
+@_pg_skip
+def test_send_reminder_attempts_real_telegram_delivery_when_a_chat_is_linked(reseed_accounts):
+    # 900999 isn't a real chat that has started this bot -- Telegram
+    # rejects it with a real "Chat not found" error, caught by
+    # _send_telegram_message and surfaced here as delivered=False,
+    # confirming this path genuinely attempts delivery rather than
+    # silently skipping straight to the fallback.
+    from businessflow.accounts import store
+    from businessflow.outbound.send import send_reminder
+
+    store.set_telegram_chat_id("BF-1001", 900999)
+
+    delivered = send_reminder("BF-1001", "follow_up", "Your EMI is overdue.")
+
+    assert delivered is False
+
+
+@_pg_skip
 @_groq_skip
 def test_compose_message_produces_a_real_grounded_message():
     from businessflow.outbound.compose import compose_message
