@@ -32,6 +32,7 @@ from businessflow.channels.telegram_bot import (
     _decode_and_transcribe_voice_note,
     _looks_like_credentials,
     _sessions,
+    _transcript_echo,
     handle_incoming_message,
     handle_incoming_voice,
 )
@@ -185,6 +186,49 @@ def test_decode_and_transcribe_resamples_a_non_16k_source():
     result = _decode_and_transcribe_voice_note(raw_bytes, None)
 
     assert result is None  # still silence -- just proves resample+VAD ran without crashing
+
+
+def test_decode_and_transcribe_enforces_the_real_decoded_duration_not_just_a_claim(monkeypatch):
+    # Regression test for a real bug an adversarial review caught: the
+    # duration cap must be checked against the ACTUAL decoded audio length,
+    # not a caller-supplied duration_seconds that a spoofed/malformed
+    # container could under-report -- otherwise the cap does nothing.
+    # Silence alone can't prove this (trim_to_speech would return None for
+    # silence regardless of any duration check existing), so this
+    # monkeypatches trim_to_speech/transcribe to prove they're never even
+    # reached once the real decoded length exceeds the cap.
+    def _must_not_be_called(*args, **kwargs):
+        raise AssertionError("VAD/ASR must not run once the real decoded duration exceeds the cap")
+
+    monkeypatch.setattr(telegram_bot, "trim_to_speech", _must_not_be_called)
+    monkeypatch.setattr(telegram_bot, "transcribe", _must_not_be_called)
+
+    over_cap_seconds = telegram_bot._MAX_VOICE_NOTE_SECONDS + 5
+    raw_bytes = _silence_ogg_bytes(seconds=over_cap_seconds, sample_rate=16000)
+
+    result = _decode_and_transcribe_voice_note(raw_bytes, "en")
+
+    assert result is None
+
+
+# --- _transcript_echo -----------------------------------------------------
+
+
+def test_transcript_echo_redacts_a_credential_shaped_transcript():
+    # Regression test for a real bug an adversarial review caught: the
+    # "You said: ..." confirmation was echoing a spoken account_id +
+    # 6-digit access key verbatim into the chat transcript, even though
+    # handle_incoming_voice correctly refused to verify it.
+    echo = _transcript_echo("BF-1001 482913")
+
+    assert echo == "You said: [account details -- redacted]"
+    assert "482913" not in echo
+
+
+def test_transcript_echo_passes_through_a_normal_transcript():
+    echo = _transcript_echo("what is my current EMI amount")
+
+    assert echo == "You said: what is my current EMI amount"
 
 
 # --- handle_incoming_voice ----------------------------------------------------

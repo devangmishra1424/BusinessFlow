@@ -251,6 +251,20 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.message.reply_text(reply)
 
 
+def _transcript_echo(transcript: str) -> str:
+    """The "You said: ..." confirmation text sent back before speaking the
+    reply. SECURITY: never echoes a credential-shaped transcript verbatim
+    into the chat transcript -- this applies regardless of whether chat_id
+    already has a session (handle_incoming_voice's own credential-redirect
+    only covers the no-session case), since the same echo would otherwise
+    put the account_id + 6-digit access key into Telegram's chat history
+    either way. Factored out from on_voice_message so this specific
+    redaction behavior is directly testable without a fake Update."""
+    if _looks_like_credentials(transcript):
+        return "You said: [account details -- redacted]"
+    return f"You said: {transcript}"
+
+
 async def on_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     voice = update.message.voice
@@ -264,16 +278,7 @@ async def on_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text(reply_text)
         return
 
-    # SECURITY: never echo a credential-shaped transcript verbatim into the
-    # chat transcript -- this fires regardless of whether chat_id already
-    # has a session (handle_incoming_voice's own credential-redirect only
-    # covers the no-session case), since the same "You said: ..." echo
-    # would otherwise put the account_id + 6-digit access key into
-    # Telegram's chat history either way.
-    if _looks_like_credentials(transcript):
-        await update.message.reply_text("You said: [account details -- redacted]")
-    else:
-        await update.message.reply_text(f"You said: {transcript}")
+    await update.message.reply_text(_transcript_echo(transcript))
 
     language = _sessions.get(chat_id, {}).get("language") or _language_choice.get(chat_id, "en")
     speech = speak_hindi(verbalize(reply_text)) if language == "hi" else speak_english(verbalize(reply_text))
