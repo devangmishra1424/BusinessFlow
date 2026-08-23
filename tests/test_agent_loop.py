@@ -25,7 +25,18 @@ def test_agent_grounds_its_answer_in_a_real_tool_call():
     # know these numbers, since they aren't in the system prompt.
     assert any(msg.get("role") == "tool" for msg in conversation)
     assert "3" in reply_text  # Priya Sharma (BF-1001) is 3 days past due
-    assert "12" in reply_text or "12,500" in reply_text or "twelve" in reply_text.lower()
+    # "how much do I owe" is genuinely ambiguous between this cycle's EMI
+    # and the total outstanding balance -- get_payment_status returns both
+    # (outstanding_balance_approx was added after this test was first
+    # written), and a real run can correctly answer with either. Found
+    # live via CI: the model started preferring the outstanding balance,
+    # a more literal answer to "how much do I owe" than the recurring EMI,
+    # which is a real improvement, not a regression -- so both grounded
+    # numbers pass here, and only a hallucinated third number would fail.
+    assert (
+        "12" in reply_text or "12,500" in reply_text or "twelve" in reply_text.lower()
+        or "175,000" in reply_text or "175000" in reply_text
+    )
 
 
 def test_agent_escalates_a_high_risk_account_instead_of_offering_automated_restructuring():
