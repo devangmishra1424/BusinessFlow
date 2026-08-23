@@ -26,6 +26,17 @@ chroma_db/
 *.ogg
 *.mp3
 
+# Real, needed test/eval input fixtures -- not generated output, and in
+# english_regression's case, only regenerable via a Windows-only SAPI TTS
+# script (generate_english_regression_set.py), so a Linux CI runner or any
+# fresh clone has no way to produce them itself. Found live: CI passing
+# GROQ_API_KEY for the first time let test_pipeline.py's real round-trip
+# test actually run, and it failed on a missing sample_speech_en.wav that
+# had silently never been committed.
+!tests/fixtures/sample_speech.wav
+!tests/fixtures/sample_speech_en.wav
+!eval/fixtures/english_regression/*.wav
+
 *.egg-info/
 
 # Raw training corpora and Kaggle data dumps -- gigabytes, not source code.
