@@ -9,17 +9,35 @@ from businessflow.tools.server import mcp
 
 @mcp.tool
 def get_payment_status(account_id: str) -> dict:
-    """Look up a borrower's current payment status: balance due, due date,
-    days past due, and whether a dispute is open on the account."""
+    """Look up a borrower's current payment status: original loan amount,
+    EMI due date, days past due, months of EMIs remaining, an approximate
+    outstanding balance, and whether a dispute is open on the account.
+
+    Found live: a borrower's single message often bundles several of
+    these ("how much is my loan, how many months are left, what's my
+    EMI") -- this tool answers all of them from account_id alone, so one
+    call covers a compound question like that instead of leaving some
+    parts unanswered. outstanding_balance_approx uses the same
+    simplification calculate_hypothetical already relies on
+    (emi_amount * months_remaining) -- not a real amortization schedule,
+    and labeled as approximate for that reason, not a hidden precision
+    claim. Does NOT include an interest rate or APR -- this system does
+    not track one as a separate field; if a borrower asks for it
+    specifically, say so rather than inferring or guessing one from the
+    EMI and principal."""
     account = store.get_account_or_raise(account_id)
     as_of = store.current_date()
     return {
         "account_id": account.account_id,
         "borrower_name": account.borrower_name,
         "business_name": account.business_name,
+        "principal_amount": account.principal_amount,
         "emi_amount": account.emi_amount,
         "emi_due_date": account.emi_due_date.isoformat(),
         "days_past_due": account.days_past_due(as_of),
+        "tenure_months": account.tenure_months,
+        "months_remaining": account.months_remaining,
+        "outstanding_balance_approx": round(account.emi_amount * account.months_remaining, 2),
         "dispute_open": account.dispute_open,
         "risk_tier": account.risk_tier,
         "broken_promise_count": account.broken_promise_count(),

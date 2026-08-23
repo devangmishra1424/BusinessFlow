@@ -22,9 +22,13 @@ def test_get_payment_status_returns_real_account_fields(reseed_accounts):
 
     assert result["account_id"] == "BF-1001"
     assert result["borrower_name"] == "Priya Sharma"
+    assert result["principal_amount"] == 250_000.0
     assert result["emi_amount"] == 12500.0
     assert result["emi_due_date"] == "2026-08-18"
     assert result["days_past_due"] == 3  # DEMO_TODAY (2026-08-21) - emi_due_date
+    assert result["tenure_months"] == 24
+    assert result["months_remaining"] == 14
+    assert result["outstanding_balance_approx"] == 175_000.0  # 12500 * 14, same approximation calculate_hypothetical uses
     assert result["dispute_open"] is False
     assert result["broken_promise_count"] == 0
 

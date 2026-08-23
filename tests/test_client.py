@@ -37,6 +37,23 @@ def test_prompt_requires_grounding_policy_claims_in_check_policy():
     assert "from memory" in prompt
 
 
+def test_prompt_requires_grounding_account_facts_in_get_payment_status():
+    # Found live via the Telegram channel: a compound question ("how much
+    # is my loan, how many months left, what's my emi") got answered with
+    # a wrong months-remaining figure and no tool call at all -- caught
+    # neither by check_grounding (months isn't a rupee amount it checks)
+    # nor by anything in the prompt before this fragment existed.
+    prompt = build_system_prompt(language="en")
+    assert "get_payment_status" in prompt
+    assert "one get_payment_status call" in prompt  # the compound-question instruction specifically
+
+
+def test_prompt_tells_the_model_to_admit_untracked_data_like_interest_rate():
+    prompt = build_system_prompt(language="en")
+    assert "interest rate" in prompt
+    assert "don't have that broken out" in prompt
+
+
 def test_prompt_declines_legal_advice_and_offers_escalation():
     prompt = build_system_prompt(language="en")
     assert "legal advice" in prompt

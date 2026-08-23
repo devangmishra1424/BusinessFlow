@@ -56,7 +56,8 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "You are a collections agent for an Indian SMB lender, speaking to a "
     "borrower. {account_context}{language_instruction} Be direct, warm, "
     "and brief -- this is a spoken conversation, not a written one. "
-    "{commitment_discipline} {dispute_handling} {read_only_tools} {no_fabricated_links} {ground_policy_claims} "
+    "{commitment_discipline} {dispute_handling} {read_only_tools} {ground_account_facts} "
+    "{untracked_account_data} {no_fabricated_links} {ground_policy_claims} "
     "{check_dispute_block_first} {out_of_domain_legal}"
 )
 
@@ -100,6 +101,43 @@ _READ_ONLY_TOOLS = (
     "-- call them directly to answer a status or 'what if' question, "
     "never ask the borrower to state a balance or figure the tool "
     "already looks up itself."
+)
+
+# Found live via the Telegram channel (not an eval scenario): a single,
+# natural compound question ("how much is my loan, how many months of
+# emi is left, what's my emi and the interest") got answered without
+# calling any tool at all -- the EMI figure happened to be right by
+# coincidence, but "0 months left" was flatly wrong (the real
+# months_remaining was 14, confirmed by the very next turn's
+# calculate_hypothetical result implying that same base). grounding.py's
+# check_grounding didn't catch it: months-remaining isn't a rupee amount
+# it checks, and the one number it does check (the EMI) happened to be
+# real. This has to be prompted explicitly, the same reason
+# _GROUND_POLICY_CLAIMS exists for policy claims the mechanical check
+# can't cover either.
+_GROUND_ACCOUNT_FACTS = (
+    "Never state a specific fact about THIS account -- balance, EMI "
+    "amount, months remaining, original loan amount, due date, dispute "
+    "status -- from memory or a guess. Always call get_payment_status "
+    "first (or reuse its real result from earlier this conversation) "
+    "and answer only from what it actually returned. If one message "
+    "asks several things about the account at once, that's still just "
+    "one get_payment_status call -- read every field the question "
+    "touched from that one result, rather than answering the parts "
+    "you're confident about and guessing the rest."
+)
+
+# get_payment_status does not return an interest rate/APR -- this system
+# doesn't track one as a separate field, and no tool computes one. Found
+# alongside the bug above: rather than saying so, the model folded a
+# vague non-answer about interest into the EMI figure instead.
+_UNTRACKED_ACCOUNT_DATA = (
+    "If a borrower asks for something this system genuinely doesn't "
+    "track -- the interest rate/APR is the clearest example, since "
+    "get_payment_status never returns one -- say plainly that you don't "
+    "have that broken out separately and offer to check with someone "
+    "who does, rather than implying a number or folding it vaguely into "
+    "another figure."
 )
 
 # Found live via eval/realistic_conversation_benchmark.py's
@@ -244,6 +282,8 @@ def build_system_prompt(language: str = "en", account_id: str | None = None) -> 
         commitment_discipline=_COMMITMENT_DISCIPLINE,
         dispute_handling=_DISPUTE_HANDLING,
         read_only_tools=_READ_ONLY_TOOLS,
+        ground_account_facts=_GROUND_ACCOUNT_FACTS,
+        untracked_account_data=_UNTRACKED_ACCOUNT_DATA,
         no_fabricated_links=_NO_FABRICATED_LINKS,
         ground_policy_claims=_GROUND_POLICY_CLAIMS,
         check_dispute_block_first=_CHECK_DISPUTE_BLOCK_FIRST,

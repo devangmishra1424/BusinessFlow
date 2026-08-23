@@ -255,6 +255,30 @@ SCENARIOS = [
             ),
         ],
     ),
+    Scenario(
+        "compound_account_status_question_en", "BF-1001", "en",
+        notes="Found live via the Telegram channel (not scripted here first): a single, natural message "
+              "bundling several account facts at once got answered with NO tool call at all -- 'your loan "
+              "balance is Rs 12,500... you have 0 months left' -- wrong (BF-1001's real months_remaining is "
+              "14), while the EMI figure happened to be right by coincidence. get_payment_status now returns "
+              "principal_amount/tenure_months/months_remaining/outstanding_balance_approx (it didn't expose "
+              "any of them before), and the prompt has an explicit grounding instruction for account facts "
+              "(agent/client.py's _GROUND_ACCOUNT_FACTS) -- this scenario is the regression test for the "
+              "actual failure, not just the tool/prompt fix in isolation.",
+        turns=[
+            Turn(
+                "how much is the loan amount in my banking and how many months of emi is left and what is "
+                "the emi payment and interest",
+                required=[ToolExpectation("get_payment_status", {"account_id": "BF-1001"})],
+                notes="One compound question, one tool call -- get_payment_status alone answers the loan "
+                      "amount, months remaining, and EMI parts. The interest part has no real answer (this "
+                      "system tracks no interest rate field at all), so this only requires the tool call, not "
+                      "a specific claim about interest -- eval/tool_scoring.py can't check 'did it correctly "
+                      "decline to answer part of a question', only whether a real tool got called before "
+                      "answering the parts that ARE real.",
+            ),
+        ],
+    ),
 ]
 
 
