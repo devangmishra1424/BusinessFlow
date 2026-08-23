@@ -149,6 +149,27 @@ def test_followup_after_wrong_credentials_still_hits_verification_path(reseed_ac
 
 
 @_pg_skip
+@_groq_skip
+def test_credentials_sent_after_anonymous_chat_still_verify(reseed_accounts):
+    # Regression test for a real bug found live: a borrower who chats
+    # anonymously first (e.g. "what is my standing loan amount", with no
+    # account attached yet) gets an anonymous session -- send valid
+    # credentials AFTER that and they must still verify, not get silently
+    # forwarded to the LLM as plain text (which tried to use the whole
+    # "BF-1001 482913" string as a literal account_id and failed).
+    chat_id = 900005
+    first_reply = handle_incoming_message(chat_id, "what is my standing loan amount")
+
+    assert _sessions[chat_id]["account_id"] is None  # anonymous session, as expected
+    assert first_reply  # a real LLM reply, not an error
+
+    second_reply = handle_incoming_message(chat_id, "BF-1001 482913")
+
+    assert "Verified" in second_reply
+    assert _sessions[chat_id]["account_id"] == "BF-1001"
+
+
+@_pg_skip
 def test_account_locks_out_after_repeated_failures_through_the_text_path(reseed_accounts):
     # Same lockout enforced in test_auth.py's
     # test_verify_and_start_conversation_locks_out_after_repeated_wrong_keys,

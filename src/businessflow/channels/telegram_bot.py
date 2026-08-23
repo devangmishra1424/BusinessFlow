@@ -95,14 +95,28 @@ def handle_incoming_message(chat_id: int, text: str) -> str:
     args. Mirrors browser_api.py's two-endpoint split (POST /conversations
     to verify+create, POST .../messages to talk) but collapsed into one
     call, since Telegram gives us one incoming message at a time rather
-    than a client that calls two separate endpoints."""
+    than a client that calls two separate endpoints.
+
+    Checks the credentials pattern whenever there's no VERIFIED account
+    yet (session is None, or an anonymous session already exists) --  not
+    just when session is None outright. Found live: a borrower who sent a
+    non-credential message first (falling into anonymous chat) could never
+    verify afterward, since the old code only ever checked the pattern
+    before any session existed. A later "BF-1001 482913" just got forwarded
+    to the LLM as plain text, which tried to use the whole string as a
+    literal account_id and failed. Verifying from here on replaces the
+    anonymous session outright rather than trying to splice its history
+    into a freshly-authenticated one -- the anonymous system prompt never
+    knew an account_id existed, so there's nothing worth preserving.
+    Switching AWAY from an already-verified account still needs /reset,
+    unchanged -- that's a different, deliberate tradeoff, not this bug."""
     session = _sessions.get(chat_id)
 
-    if session is None:
+    if session is None or session.get("account_id") is None:
         if _looks_like_credentials(text):
             match = _CREDENTIALS_PATTERN.match(text.strip())
             account_id, access_key = match.group(1), match.group(2)
-            language = _language_choice.get(chat_id, "en")
+            language = session["language"] if session else _language_choice.get(chat_id, "en")
             try:
                 conversation = verify_and_start_conversation(language, account_id, access_key)
             except AccessDeniedError:
@@ -115,13 +129,16 @@ def handle_incoming_message(chat_id: int, text: str) -> str:
             _sessions[chat_id] = {"account_id": account_id, "language": language, "messages": conversation}
             return f"Verified -- I've pulled up account {account_id}. What can I help you with?"
 
-        # Anonymous/general chat: create the session, then treat this
-        # message as the real first turn by falling through to the
-        # shared existing-session logic below.
-        language = _language_choice.get(chat_id, "en")
-        conversation = start_conversation(language, account_id=None)
-        _sessions[chat_id] = {"account_id": None, "language": language, "messages": conversation}
-        session = _sessions[chat_id]
+        if session is None:
+            # Anonymous/general chat: create the session, then treat this
+            # message as the real first turn by falling through to the
+            # shared existing-session logic below.
+            language = _language_choice.get(chat_id, "en")
+            conversation = start_conversation(language, account_id=None)
+            _sessions[chat_id] = {"account_id": None, "language": language, "messages": conversation}
+            session = _sessions[chat_id]
+        # else: an anonymous session already exists and this message just
+        # didn't look like credentials -- keep using it as-is below.
 
     session["messages"].append({"role": "user", "content": text})
     try:
