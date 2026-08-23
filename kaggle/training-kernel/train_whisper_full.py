@@ -41,7 +41,15 @@ from typing import Any
 
 subprocess.run(
     [sys.executable, "-m", "pip", "install", "-q", "-U",
-     "transformers", "peft", "ctranslate2", "faster-whisper", "jiwer", "soundfile", "torchao"],
+     "transformers", "peft", "ctranslate2", "faster-whisper", "jiwer", "soundfile",
+     # torchao alone (added to fix an earlier "incompatible torchao version"
+     # ImportError from peft) pulls torch up to a version that dropped CUDA
+     # kernels for compute capability sm_60 -- confirmed live: training then
+     # crashed with "CUDA error: no kernel image is available" the moment it
+     # hit a real GPU op, on Kaggle's free Tesla P100 (Pascal, sm_60). Pinning
+     # torch<2.10 here keeps pip's resolver from crossing that line while
+     # still letting it pick a torchao new enough to satisfy peft.
+     "torchao", "torch<2.10"],
     check=True,
 )
 
