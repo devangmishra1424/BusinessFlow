@@ -9,6 +9,11 @@ data/kb/*
 !data/kb/.gitkeep
 !data/kb/*.md
 
+# Ops-uploaded per-account documents (signed loan agreements, KYC, etc.) --
+# real borrower data, unlike data/kb/'s general policy docs which are
+# source content meant to be tracked.
+data/documents/
+
 *.onnx
 *.bin
 *.pt
@@ -31,8 +36,17 @@ kaggle/training_assets.zip
 kaggle/downloaded_model/
 kaggle/wer-benchmark-kernel/output/
 
+# The downloaded fine-tuned Whisper checkpoint (CTranslate2 export) --
+# a generated model artifact fetched from Kaggle, not source code.
+businessflow-whisper-finetuned.zip
+data/models/businessflow-whisper-finetuned/
+
 # Scratch debug output from earlier debugging sessions -- not project content.
 debug_wer.txt
 kaggle_kernel_log.txt
+kaggle_kernel_log_full.txt
 prompt_debug.txt
 translit_debug.txt
+seed_a.log
+seed_b.log
+seed_c.log

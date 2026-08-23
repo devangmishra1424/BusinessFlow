@@ -17,8 +17,9 @@ default port 8000 -- run both side by side, they're independent apps).
 
 import os
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Security
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Security, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
@@ -27,8 +28,25 @@ from businessflow.accounts import store
 from businessflow.accounts.models import Account
 from businessflow.observability import metrics
 from businessflow.ops.flags import Flag, compute_flags
+from businessflow.rag.ingest import ingest_document
 
 app = FastAPI(title="BusinessFlow Ops API")
+
+# Where ops-uploaded per-account documents (signed loan agreements, KYC,
+# etc.) live on disk -- the permanent source file ingest_document() parses,
+# analogous to data/kb/ holding the general policy docs' source files.
+_DOCUMENTS_DIR = Path(__file__).resolve().parents[3] / "data" / "documents"
+
+# What ingest.py's Docling call actually supports (see its docstring) --
+# rejecting anything else here with a clear 400 beats letting
+# DocumentConverter fail obscurely deep inside ingest_document.
+_ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".md"}
+
+# A real, deliberate bound: an unbounded upload accepted into memory/disk is
+# a real (if modest) DoS surface. Enforced by counting bytes actually read,
+# not by trusting the client-supplied Content-Length header.
+_MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+_UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
 
 app.add_middleware(
     CORSMiddleware,
@@ -90,6 +108,13 @@ class EscalationOut(BaseModel):
     status: str
     created_at: datetime
     resolved_at: datetime | None
+
+
+class DocumentUploadOut(BaseModel):
+    account_id: str
+    document_type: str
+    filename: str
+    chunks_stored: int
 
 
 class AccountDetailOut(AccountSummaryOut):
@@ -166,6 +191,86 @@ def get_account(account_id: str):
             )
             for e in escalations
         ],
+    )
+
+
+@app.post(
+    "/accounts/{account_id}/documents",
+    response_model=DocumentUploadOut,
+    dependencies=[Depends(require_api_key)],
+)
+async def upload_account_document(
+    account_id: str, file: UploadFile = File(...), document_type: str = Form(...)
+):
+    """Ops uploads one document for a specific borrower (a signed loan
+    agreement, KYC, etc.) -- saved to disk under data/documents/{account_id}/
+    and ingested into the same RAG pipeline scripts/seed_kb.py uses for the
+    general policy KB (ingest_document), scoped via account_id so it's only
+    ever retrievable for this borrower (see retriever.py's allowed_scopes,
+    already tested in test_retriever.py).
+
+    Known limitation, not solved here: businessflow.tools.policy_tools.
+    _retriever() is @lru_cache(maxsize=1)'d PER PROCESS. This document is
+    in the persistent Chroma store the instant this call returns, but a
+    currently-running borrower-facing process (channels/browser_api.py,
+    channels/telegram_bot.py) won't see it until THAT process restarts --
+    its cached DocumentRetriever snapshot isn't rebuilt automatically.
+    There's no pub/sub or other cross-process cache invalidation here; that
+    would be real new infra and is out of scope for this endpoint.
+    """
+    account = store.get_account(account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
+
+    # Only the basename -- a client-supplied filename is untrusted input,
+    # and stripping any directory components keeps the save path confined
+    # to data/documents/{account_id}/ instead of wherever "../../x" points.
+    filename = Path(file.filename or "").name
+    extension = Path(filename).suffix.lower()
+    if extension not in _ALLOWED_DOCUMENT_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"unsupported file extension {extension!r} -- must be one of "
+                f"{sorted(_ALLOWED_DOCUMENT_EXTENSIONS)}"
+            ),
+        )
+
+    account_dir = _DOCUMENTS_DIR / account_id
+    account_dir.mkdir(parents=True, exist_ok=True)
+    # Overwrite-by-filename is deliberate: re-uploading a corrected version
+    # of the same document is the expected case, and ingest_document()
+    # already handles safe re-ingestion at the same file_path.
+    saved_path = account_dir / filename
+
+    size = 0
+    try:
+        with open(saved_path, "wb") as out:
+            while chunk := await file.read(_UPLOAD_READ_CHUNK_BYTES):
+                size += len(chunk)
+                if size > _MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"file exceeds the {_MAX_UPLOAD_BYTES // (1024 * 1024)}MB upload limit",
+                    )
+                out.write(chunk)
+    except HTTPException:
+        saved_path.unlink(missing_ok=True)
+        # account_dir was just created above (mkdir) for this upload -- if
+        # this was the account's first-ever upload attempt and it got
+        # rejected, don't leave an empty directory behind. rmdir() only
+        # succeeds on an empty directory, so this is a no-op (not an
+        # error) when the account already has other real documents saved.
+        try:
+            account_dir.rmdir()
+        except OSError:
+            pass
+        raise
+
+    chunks_stored = ingest_document(str(saved_path), document_type=document_type, account_id=account_id)
+
+    return DocumentUploadOut(
+        account_id=account_id, document_type=document_type, filename=filename, chunks_stored=chunks_stored
     )
 
 

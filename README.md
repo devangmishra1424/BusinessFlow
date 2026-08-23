@@ -41,7 +41,9 @@ src/businessflow/
   memory/         Cross-session conversation recap for a returning borrower
   observability/  Aggregate operational metrics on top of the events log
   ops/            Account flagging (overdue/disputed/broken-promises) +
-                   the internal ops dashboard API (ops/api.py)
+                   the internal ops dashboard API (ops/api.py), including a
+                   per-account document upload endpoint that feeds the same
+                   RAG ingestion pipeline seed_kb.py uses for the policy KB
   outbound/       Proactive reminders: decide who's due/overdue, compose the
                    message, "send" it (a logged stub -- no real SMS/WhatsApp/
                    Telegram channel is wired in yet)
@@ -99,6 +101,9 @@ python -m scripts.chat --account BF-1001 --key 482913 --language en
 
 # Borrower-facing chat API
 uvicorn businessflow.channels.browser_api:app --reload            # port 8000
+
+# Telegram bot (text + voice notes, long polling -- needs TELEGRAM_BOT_TOKEN)
+python -m businessflow.channels.telegram_bot
 
 # Internal ops dashboard API (needs OPS_API_KEY, sent as X-API-Key)
 uvicorn businessflow.ops.api:app --reload --port 8001

@@ -34,8 +34,13 @@ langfuse
 
 # --- Browser channel (backend) ---
 fastapi
+python-multipart    # FastAPI's Form/UploadFile parsing (ops/api.py's document upload endpoint)
 uvicorn[standard]
 websockets
+
+# --- Telegram channel ---
+python-telegram-bot        # long-polling bot API (v22, already installed)
+torchaudio                  # resample() for voice notes -- pure tensor op, no ffmpeg needed
 
 # --- Utility ---
 python-dotenv
