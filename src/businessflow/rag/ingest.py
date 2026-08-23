@@ -6,7 +6,8 @@ that's what "contextual chunking" concretely means here.
 """
 
 import hashlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from docling.chunking import HybridChunker
 from docling.document_converter import DocumentConverter
@@ -119,6 +120,56 @@ def _supersede_existing_chunks(collection, file_path: str, superseded_at: str) -
     ids, documents, metadatas, embeddings = (list(field) for field in zip(*active))
     superseded_metadatas = [{**metadata, "superseded_at": superseded_at} for metadata in metadatas]
     collection.upsert(ids=ids, embeddings=embeddings, documents=documents, metadatas=superseded_metadatas)
+
+
+def purge_superseded_chunks(older_than_days: int = 30) -> int:
+    """The real cleanup _supersede_existing_chunks defers: that function
+    marks a chunk superseded_at instead of deleting it, so a correction
+    never erases the record of what a document said before -- but nothing
+    ever actually reclaimed that space, and real usage shows it adds up
+    fast (one KB doc alone accumulated 76 superseded chunks from repeated
+    re-ingestion during development). A chunk superseded this long ago has
+    had every reasonable chance to matter for a compliance/history look-
+    back; keeping it forever is unbounded growth, not a retention policy.
+
+    Filtered in Python, not via a Chroma `where` clause -- retriever.py's
+    own comments already found Chroma's filter grammar unreliable for
+    anything beyond exact-match/$in/$nin on a known value set, and a
+    "$lt this ISO timestamp" comparison isn't one of those. Returns the
+    number of chunks actually deleted."""
+    collection = get_collection()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
+    corpus = collection.get(include=["metadatas"])
+    stale_ids = [
+        chunk_id
+        for chunk_id, metadata in zip(corpus["ids"], corpus["metadatas"])
+        if metadata.get("superseded_at") and metadata["superseded_at"] < cutoff
+    ]
+    if not stale_ids:
+        return 0
+    collection.delete(ids=stale_ids)
+    return len(stale_ids)
+
+
+def purge_orphaned_chunks() -> int:
+    """Deletes chunks whose source_document no longer exists on disk --
+    found live via a real, active (not superseded) chunk from a test
+    upload-size-cap probe file, still retrievable for that account months
+    after the probe file itself was deleted. Deliberately narrow: a chunk
+    is only orphaned when its file is verifiably gone, never based on
+    content or age, so this can never delete a real, currently-valid
+    document's chunks. Returns the number of chunks actually deleted."""
+    collection = get_collection()
+    corpus = collection.get(include=["metadatas"])
+    orphaned_ids = [
+        chunk_id
+        for chunk_id, metadata in zip(corpus["ids"], corpus["metadatas"])
+        if metadata.get("source_document") and not Path(metadata["source_document"]).exists()
+    ]
+    if not orphaned_ids:
+        return 0
+    collection.delete(ids=orphaned_ids)
+    return len(orphaned_ids)
 
 
 def extract_document_text(file_path: str) -> str:
