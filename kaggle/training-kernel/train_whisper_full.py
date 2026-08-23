@@ -42,16 +42,23 @@ from typing import Any
 subprocess.run(
     [sys.executable, "-m", "pip", "install", "-q", "-U",
      "transformers", "peft", "ctranslate2", "faster-whisper", "jiwer", "soundfile",
-     # torchao alone (added to fix an earlier "incompatible torchao version"
-     # ImportError from peft) pulls torch up to a version that dropped CUDA
-     # kernels for compute capability sm_60 -- confirmed live: training then
-     # crashed with "CUDA error: no kernel image is available" the moment it
-     # hit a real GPU op, on Kaggle's free Tesla P100 (Pascal, sm_60). Pinning
-     # torch<2.10 here keeps pip's resolver from crossing that line while
-     # still letting it pick a torchao new enough to satisfy peft.
-     "torchao", "torch<2.10"],
+     # torch<2.10: Kaggle's free GPU is a Tesla P100 (Pascal, compute
+     # capability sm_60) -- confirmed live that torch 2.10 dropped CUDA
+     # kernels for it ("no kernel image is available" the moment training
+     # hit a real GPU op).
+     "torch<2.10"],
     check=True,
 )
+# peft's LoRA dispatcher checks is_torchao_available(), which raises
+# ImportError if torchao IS installed but below the version peft wants --
+# it only returns a clean False (skipping straight to standard LoRA
+# Linear layers, all this model needs, no quantization involved) when
+# torchao isn't installed at all. Upgrading torchao instead of removing
+# it (an earlier attempt) just traded that error for the sm_60 one above,
+# since a torchao new enough for peft pulls in a torch new enough to drop
+# Pascal support -- removing it entirely sidesteps the tradeoff rather
+# than chasing a version of torchao that satisfies both constraints at once.
+subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "-q", "torchao"], check=True)
 
 import jiwer
 import peft
