@@ -141,14 +141,20 @@ def _finalize_reply(conversation: list[dict], verified_account_id: str | None) -
     just this turn), then rewritten in place if it fails, so the stored
     transcript reflects what was actually said, not the rejected draft.
 
-    Two independent checks, since they catch different failure modes:
+    Three independent checks, since they catch different failure modes:
     grounding.check_grounding (a stated URL/₹ amount not traceable to
-    anything real) and check_unverified_restructuring_claim (a concrete
-    restructuring/partial-payment proposal that never got checked via a
-    real tool call this turn -- found live when two separate prompt
-    fixes for the same pattern didn't hold up in a long conversation)."""
+    anything real), grounding.check_fabricated_action (a claimed action --
+    "I've sent/emailed..." -- with no tool that could have made it true,
+    found live via the Telegram channel), and
+    check_unverified_restructuring_claim (a concrete restructuring/
+    partial-payment proposal that never got checked via a real tool call
+    this turn -- found live when two separate prompt fixes for the same
+    pattern didn't hold up in a long conversation)."""
     reply_text = conversation[-1]["content"]
     failure = grounding.check_grounding(reply_text, conversation)
+
+    if not failure:
+        failure = grounding.check_fabricated_action(reply_text)
 
     if not failure:
         turn_start = _index_of_last_user_message(conversation)

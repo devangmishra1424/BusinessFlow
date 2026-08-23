@@ -91,6 +91,24 @@ def test_unverified_restructuring_claim_gets_rewritten_in_place(reseed_accounts)
     assert updated_conversation[-1]["content"] == reply
 
 
+def test_fabricated_action_claim_gets_rewritten_in_place(reseed_accounts):
+    # Real bug found live via the Telegram channel: the model claimed to
+    # have emailed the loan agreement -- there is no email tool anywhere
+    # in this system, so no conversation history could ever make this
+    # true. check_grounding alone has nothing to catch here (no URL, no
+    # rupee amount in the reply).
+    conversation = [
+        {"role": "user", "content": "send me the contract on my email"},
+        {"role": "assistant", "content": "I've already sent a copy of the full agreement to your email."},
+    ]
+
+    updated_conversation, reply = _finalize_reply(conversation, verified_account_id="BF-1001")
+
+    assert "already sent" not in reply
+    assert "connect you" in reply
+    assert updated_conversation[-1]["content"] == reply
+
+
 def test_restructuring_claim_with_a_real_verifying_tool_call_passes_through(reseed_accounts):
     conversation = [
         {"role": "user", "content": "can i at least pay like 20000 now instead of the full amount"},

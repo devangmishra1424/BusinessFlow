@@ -48,10 +48,29 @@ def test_prompt_requires_grounding_account_facts_in_get_payment_status():
     assert "one get_payment_status call" in prompt  # the compound-question instruction specifically
 
 
-def test_prompt_tells_the_model_to_admit_untracked_data_like_interest_rate():
+def test_prompt_tells_the_model_to_check_interest_rate_pct_before_admitting_its_untracked():
+    # interest_rate_pct is a real get_payment_status field now (populated
+    # only once a loan agreement is uploaded and parsed) -- the prompt
+    # must tell the model to check it first, and only fall back to "not
+    # on file" when it's actually null for this account, not assume it's
+    # always untracked the way it used to.
     prompt = build_system_prompt(language="en")
     assert "interest rate" in prompt
-    assert "don't have that broken out" in prompt
+    assert "interest_rate_pct" in prompt
+    assert "isn't on file" in prompt
+
+
+def test_prompt_forbids_claiming_to_have_sent_or_emailed_anything():
+    # Found live via the Telegram channel, the most serious issue found
+    # there: asked to email the loan agreement, the model claimed to have
+    # "arranged to send" it, then later restated it as settled fact
+    # ("I've already sent a copy") -- there is no email/document-delivery
+    # tool anywhere in this system. check_grounding only checks URLs and
+    # rupee amounts, so a claimed ACTION like this needs an explicit
+    # prompt rule, the same reason _NO_FABRICATED_LINKS exists.
+    prompt = build_system_prompt(language="en")
+    assert "sent, emailed, mailed, forwarded, or delivered" in prompt
+    assert "no email, SMS, or document-delivery capability" in prompt
 
 
 def test_prompt_declines_legal_advice_and_offers_escalation():

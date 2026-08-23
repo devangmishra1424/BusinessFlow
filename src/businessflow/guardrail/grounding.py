@@ -121,6 +121,46 @@ class GroundingFailure:
         return "; ".join(parts)
 
 
+# Found live via the Telegram channel: asked to email the loan agreement,
+# the model claimed to have "arranged to send" it, then two turns later
+# restated it as settled fact ("I've already sent a copy") -- there is no
+# email/SMS/document-delivery tool anywhere in this system at all, so
+# unlike a rupee amount (which sometimes IS legitimately grounded),
+# there is no scenario where this claim could ever be true right now.
+# That makes it safe to check unconditionally, the same "deliberately
+# narrow, but for a case where a blanket check can't false-positive"
+# reasoning the URL/rupee checks above already rely on.
+_FABRICATED_ACTION_RE = re.compile(
+    r"\bi(?:'ve| have) (?:already )?(?:sent|emailed|mailed|forwarded)\b"
+    r"|\barranged (?:for [^.]*? )?to be sent\b"
+    r"|\barranged to send\b"
+    r"|\b(?:document|agreement|contract|copy) i(?:'ve| have)? sent\b",
+    re.IGNORECASE,
+)
+
+
+class FabricatedActionClaim:
+    def __init__(self, matched_phrase: str | None):
+        self.matched_phrase = matched_phrase
+
+    def __bool__(self) -> bool:
+        return self.matched_phrase is not None
+
+    def describe(self) -> str:
+        return (
+            f"reply claims to have sent/emailed/delivered something ({self.matched_phrase!r}) -- "
+            "no such capability exists in this system at all"
+        )
+
+
+def check_fabricated_action(reply_text: str) -> FabricatedActionClaim:
+    """No conversation history needed, unlike check_grounding -- there is
+    no tool call, ever, that could make this claim true, so it doesn't
+    matter what happened earlier in the conversation."""
+    match = _FABRICATED_ACTION_RE.search(reply_text)
+    return FabricatedActionClaim(match.group(0) if match else None)
+
+
 def check_grounding(reply_text: str, conversation: list[dict]) -> GroundingFailure:
     """conversation is the FULL conversation so far (not just this turn) --
     a value established two turns ago via a real tool call is still

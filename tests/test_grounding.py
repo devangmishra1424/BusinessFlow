@@ -5,7 +5,7 @@ comma-formatted amounts, amounts that only appear as plain JSON numbers
 in a tool result (not rupee-prefixed).
 """
 
-from businessflow.guardrail.grounding import check_grounding, extract_rupee_amounts, extract_urls
+from businessflow.guardrail.grounding import check_fabricated_action, check_grounding, extract_rupee_amounts, extract_urls
 
 
 def test_extract_urls_strips_trailing_punctuation():
@@ -174,3 +174,21 @@ def test_ordinary_descriptive_numbers_without_rupee_sign_are_never_flagged():
     failure = check_grounding(reply, conversation)
 
     assert not failure
+
+
+def test_fabricated_action_catches_the_real_phrasing_found_live():
+    # The exact two phrasings seen live via the Telegram channel -- the
+    # second one restating the first, two turns later, as settled fact.
+    assert check_fabricated_action("I've also arranged to send a copy of the full loan agreement to you.")
+    assert check_fabricated_action("I've already sent a copy of the full agreement to your email.")
+
+
+def test_fabricated_action_catches_a_few_real_variants():
+    assert check_fabricated_action("I have emailed the document to you.")
+    assert check_fabricated_action("I've forwarded the contract to your inbox.")
+    assert check_fabricated_action("Here is the agreement I sent earlier.")
+
+
+def test_fabricated_action_does_not_flag_an_ordinary_reply():
+    assert not check_fabricated_action("Your EMI is ₹12,500, due on the 18th.")
+    assert not check_fabricated_action("I can escalate this to a human who can send it to you.")

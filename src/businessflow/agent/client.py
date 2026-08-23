@@ -57,8 +57,8 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "borrower. {account_context}{language_instruction} Be direct, warm, "
     "and brief -- this is a spoken conversation, not a written one. "
     "{commitment_discipline} {dispute_handling} {read_only_tools} {ground_account_facts} "
-    "{untracked_account_data} {no_fabricated_links} {ground_policy_claims} "
-    "{check_dispute_block_first} {out_of_domain_legal}"
+    "{untracked_account_data} {no_fabricated_links} {no_fabricated_actions} "
+    "{ground_policy_claims} {check_dispute_block_first} {out_of_domain_legal}"
 )
 
 # Real borrowers hedge ("maybe 15k", "not sure which is better") instead of
@@ -127,17 +127,27 @@ _GROUND_ACCOUNT_FACTS = (
     "you're confident about and guessing the rest."
 )
 
-# get_payment_status does not return an interest rate/APR -- this system
-# doesn't track one as a separate field, and no tool computes one. Found
-# alongside the bug above: rather than saying so, the model folded a
-# vague non-answer about interest into the EMI figure instead.
+# get_payment_status now returns a real interest_rate_pct field, but it
+# is null/missing for most accounts -- populated only once that specific
+# borrower's signed loan agreement has been uploaded and successfully
+# parsed (rag/extraction.py's extract_loan_terms). Found alongside the
+# bug this replaces: rather than saying plainly that a figure isn't on
+# file, the model folded a vague non-answer about interest into the EMI
+# figure instead. The behavior this enforces (never fabricate) is
+# unchanged from before this field existed -- only the reason for a
+# "no" answer changes, from "never tracked at all" to "not extracted yet
+# for this specific account."
 _UNTRACKED_ACCOUNT_DATA = (
-    "If a borrower asks for something this system genuinely doesn't "
-    "track -- the interest rate/APR is the clearest example, since "
-    "get_payment_status never returns one -- say plainly that you don't "
-    "have that broken out separately and offer to check with someone "
-    "who does, rather than implying a number or folding it vaguely into "
-    "another figure."
+    "If a borrower asks for the interest rate/APR, check "
+    "get_payment_status's real interest_rate_pct field first (or reuse "
+    "its result from earlier this conversation) -- most accounts don't "
+    "have one extracted yet, so it's often null. If it's null or "
+    "missing for this specific account, say plainly that it isn't on "
+    "file for this account and offer to check with someone who does, "
+    "rather than implying a number or folding it vaguely into another "
+    "figure. If interest_rate_pct DOES have a real value, state that "
+    "real number -- don't call it untracked when the tool just gave you "
+    "one."
 )
 
 # Found live via eval/realistic_conversation_benchmark.py's
@@ -179,6 +189,33 @@ _NO_FABRICATED_LINKS = (
     "Never write out a payment link yourself, not even as an example -- "
     "a URL you compose is not real and will not work. Always call "
     "generate_payment_link to get the actual link before mentioning one."
+)
+
+# Found live via the Telegram channel (not an eval scenario, and the
+# single most serious thing found there): asked to send the loan
+# agreement, the model replied "I've arranged to send a copy to
+# [email]... you should receive it shortly" -- then, two turns later,
+# unprompted, restated it as settled fact ("I've already sent a copy").
+# There is no email/SMS/document-delivery tool anywhere in this codebase
+# at all (confirmed by a full repo audit, same as outbound/send.py's own
+# comment) and no email field on the account -- this wasn't a wrong
+# number, it was a confident claim of a real action, taken on behalf of
+# a real lender, that never happened and never could have. grounding.py's
+# check_grounding only checks URLs and rupee amounts, so a claimed
+# ACTION slips through it completely, the same reason _NO_FABRICATED_LINKS
+# above has to exist in the prompt instead of relying on the mechanical
+# check alone.
+_NO_FABRICATED_ACTIONS = (
+    "Never claim to have sent, emailed, mailed, forwarded, or delivered "
+    "anything to the borrower -- there is no email, SMS, or document-"
+    "delivery capability in this system at all, and no email address is "
+    "even on file for any account. If a borrower asks for a document to "
+    "be sent or emailed, say plainly that this chat can't send documents "
+    "directly -- offer to quote the relevant clause via check_policy, or "
+    "escalate to a human who could actually arrange delivery. This "
+    "applies for the rest of the conversation too: if you already said "
+    "this once, don't later restate 'I've already sent it' as if it "
+    "became true because you said it before."
 )
 
 # Found live via eval/realistic_conversation_benchmark.py's
@@ -285,6 +322,7 @@ def build_system_prompt(language: str = "en", account_id: str | None = None) -> 
         ground_account_facts=_GROUND_ACCOUNT_FACTS,
         untracked_account_data=_UNTRACKED_ACCOUNT_DATA,
         no_fabricated_links=_NO_FABRICATED_LINKS,
+        no_fabricated_actions=_NO_FABRICATED_ACTIONS,
         ground_policy_claims=_GROUND_POLICY_CLAIMS,
         check_dispute_block_first=_CHECK_DISPUTE_BLOCK_FIRST,
         out_of_domain_legal=_OUT_OF_DOMAIN_LEGAL,
