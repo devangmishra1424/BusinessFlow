@@ -1,10 +1,17 @@
-"""Pre-extracts a curated, speaker-diverse training sample from MUCS train
-(cutting individual clips out of MUCS's long recordings, since it ships
-long-form audio + a segments file, not individual utterance files) and
-HiACC adult train (already individual clips, just copied over). Bundles
-the English regression fixtures alongside, all in one folder meant to be
-uploaded as a Kaggle dataset -- far smaller than uploading MUCS's full
-9.7GB train split.
+"""Extracts individual utterance clips from MUCS train (cutting them out
+of MUCS's long recordings, since it ships long-form audio + a segments
+file, not individual utterance files) and HiACC adult train (already
+individual clips, just copied over). Bundles the English regression
+fixtures alongside, all in one folder meant to be uploaded as a Kaggle
+dataset.
+
+MUCS_SAMPLE_SIZE/HIACC_SAMPLE_SIZE default to the FULL pool of each
+(52,825 MUCS + 2,322 HiACC as of this repo's copy) -- the first fine-
+tune deliberately used a curated ~7% sample (2,500 + 1,000) to keep the
+Kaggle upload small; this now pulls everything, since that sample size
+was the actual constraint being loosened, not a hardcoded requirement.
+Still individually cut, correctly-shaped clips either way, not a
+9.7GB dump of MUCS's original long-form audio + segments file.
 
 Run: python -m eval.extract_training_sample
 """
@@ -22,8 +29,8 @@ _HIACC_TRAIN_DIR = _PROJECT_ROOT / "datasets" / "Corpus" / "adult"
 _ENGLISH_REGRESSION_DIR = _PROJECT_ROOT / "eval" / "fixtures" / "english_regression"
 _OUTPUT_DIR = _PROJECT_ROOT / "kaggle" / "training_assets"
 
-MUCS_SAMPLE_SIZE = 2500
-HIACC_SAMPLE_SIZE = 1000
+MUCS_SAMPLE_SIZE = 52_825
+HIACC_SAMPLE_SIZE = 2_322
 SEED = 42
 
 
