@@ -2,13 +2,41 @@
 the real Postgres tables. Idempotent -- clears existing demo rows first,
 so it's safe to re-run after editing the seed data below.
 
+Concurrency: this runs as a pytest fixture (tests/conftest.py's
+reseed_accounts) before tests that touch these accounts, and in practice
+that means it can run from multiple test processes against the same
+shared Supabase database around the same time (observed live: two
+workflow runs' test phases overlapping). accounts.db.get_connection()
+checks out a NEW pooled connection per .execute() call, autocommitted --
+so the delete-then-insert sequence below is NOT atomic across a single
+pooled connection, and two overlapping runs could freely interleave:
+one run's DELETE FROM accounts removing a row a concurrent run's INSERT
+INTO payment_history still expects to exist (ForeignKeyViolation), or
+two runs both trying to INSERT the same account_id (UniqueViolation) --
+both actually seen, not hypothetical. Fixed here by opening one raw
+connection for the whole operation, holding a transaction-scoped
+Postgres advisory lock (auto-released on commit or rollback, so a crash
+mid-run can't leave it stuck) so concurrent reseeds queue up instead of
+interleaving, and upserting accounts instead of delete-then-insert so
+the account row is never briefly absent for a child-table insert to
+reference.
+
 Run: python -m scripts.seed_accounts
 """
 
-from businessflow.accounts.db import get_connection
+import os
+
+import psycopg
+from psycopg.rows import dict_row
+
 from businessflow.accounts.store import DEMO_TODAY
 
 _ACCOUNT_IDS = ["BF-1001", "BF-1002", "BF-1003", "BF-1004"]
+
+# Arbitrary, fixed key for the advisory lock -- just needs to be the same
+# across every process seeding these same demo accounts, so it doesn't
+# matter what the number is, only that it's consistent.
+_SEED_LOCK_KEY = 8_401_002
 
 # Fixed, known PINs for the demo accounts -- there's no real sign-up flow
 # here, so the key has to be assigned at seed time instead, and handed to
@@ -106,42 +134,77 @@ _PROMISES = [
 
 
 def main():
-    conn = get_connection()
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError("DATABASE_URL is not set -- copy .env.example to .env and fill it in")
 
-    conn.execute("delete from events where account_id = any(%s)", (_ACCOUNT_IDS,))
-    conn.execute("delete from escalations where account_id = any(%s)", (_ACCOUNT_IDS,))
-    conn.execute("delete from disputes where account_id = any(%s)", (_ACCOUNT_IDS,))
-    conn.execute("delete from promises where account_id = any(%s)", (_ACCOUNT_IDS,))
-    conn.execute("delete from payment_history where account_id = any(%s)", (_ACCOUNT_IDS,))
-    conn.execute("delete from accounts where account_id = any(%s)", (_ACCOUNT_IDS,))
+    # One connection, one transaction, for the whole operation -- unlike
+    # accounts.db.get_connection(), which hands out a fresh autocommitted
+    # connection per statement (fine for the app's normal read/write
+    # calls, wrong for this all-or-nothing reseed).
+    with psycopg.connect(database_url, row_factory=dict_row, autocommit=False) as conn:
+        # Transaction-scoped: released automatically on commit OR rollback,
+        # so a crash mid-seed can't leave it locked forever. A concurrent
+        # reseed just blocks here until this one finishes, instead of
+        # interleaving deletes/inserts with it.
+        conn.execute("select pg_advisory_xact_lock(%s)", (_SEED_LOCK_KEY,))
 
-    for a in _ACCOUNTS:
-        conn.execute(
-            """
-            insert into accounts (
-                account_id, borrower_name, business_name, phone_number, language_preference,
-                loan_type, principal_amount, emi_amount, tenure_months, months_remaining,
-                emi_due_date, nach_mandate_active, dispute_open, risk_tier, access_key
-            ) values (
-                %(account_id)s, %(borrower_name)s, %(business_name)s, %(phone_number)s, %(language_preference)s,
-                %(loan_type)s, %(principal_amount)s, %(emi_amount)s, %(tenure_months)s, %(months_remaining)s,
-                %(emi_due_date)s, %(nach_mandate_active)s, %(dispute_open)s, %(risk_tier)s, %(access_key)s
+        # Child tables first (nothing else references them), accounts via
+        # upsert last among the writes that matter for this race: an
+        # upsert never makes the account_id row briefly disappear the way
+        # delete-then-insert did, so a concurrent seed's payment_history/
+        # events inserts can never hit a missing parent row.
+        conn.execute("delete from events where account_id = any(%s)", (_ACCOUNT_IDS,))
+        conn.execute("delete from escalations where account_id = any(%s)", (_ACCOUNT_IDS,))
+        conn.execute("delete from disputes where account_id = any(%s)", (_ACCOUNT_IDS,))
+        conn.execute("delete from promises where account_id = any(%s)", (_ACCOUNT_IDS,))
+        conn.execute("delete from payment_history where account_id = any(%s)", (_ACCOUNT_IDS,))
+
+        for a in _ACCOUNTS:
+            conn.execute(
+                """
+                insert into accounts (
+                    account_id, borrower_name, business_name, phone_number, language_preference,
+                    loan_type, principal_amount, emi_amount, tenure_months, months_remaining,
+                    emi_due_date, nach_mandate_active, dispute_open, risk_tier, access_key
+                ) values (
+                    %(account_id)s, %(borrower_name)s, %(business_name)s, %(phone_number)s, %(language_preference)s,
+                    %(loan_type)s, %(principal_amount)s, %(emi_amount)s, %(tenure_months)s, %(months_remaining)s,
+                    %(emi_due_date)s, %(nach_mandate_active)s, %(dispute_open)s, %(risk_tier)s, %(access_key)s
+                )
+                on conflict (account_id) do update set
+                    borrower_name = excluded.borrower_name,
+                    business_name = excluded.business_name,
+                    phone_number = excluded.phone_number,
+                    language_preference = excluded.language_preference,
+                    loan_type = excluded.loan_type,
+                    principal_amount = excluded.principal_amount,
+                    emi_amount = excluded.emi_amount,
+                    tenure_months = excluded.tenure_months,
+                    months_remaining = excluded.months_remaining,
+                    emi_due_date = excluded.emi_due_date,
+                    nach_mandate_active = excluded.nach_mandate_active,
+                    dispute_open = excluded.dispute_open,
+                    risk_tier = excluded.risk_tier,
+                    access_key = excluded.access_key,
+                    updated_at = now()
+                """,
+                a,
             )
-            """,
-            a,
-        )
 
-    for account_id, payment_date, amount, on_time in _PAYMENT_HISTORY:
-        conn.execute(
-            "insert into payment_history (account_id, payment_date, amount, on_time) values (%s, %s, %s, %s)",
-            (account_id, payment_date, amount, on_time),
-        )
+        for account_id, payment_date, amount, on_time in _PAYMENT_HISTORY:
+            conn.execute(
+                "insert into payment_history (account_id, payment_date, amount, on_time) values (%s, %s, %s, %s)",
+                (account_id, payment_date, amount, on_time),
+            )
 
-    for account_id, made_on, promised_date, promised_amount, kept in _PROMISES:
-        conn.execute(
-            "insert into promises (account_id, made_on, promised_date, promised_amount, kept) values (%s, %s, %s, %s, %s)",
-            (account_id, made_on, promised_date, promised_amount, kept),
-        )
+        for account_id, made_on, promised_date, promised_amount, kept in _PROMISES:
+            conn.execute(
+                "insert into promises (account_id, made_on, promised_date, promised_amount, kept) values (%s, %s, %s, %s, %s)",
+                (account_id, made_on, promised_date, promised_amount, kept),
+            )
+
+        conn.commit()
 
     print(f"seeded {len(_ACCOUNTS)} accounts, {len(_PAYMENT_HISTORY)} payment records, {len(_PROMISES)} promises")
     print(f"DEMO_TODAY anchor: {DEMO_TODAY}")
