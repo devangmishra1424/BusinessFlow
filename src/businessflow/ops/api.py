@@ -15,10 +15,12 @@ Run: uvicorn businessflow.ops.api:app --reload --port 8001
 default port 8000 -- run both side by side, they're independent apps).
 """
 
+import logging
 import os
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from docling.exceptions import ConversionError
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Security, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
@@ -28,7 +30,11 @@ from businessflow.accounts import store
 from businessflow.accounts.models import Account
 from businessflow.observability import metrics
 from businessflow.ops.flags import Flag, compute_flags
-from businessflow.rag.ingest import ingest_document
+from businessflow.outbound import send as notify
+from businessflow.rag.extraction import extract_loan_terms
+from businessflow.rag.ingest import extract_document_text, ingest_document
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="BusinessFlow Ops API")
 
@@ -43,9 +49,12 @@ _DOCUMENTS_DIR = Path(__file__).resolve().parents[3] / "data" / "documents"
 _ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".md"}
 
 # A real, deliberate bound: an unbounded upload accepted into memory/disk is
-# a real (if modest) DoS surface. Enforced by counting bytes actually read,
-# not by trusting the client-supplied Content-Length header.
-_MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+# a real (if modest) DoS surface. Sized for actual documents this system
+# plausibly needs to ingest -- real regulatory circulars and scanned
+# multi-page agreements can exceed a 20MB cap -- while still being a real,
+# bounded limit rather than no limit at all. Enforced by counting bytes
+# actually read, not by trusting the client-supplied Content-Length header.
+_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 _UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
 
 app.add_middleware(
@@ -56,6 +65,27 @@ app.add_middleware(
 )
 
 _api_key_header = APIKeyHeader(name="X-API-Key")
+
+
+def _cleanup_rejected_upload(saved_path: Path, account_dir: Path) -> None:
+    """Removes a partially-saved upload and, if now empty, the account
+    directory that was created to hold it -- the shared cleanup for every
+    upload_account_document rejection path that runs *after* the file has
+    already been written to disk (the size cap, and an unparseable
+    document), so this logic lives in exactly one place instead of being
+    duplicated slightly differently at each call site.
+
+    account_dir is assumed freshly mkdir'd (exist_ok=True) for this
+    upload -- if this was the account's first-ever upload attempt and it
+    got rejected, don't leave an empty directory behind. rmdir() only
+    succeeds on an empty directory, so this is a no-op (not an error)
+    when the account already has other real documents saved.
+    """
+    saved_path.unlink(missing_ok=True)
+    try:
+        account_dir.rmdir()
+    except OSError:
+        pass
 
 
 def require_api_key(provided_key: str = Security(_api_key_header)) -> None:
@@ -108,6 +138,15 @@ class EscalationOut(BaseModel):
     status: str
     created_at: datetime
     resolved_at: datetime | None
+    # Structured proposed terms (see tools/escalation_tools.py's
+    # propose_restructuring) -- None for every other escalation kind.
+    proposed_changes: dict | None = None
+    resolution_reason: str | None = None
+
+
+class EscalationRejectIn(BaseModel):
+    # Optional, ops-entered explanation shown back to the borrower.
+    reason: str | None = None
 
 
 class DocumentUploadOut(BaseModel):
@@ -115,6 +154,10 @@ class DocumentUploadOut(BaseModel):
     document_type: str
     filename: str
     chunks_stored: int
+    # True only if a real, non-null interest_rate_pct was written to the
+    # account row this call -- lets ops see at a glance whether structured
+    # extraction actually found something, without a separate account query.
+    interest_rate_extracted: bool
 
 
 class AccountDetailOut(AccountSummaryOut):
@@ -188,6 +231,7 @@ def get_account(account_id: str):
             EscalationOut(
                 escalation_id=e.escalation_id, reason=e.reason, status=e.status,
                 created_at=e.created_at, resolved_at=e.resolved_at,
+                proposed_changes=e.proposed_changes, resolution_reason=e.resolution_reason,
             )
             for e in escalations
         ],
@@ -210,13 +254,15 @@ async def upload_account_document(
     already tested in test_retriever.py).
 
     Known limitation, not solved here: businessflow.tools.policy_tools.
-    _retriever() is @lru_cache(maxsize=1)'d PER PROCESS. This document is
-    in the persistent Chroma store the instant this call returns, but a
-    currently-running borrower-facing process (channels/browser_api.py,
-    channels/telegram_bot.py) won't see it until THAT process restarts --
-    its cached DocumentRetriever snapshot isn't rebuilt automatically.
-    There's no pub/sub or other cross-process cache invalidation here; that
-    would be real new infra and is out of scope for this endpoint.
+    _retriever() caches its DocumentRetriever PER PROCESS, refreshing it
+    only on a time-based poll (see _REFRESH_INTERVAL_SECONDS there). This
+    document is in the persistent Chroma store the instant this call
+    returns, but a currently-running borrower-facing process (channels/
+    browser_api.py, channels/telegram_bot.py) may not see it until that
+    process's own cached snapshot next refreshes -- bounded to that
+    interval, not "until restart", but not immediate either. There's no
+    pub/sub or other cross-process cache invalidation here; that would be
+    real new infra and is out of scope for this endpoint.
     """
     account = store.get_account(account_id)
     if account is None:
@@ -255,22 +301,65 @@ async def upload_account_document(
                     )
                 out.write(chunk)
     except HTTPException:
-        saved_path.unlink(missing_ok=True)
-        # account_dir was just created above (mkdir) for this upload -- if
-        # this was the account's first-ever upload attempt and it got
-        # rejected, don't leave an empty directory behind. rmdir() only
-        # succeeds on an empty directory, so this is a no-op (not an
-        # error) when the account already has other real documents saved.
-        try:
-            account_dir.rmdir()
-        except OSError:
-            pass
+        _cleanup_rejected_upload(saved_path, account_dir)
         raise
 
-    chunks_stored = ingest_document(str(saved_path), document_type=document_type, account_id=account_id)
+    try:
+        chunks_stored = ingest_document(str(saved_path), document_type=document_type, account_id=account_id)
+    except ConversionError as e:
+        # The extension passed our allow-list check, but the bytes behind
+        # it aren't a real, parseable document of that type (corrupt file,
+        # wrong content masquerading under this extension, etc). Docling
+        # raises its own ConversionError for exactly this -- caught
+        # specifically, not via a bare `except Exception`, so a genuinely
+        # unexpected failure still propagates as a 500 instead of being
+        # misreported as "bad input". ingest_document() converts the file
+        # before it ever touches the collection (both the delete-existing-
+        # chunks call and the upsert come after), so nothing was written
+        # to the vector store either -- the only cleanup needed is the
+        # same saved-file/empty-dir removal the size-cap rejection above
+        # already does.
+        _cleanup_rejected_upload(saved_path, account_dir)
+        raise HTTPException(
+            status_code=422,
+            detail=f"could not parse this file as {extension}: {e}",
+        ) from e
+
+    # Structured extraction only applies to a signed loan agreement --
+    # there's no interest rate to find in a KYC document, say. Best-effort
+    # on top of an ingestion that already succeeded above: the upload's
+    # real contract ("the document is in RAG") is already satisfied by
+    # this point, regardless of whether this extra step finds anything.
+    interest_rate_extracted = False
+    if document_type == "loan_agreement":
+        try:
+            document_text = extract_document_text(str(saved_path))
+            terms = extract_loan_terms(document_text)
+            rate = terms.get("interest_rate_pct")
+            if rate is not None:
+                store.set_interest_rate_pct(account_id, rate)
+                interest_rate_extracted = True
+        except Exception:
+            # Deliberately broad, with the reason spelled out: this can
+            # fail from a genuine Groq API error (e.g. a rate limit), a
+            # docling parse failure re-reading the same file, or anything
+            # else in this best-effort enhancement layer -- none of which
+            # may fail an upload whose real work (RAG ingestion) already
+            # succeeded above. Logged loudly (exc_info) so it's visible to
+            # ops, not silently lost -- just not raised to the caller.
+            logger.warning(
+                "upload_account_document: interest-rate extraction failed for "
+                "account_id=%r, filename=%r -- document is already ingested "
+                "into RAG regardless; continuing without a structured rate.",
+                account_id, filename, exc_info=True,
+            )
 
     return DocumentUploadOut(
-        account_id=account_id, document_type=document_type, filename=filename, chunks_stored=chunks_stored
+        account_id=account_id,
+        document_type=document_type,
+        filename=filename,
+        chunks_stored=chunks_stored,
+        interest_rate_extracted=interest_rate_extracted,
     )
 
 
@@ -282,9 +371,69 @@ def list_open_escalations():
         EscalationOut(
             escalation_id=e.escalation_id, reason=e.reason, status=e.status,
             created_at=e.created_at, resolved_at=e.resolved_at,
+            proposed_changes=e.proposed_changes, resolution_reason=e.resolution_reason,
         )
         for e in store.list_open_escalations()
     ]
+
+
+def _escalation_out(escalation) -> EscalationOut:
+    return EscalationOut(
+        escalation_id=escalation.escalation_id, reason=escalation.reason, status=escalation.status,
+        created_at=escalation.created_at, resolved_at=escalation.resolved_at,
+        proposed_changes=escalation.proposed_changes, resolution_reason=escalation.resolution_reason,
+    )
+
+
+@app.post(
+    "/escalations/{escalation_id}/approve", response_model=EscalationOut, dependencies=[Depends(require_api_key)]
+)
+async def approve_escalation(escalation_id: str):
+    """A human clicking Approve on a structured restructuring request:
+    applies the real proposed_changes to the account (see accounts/
+    store.py's approve_restructuring -- the only place in this system
+    that actually commits one) and, if the borrower has a linked
+    Telegram chat, sends them the real new terms."""
+    try:
+        result = store.approve_restructuring(escalation_id)
+    except store.EscalationNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except store.EscalationAlreadyResolvedError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+    message = (
+        f"Good news -- your recent request has been approved. Your loan now has "
+        f"{result['new_months_remaining']} months remaining, with a new EMI of "
+        f"₹{result['new_emi_amount']:,.2f}."
+    )
+    await notify.notify_restructuring_decision(result["account_id"], approved=True, message=message)
+
+    escalation = store.get_escalation(escalation_id)
+    return _escalation_out(escalation)
+
+
+@app.post(
+    "/escalations/{escalation_id}/reject", response_model=EscalationOut, dependencies=[Depends(require_api_key)]
+)
+async def reject_escalation(escalation_id: str, body: EscalationRejectIn):
+    """A human clicking Reject: marks the escalation rejected (the
+    account itself is never touched -- nothing was ever applied to it)
+    and, if the borrower has a linked Telegram chat, tells them, including
+    the optional reason if ops entered one."""
+    try:
+        result = store.reject_restructuring(escalation_id, body.reason)
+    except store.EscalationNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except store.EscalationAlreadyResolvedError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+    message = "Your recent request could not be approved."
+    if result["reason"]:
+        message += f" Reason: {result['reason']}"
+    await notify.notify_restructuring_decision(result["account_id"], approved=False, message=message)
+
+    escalation = store.get_escalation(escalation_id)
+    return _escalation_out(escalation)
 
 
 @app.get("/metrics", response_model=MetricsOut, dependencies=[Depends(require_api_key)])

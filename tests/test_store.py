@@ -60,3 +60,77 @@ def test_log_event_fallback_is_still_visible_in_aggregate_metrics(reseed_account
 
     counts = event_counts_since(since)
     assert counts.get("test_store_marker_for_metrics", 0) >= 1
+
+
+def test_set_telegram_chat_id_persists_on_the_real_account_row(reseed_accounts):
+    store.set_telegram_chat_id("BF-1001", 900123)
+
+    assert store.get_account_or_raise("BF-1001").telegram_chat_id == 900123
+
+
+def test_approve_restructuring_applies_the_real_proposed_changes(reseed_accounts):
+    from businessflow.tools.escalation_tools import propose_restructuring
+
+    proposal = propose_restructuring(account_id="BF-1001", extra_months=3)
+
+    result = store.approve_restructuring(proposal["escalation_id"])
+
+    assert result["account_id"] == "BF-1001"
+    assert result["new_months_remaining"] == 17
+    assert result["new_emi_amount"] == 10294.12
+
+    account = store.get_account_or_raise("BF-1001")
+    assert account.months_remaining == 17
+    assert account.emi_amount == 10294.12
+
+    escalation = store.get_escalation(proposal["escalation_id"])
+    assert escalation.status == "approved"
+    assert escalation.resolved_at is not None
+
+
+def test_approve_restructuring_raises_on_unknown_escalation(reseed_accounts):
+    with pytest.raises(store.EscalationNotFoundError):
+        store.approve_restructuring("ESC-9999999")
+
+
+def test_approve_restructuring_raises_on_an_already_resolved_escalation(reseed_accounts):
+    from businessflow.tools.escalation_tools import propose_restructuring
+
+    proposal = propose_restructuring(account_id="BF-1001", extra_months=3)
+    store.approve_restructuring(proposal["escalation_id"])
+
+    # A double-click/retry must not silently double-apply the change --
+    # it should error loudly instead.
+    with pytest.raises(store.EscalationAlreadyResolvedError):
+        store.approve_restructuring(proposal["escalation_id"])
+
+
+def test_reject_restructuring_never_touches_the_account(reseed_accounts):
+    from businessflow.tools.escalation_tools import propose_restructuring
+
+    proposal = propose_restructuring(account_id="BF-1001", extra_months=3)
+
+    result = store.reject_restructuring(proposal["escalation_id"], reason="Borrower already 2 EMIs behind")
+
+    assert result["account_id"] == "BF-1001"
+    assert result["reason"] == "Borrower already 2 EMIs behind"
+
+    # Nothing was ever applied to the real account.
+    account = store.get_account_or_raise("BF-1001")
+    assert account.months_remaining == 14
+    assert account.emi_amount == 12500
+
+    escalation = store.get_escalation(proposal["escalation_id"])
+    assert escalation.status == "rejected"
+    assert escalation.resolution_reason == "Borrower already 2 EMIs behind"
+
+
+def test_reject_restructuring_reason_is_optional(reseed_accounts):
+    from businessflow.tools.escalation_tools import propose_restructuring
+
+    proposal = propose_restructuring(account_id="BF-1001", extra_months=3)
+
+    result = store.reject_restructuring(proposal["escalation_id"], reason=None)
+
+    assert result["reason"] is None
+    assert store.get_escalation(proposal["escalation_id"]).resolution_reason is None

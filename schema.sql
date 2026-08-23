@@ -29,11 +29,27 @@ create table accounts (
     dispute_open         boolean not null default false,
     risk_tier            text not null,  -- 'low' | 'medium' | 'high'
 
+    -- Extracted from an uploaded, signed loan agreement (see
+    -- rag/extraction.py's extract_loan_terms, wired into ops/api.py's
+    -- upload_account_document) -- nullable because most accounts won't
+    -- have this until their agreement is uploaded and successfully
+    -- parsed; NULL means "not extracted yet," not zero.
+    interest_rate_pct    numeric,
+
     -- Fixed PIN assigned at seed time (no real sign-up flow exists) --
     -- verified once at conversation start via
     -- accounts.store.verify_account_key, gating access to this account's
     -- data for that session.
     access_key           text,
+
+    -- The Telegram chat_id this account last verified from (see
+    -- channels/telegram_bot.py's handle_incoming_message), so a decision
+    -- made later on the ops dashboard -- approving/rejecting a
+    -- restructuring request -- can actually reach the borrower without
+    -- them being mid-conversation. NULL for accounts never verified over
+    -- Telegram (e.g. browser-chat-only). Last-verified-chat-wins: this is
+    -- a single link, not a history of every chat_id ever used.
+    telegram_chat_id     bigint,
 
     created_at           timestamptz not null default now(),
     updated_at           timestamptz not null default now()
@@ -78,9 +94,23 @@ create table escalations (
     escalation_id  text primary key,  -- e.g. 'ESC-0001', from escalation_seq
     account_id     text not null references accounts(account_id),
     reason         text not null,
-    status         text not null default 'queued_for_human',
+    status         text not null default 'queued_for_human',  -- | 'approved' | 'rejected'
     created_at     timestamptz not null default now(),
-    resolved_at    timestamptz
+    resolved_at    timestamptz,
+
+    -- Structured terms a human can actually apply with one click, for the
+    -- escalation types that propose a concrete account change (currently
+    -- just extend_tenure -- see tools/escalation_tools.py's
+    -- propose_restructuring) rather than just flagging something for a
+    -- free-form human conversation. NULL for every other escalation kind
+    -- (escalate_to_human, request_closure_certificate), same as before
+    -- this column existed.
+    proposed_changes  jsonb,
+
+    -- Optional, ops-entered explanation shown back to the borrower when a
+    -- proposal is rejected (see ops/api.py's POST /escalations/{id}/reject).
+    -- NULL is a valid, expected value -- the reason box is optional.
+    resolution_reason text
 );
 
 -- Generic audit/telemetry log -- every tool call (successful or failed)

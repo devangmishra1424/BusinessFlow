@@ -126,6 +126,19 @@ def test_correct_credentials_verify_session_without_an_llm_call(reseed_accounts)
 
 
 @_pg_skip
+def test_correct_credentials_persist_the_telegram_chat_id_on_the_account(reseed_accounts):
+    # Durable, unlike _sessions above -- a decision made later on the ops
+    # dashboard (approving/rejecting a restructuring request) needs this
+    # to reach the borrower even after the in-memory session is gone.
+    from businessflow.accounts import store
+
+    chat_id = 900006
+    handle_incoming_message(chat_id, "BF-1001 482913")
+
+    assert store.get_account_or_raise("BF-1001").telegram_chat_id == chat_id
+
+
+@_pg_skip
 def test_wrong_credentials_deny_and_create_no_session(reseed_accounts):
     chat_id = 900003
     reply = handle_incoming_message(chat_id, "BF-1001 000000")

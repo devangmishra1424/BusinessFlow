@@ -180,6 +180,31 @@ Query expansion (an optional `retrieve(..., expand=True)`) was built and
 measured, but left off by default -- A/B testing showed no clear win on this
 KB's size, and a real added cost (an extra LLM call per query).
 
+Reasoning effort (`groq_client.chat.completions.create`'s `reasoning_effort`,
+openai/gpt-oss-20b's own decoding-time knob) was made configurable
+end-to-end (`run_turn` -> `_run_turn_async` -> `_create_completion` in
+`agent/loop.py`) and A/B'd the same way, against the exact live bug this
+session found: a compound, multi-part account question answered with no
+`get_payment_status` call at all (`realistic_conversation_benchmark.py`'s
+`compound_account_status_question_en`). 5 real runs at the current default
+(unset) vs 5 at `"high"` (`scripts/ab_reasoning_effort.py`): 5/5 passed and
+called `get_payment_status` at the default, and 4/4 did too at `"high"` --
+the 5th `"high"` run didn't complete (all 5 configured Groq keys were
+already rate-limited/exhausted from this session's real usage, and the
+last one hit a real 429 mid-run with none left to fall back to, so the run
+was reported as incomplete rather than retried into a fabricated result).
+No clear win: the default was already at ceiling (5/5) on this scenario, so
+`"high"` had no room to demonstrate an improvement -- the same no-clear-win
+outcome as `expand_query` above. Latency looked higher under `"high"`
+(mean ~36s over the 4 completed runs vs ~32s at default) but that
+comparison is confounded by real mid-turn Groq key rotations inflating
+some of both groups' elapsed times (this one-off script, unlike
+`latency_benchmark.py`, didn't isolate "clean" runs from key-rotation-
+degraded ones), so no latency conclusion is drawn from it either. Left
+unset by default for that reason; kept as an opt-in parameter on `run_turn`
+rather than removed, in case a future scenario surfaces a real gap "high"
+could close.
+
 Not yet built: end-to-end latency measurement. Voice, a second channel
 (Telegram), a real frontend UI, and hosting are deliberately out of scope
 for now.

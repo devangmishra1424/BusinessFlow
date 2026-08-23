@@ -56,6 +56,7 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
+from businessflow.accounts import store
 from businessflow.agent.loop import (
     AccessDeniedError,
     AccountLockedError,
@@ -127,6 +128,12 @@ def handle_incoming_message(chat_id: int, text: str) -> str:
             # deliberately not called here, matching browser_api.py's
             # separate POST /conversations, which also doesn't run a turn.
             _sessions[chat_id] = {"account_id": account_id, "language": language, "messages": conversation}
+            # Durable, unlike _sessions above -- so a decision made later on
+            # the ops dashboard (approving/rejecting a restructuring
+            # request) can reach this borrower even after this in-memory
+            # session is long gone. Last-verified-chat-wins, same as the
+            # column's comment in schema.sql.
+            store.set_telegram_chat_id(account_id, chat_id)
             return f"Verified -- I've pulled up account {account_id}. What can I help you with?"
 
         if session is None:

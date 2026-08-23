@@ -161,6 +161,47 @@ def check_fabricated_action(reply_text: str) -> FabricatedActionClaim:
     return FabricatedActionClaim(match.group(0) if match else None)
 
 
+# Found live via a real Telegram conversation: calculate_hypothetical
+# correctly computed a 3-month extension's real numbers, but the reply
+# described them as already applied ("the loan now has 17 months left,
+# and the EMI will be reduced to..."). calculate_hypothetical's own
+# docstring says it commits to nothing, and propose_restructuring (the
+# tool that actually queues a human approval -- see tools/
+# escalation_tools.py) only ever returns status "pending_approval", never
+# "done". So there is no tool call, ever, that could make completed-tense
+# language like this true right now -- same "safe to check
+# unconditionally" reasoning check_fabricated_action above already uses.
+_UNAPPLIED_RESTRUCTURING_RE = re.compile(
+    r"\b(?:loan|tenure|emi) now (?:has|is)\b"
+    r"|\bemi will be (?:reduced|lowered|changed)\b"
+    r"|\b(?:has|have) been (?:extended|restructured)\b"
+    r"|\bsuccessfully extended\b",
+    re.IGNORECASE,
+)
+
+
+class UnappliedRestructuringClaim:
+    def __init__(self, matched_phrase: str | None):
+        self.matched_phrase = matched_phrase
+
+    def __bool__(self) -> bool:
+        return self.matched_phrase is not None
+
+    def describe(self) -> str:
+        return (
+            f"reply describes a restructuring as already applied ({self.matched_phrase!r}) -- "
+            "calculate_hypothetical never commits to anything and propose_restructuring only "
+            "queues a human approval, so no tool call could make this true yet"
+        )
+
+
+def check_unapplied_restructuring_claim(reply_text: str) -> UnappliedRestructuringClaim:
+    """Same shape as check_fabricated_action -- no conversation history
+    needed, since no tool call, ever, could make this claim true yet."""
+    match = _UNAPPLIED_RESTRUCTURING_RE.search(reply_text)
+    return UnappliedRestructuringClaim(match.group(0) if match else None)
+
+
 def check_grounding(reply_text: str, conversation: list[dict]) -> GroundingFailure:
     """conversation is the FULL conversation so far (not just this turn) --
     a value established two turns ago via a real tool call is still

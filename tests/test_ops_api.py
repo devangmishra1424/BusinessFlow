@@ -26,6 +26,10 @@ _ops_key_skip = pytest.mark.skipif(
     not os.environ.get("OPS_API_KEY"),
     reason="OPS_API_KEY not set -- copy .env.example to .env and fill it in",
 )
+_groq_skip = pytest.mark.skipif(
+    not os.environ.get("GROQ_API_KEY"),
+    reason="GROQ_API_KEY not set -- copy .env.example to .env and fill it in to run this",
+)
 
 
 def _auth() -> dict[str, str]:
@@ -115,6 +119,100 @@ def test_list_open_escalations_reflects_a_real_new_escalation(reseed_accounts):
 
 @_pg_skip
 @_ops_key_skip
+def test_approve_escalation_endpoint_applies_real_changes_and_notifies(reseed_accounts):
+    # BF-1001 has no linked telegram_chat_id after a reseed -- so this
+    # exercises the real logged-fallback path in outbound/send.py, not a
+    # real network call to Telegram (there's nothing to send to).
+    from businessflow.accounts import store
+    from businessflow.tools.escalation_tools import propose_restructuring
+
+    proposal = propose_restructuring(account_id="BF-1001", extra_months=3)
+
+    response = client.post(f"/escalations/{proposal['escalation_id']}/approve", headers=_auth())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "approved"
+    assert body["resolved_at"] is not None
+
+    account = store.get_account_or_raise("BF-1001")
+    assert account.months_remaining == 17
+    assert account.emi_amount == 10294.12
+
+    events = store.get_connection().execute(
+        "select details from events where account_id = %s and event_type = 'restructuring_decision_notified' "
+        "order by created_at desc limit 1",
+        ("BF-1001",),
+    ).fetchone()
+    assert events["details"]["approved"] is True
+    assert events["details"]["delivered_via_telegram"] is False
+
+
+@_pg_skip
+@_ops_key_skip
+def test_reject_escalation_endpoint_with_an_optional_reason(reseed_accounts):
+    from businessflow.accounts import store
+    from businessflow.tools.escalation_tools import propose_restructuring
+
+    proposal = propose_restructuring(account_id="BF-1001", extra_months=3)
+
+    response = client.post(
+        f"/escalations/{proposal['escalation_id']}/reject",
+        headers=_auth(),
+        json={"reason": "Borrower already 2 EMIs behind"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "rejected"
+    assert body["resolution_reason"] == "Borrower already 2 EMIs behind"
+
+    # Nothing was ever applied to the real account.
+    account = store.get_account_or_raise("BF-1001")
+    assert account.months_remaining == 14
+    assert account.emi_amount == 12500
+
+
+@_pg_skip
+@_ops_key_skip
+def test_reject_escalation_endpoint_reason_is_optional(reseed_accounts):
+    from businessflow.tools.escalation_tools import propose_restructuring
+
+    proposal = propose_restructuring(account_id="BF-1001", extra_months=3)
+
+    response = client.post(f"/escalations/{proposal['escalation_id']}/reject", headers=_auth(), json={})
+
+    assert response.status_code == 200
+    assert response.json()["resolution_reason"] is None
+
+
+@_pg_skip
+@_ops_key_skip
+def test_approve_escalation_endpoint_404s_for_an_unknown_escalation(reseed_accounts):
+    response = client.post("/escalations/ESC-9999999/approve", headers=_auth())
+    assert response.status_code == 404
+
+
+@_pg_skip
+@_ops_key_skip
+def test_approve_escalation_endpoint_409s_for_an_already_resolved_escalation(reseed_accounts):
+    from businessflow.tools.escalation_tools import propose_restructuring
+
+    proposal = propose_restructuring(account_id="BF-1001", extra_months=3)
+    client.post(f"/escalations/{proposal['escalation_id']}/approve", headers=_auth())
+
+    response = client.post(f"/escalations/{proposal['escalation_id']}/approve", headers=_auth())
+    assert response.status_code == 409
+
+
+@_ops_key_skip
+def test_approve_escalation_endpoint_requires_api_key():
+    response = client.post("/escalations/ESC-0001/approve")
+    assert response.status_code == 401
+
+
+@_pg_skip
+@_ops_key_skip
 def test_metrics_endpoint_reflects_a_real_new_event(reseed_accounts):
     from businessflow.accounts import store
 
@@ -194,6 +292,34 @@ def test_upload_document_rejects_a_file_over_the_size_cap(reseed_accounts):
 
 @_pg_skip
 @_ops_key_skip
+def test_upload_document_rejects_an_unparseable_file_with_a_valid_extension(reseed_accounts):
+    # A ".pdf" extension that passes the allow-list check but isn't
+    # actually a parseable PDF (corrupt upload, wrong bytes under a
+    # trusted-looking name) must surface as a clean 422, not an unhandled
+    # 500 -- docling.exceptions.ConversionError is what DocumentConverter
+    # actually raises for this (verified live against the installed
+    # docling package by feeding it exactly this kind of garbage file).
+    from pathlib import Path
+
+    garbage_body = b"this is not a real pdf file, just garbage bytes 1234567890"
+    response = client.post(
+        "/accounts/BF-1001/documents",
+        files={"file": ("garbage.pdf", garbage_body, "application/pdf")},
+        data={"document_type": "loan_agreement"},
+        headers=_auth(),
+    )
+    assert response.status_code == 422
+
+    saved_path = Path(__file__).resolve().parents[1] / "data" / "documents" / "BF-1001" / "garbage.pdf"
+    assert not saved_path.exists()
+    # A rejected upload shouldn't leave an empty account directory behind
+    # either -- only true when this was the account's only upload attempt,
+    # which it is here since reseed_accounts doesn't touch the filesystem.
+    assert not saved_path.parent.exists()
+
+
+@_pg_skip
+@_ops_key_skip
 def test_upload_document_ingests_into_the_account_scoped_rag_store(reseed_accounts):
     from pathlib import Path
 
@@ -230,3 +356,78 @@ def test_upload_document_ingests_into_the_account_scoped_rag_store(reseed_accoun
     finally:
         get_collection().delete(where={"source_document": str(saved_path)})
         saved_path.unlink(missing_ok=True)
+
+
+@_pg_skip
+@_ops_key_skip
+def test_upload_non_loan_agreement_document_never_attempts_rate_extraction(reseed_accounts):
+    # A KYC (or any non-loan_agreement) upload must not trigger a Groq
+    # call at all -- interest_rate_extracted stays False and the
+    # account's interest_rate_pct is untouched, deterministically, with
+    # no GROQ_API_KEY needed to verify it.
+    from pathlib import Path
+
+    from businessflow.accounts import store
+
+    saved_path = Path(__file__).resolve().parents[1] / "data" / "documents" / "BF-1002" / "test_kyc.md"
+    try:
+        response = client.post(
+            "/accounts/BF-1002/documents",
+            files={"file": ("test_kyc.md", b"# KYC document\n\nPAN and Aadhaar on file.", "text/markdown")},
+            data={"document_type": "kyc"},
+            headers=_auth(),
+        )
+
+        assert response.status_code == 200
+        assert response.json()["interest_rate_extracted"] is False
+        assert store.get_account_or_raise("BF-1002").interest_rate_pct is None
+    finally:
+        from businessflow.rag.store import get_collection
+
+        get_collection().delete(where={"source_document": str(saved_path)})
+        saved_path.unlink(missing_ok=True)
+
+
+@_pg_skip
+@_ops_key_skip
+@_groq_skip
+def test_upload_loan_agreement_with_a_stated_rate_extracts_and_persists_interest_rate_pct(reseed_accounts):
+    from pathlib import Path
+
+    from businessflow.accounts import store
+    from businessflow.rag.store import get_collection
+
+    # BF-1002, not BF-1001 -- test_account_tools.py separately asserts
+    # BF-1001's interest_rate_pct is null, and reseed_accounts' upsert
+    # (scripts/seed_accounts.py) does NOT reset this column on conflict,
+    # so a value this test writes to an account would otherwise outlive
+    # reseeding. Using a different account plus the explicit reset in
+    # `finally` below keeps this test from leaking state into that one
+    # regardless of file/test run order.
+    saved_path = Path(__file__).resolve().parents[1] / "data" / "documents" / "BF-1002" / "test_rate_agreement.md"
+    body = (
+        b"# BF-1002 loan agreement\n\n"
+        b"This term loan carries an interest rate of 14.5% per annum, "
+        b"charged on the outstanding principal alongside the monthly EMI."
+    )
+    try:
+        response = client.post(
+            "/accounts/BF-1002/documents",
+            files={"file": ("test_rate_agreement.md", body, "text/markdown")},
+            data={"document_type": "loan_agreement"},
+            headers=_auth(),
+        )
+
+        assert response.status_code == 200
+        out = response.json()
+        assert out["interest_rate_extracted"] is True
+
+        account = store.get_account_or_raise("BF-1002")
+        assert account.interest_rate_pct is not None
+        assert abs(account.interest_rate_pct - 14.5) < 0.5
+    finally:
+        get_collection().delete(where={"source_document": str(saved_path)})
+        saved_path.unlink(missing_ok=True)
+        store.get_connection().execute(
+            "update accounts set interest_rate_pct = null where account_id = %s", ("BF-1002",)
+        )

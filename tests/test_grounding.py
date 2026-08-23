@@ -5,7 +5,13 @@ comma-formatted amounts, amounts that only appear as plain JSON numbers
 in a tool result (not rupee-prefixed).
 """
 
-from businessflow.guardrail.grounding import check_fabricated_action, check_grounding, extract_rupee_amounts, extract_urls
+from businessflow.guardrail.grounding import (
+    check_fabricated_action,
+    check_grounding,
+    check_unapplied_restructuring_claim,
+    extract_rupee_amounts,
+    extract_urls,
+)
 
 
 def test_extract_urls_strips_trailing_punctuation():
@@ -192,3 +198,27 @@ def test_fabricated_action_catches_a_few_real_variants():
 def test_fabricated_action_does_not_flag_an_ordinary_reply():
     assert not check_fabricated_action("Your EMI is ₹12,500, due on the 18th.")
     assert not check_fabricated_action("I can escalate this to a human who can send it to you.")
+
+
+def test_unapplied_restructuring_catches_the_real_phrasing_found_live():
+    # The exact phrasing seen live: calculate_hypothetical's real numbers,
+    # described as already applied.
+    assert check_unapplied_restructuring_claim(
+        "Great! With a 3-month extension the loan now has 17 months left, "
+        "and the EMI will be reduced to about ₹10,294.12 each month."
+    )
+
+
+def test_unapplied_restructuring_catches_a_few_real_variants():
+    assert check_unapplied_restructuring_claim("Your tenure now has 17 months remaining.")
+    assert check_unapplied_restructuring_claim("Your loan has been extended by 3 months.")
+    assert check_unapplied_restructuring_claim("Your EMI has been restructured to a lower amount.")
+    assert check_unapplied_restructuring_claim("Your loan was successfully extended.")
+
+
+def test_unapplied_restructuring_does_not_flag_a_correctly_hedged_reply():
+    assert not check_unapplied_restructuring_claim(
+        "If this is approved, your EMI would become ₹10,294.12 over 17 months -- "
+        "I've sent this for approval and you'll hear back once it's reviewed."
+    )
+    assert not check_unapplied_restructuring_claim("Your EMI is ₹12,500, due on the 18th.")

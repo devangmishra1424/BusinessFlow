@@ -58,6 +58,8 @@ def _row_to_account(row: dict) -> Account:
         nach_mandate_active=row["nach_mandate_active"],
         dispute_open=row["dispute_open"],
         risk_tier=row["risk_tier"],
+        interest_rate_pct=float(row["interest_rate_pct"]) if row["interest_rate_pct"] is not None else None,
+        telegram_chat_id=row["telegram_chat_id"],
         payment_history=_load_payment_history(row["account_id"]),
         promises=_load_promises(row["account_id"]),
     )
@@ -131,12 +133,30 @@ def open_dispute(account_id: str, reason: str) -> bool:
     return True
 
 
-def create_escalation(account_id: str, reason: str) -> str:
+def set_interest_rate_pct(account_id: str, interest_rate_pct: float) -> None:
+    """Writes a real, extracted interest rate onto the account row --
+    called once, right after a loan_agreement upload's structured
+    extraction pass (rag/extraction.py's extract_loan_terms) finds a
+    real, non-null rate. Never called with None: "no rate extracted"
+    just leaves the column at its existing value (NULL until a real
+    agreement is uploaded and parsed) rather than writing a null here."""
+    get_connection().execute(
+        "update accounts set interest_rate_pct = %s, updated_at = now() where account_id = %s",
+        (interest_rate_pct, account_id),
+    )
+
+
+def create_escalation(account_id: str, reason: str, proposed_changes: dict | None = None) -> str:
     """Idempotent against an exact-duplicate call: if an unresolved
     escalation with this same account_id + reason already exists,
     returns its existing escalation_id instead of opening a second
     ticket for the same thing. A genuinely different reason still opens
-    a new escalation -- this only collapses true repeats."""
+    a new escalation -- this only collapses true repeats.
+
+    proposed_changes is not part of that dedup check -- callers that pass
+    it (see tools/escalation_tools.py's propose_restructuring) build reason
+    text that already embeds the real proposed numbers, so two genuinely
+    different proposals never share a reason string in the first place."""
     conn = get_connection()
     existing = conn.execute(
         "select escalation_id from escalations where account_id = %s and reason = %s and resolved_at is null",
@@ -147,8 +167,11 @@ def create_escalation(account_id: str, reason: str) -> str:
     seq_number = conn.execute("select nextval('escalation_seq')").fetchone()["nextval"]
     escalation_id = f"ESC-{seq_number:04d}"
     conn.execute(
-        "insert into escalations (escalation_id, account_id, reason) values (%s, %s, %s)",
-        (escalation_id, account_id, reason),
+        "insert into escalations (escalation_id, account_id, reason, proposed_changes) values (%s, %s, %s, %s)",
+        (
+            escalation_id, account_id, reason,
+            json.dumps(proposed_changes, ensure_ascii=False, default=str) if proposed_changes is not None else None,
+        ),
     )
     return escalation_id
 
@@ -161,24 +184,121 @@ def _row_to_escalation(row: dict) -> Escalation:
         status=row["status"],
         created_at=row["created_at"],
         resolved_at=row["resolved_at"],
+        proposed_changes=row.get("proposed_changes"),
+        resolution_reason=row.get("resolution_reason"),
     )
+
+
+class EscalationNotFoundError(ValueError):
+    pass
+
+
+class EscalationAlreadyResolvedError(ValueError):
+    pass
+
+
+def approve_restructuring(escalation_id: str) -> dict:
+    """The only place in this system that actually commits a
+    restructuring: applies an escalation's proposed_changes to the real
+    account row, then marks the escalation resolved. Re-checks
+    resolved_at rather than blindly re-applying, so a double-click or a
+    retried request can't double-apply the same change -- raises instead
+    of silently no-op'ing a second time, since silently returning
+    "success" on a stale retry could make an operator think a second,
+    different approval landed when nothing happened.
+
+    Known limitation, not solved here: this applies proposed_changes
+    exactly as they were computed at proposal time. If the account's real
+    state changed in between (a payment posted, a dispute opened), this
+    does not re-validate against the CURRENT state -- a real deployment
+    handling money for real would want that; this demo doesn't."""
+    conn = get_connection()
+    row = conn.execute(
+        "select account_id, proposed_changes, resolved_at from escalations where escalation_id = %s",
+        (escalation_id,),
+    ).fetchone()
+    if row is None:
+        raise EscalationNotFoundError(f"No escalation found for escalation_id={escalation_id!r}")
+    if row["resolved_at"] is not None:
+        raise EscalationAlreadyResolvedError(f"escalation_id={escalation_id!r} is already resolved")
+
+    changes = row["proposed_changes"]
+    if not changes:
+        raise ValueError(f"escalation_id={escalation_id!r} has no proposed_changes to apply")
+
+    account_id = row["account_id"]
+    if changes.get("type") == "extend_tenure":
+        conn.execute(
+            "update accounts set months_remaining = %s, emi_amount = %s, updated_at = now() where account_id = %s",
+            (changes["new_months_remaining"], changes["new_emi_amount"], account_id),
+        )
+    else:
+        raise ValueError(f"escalation_id={escalation_id!r} has an unknown proposed_changes type {changes.get('type')!r}")
+
+    conn.execute(
+        "update escalations set status = 'approved', resolved_at = now() where escalation_id = %s",
+        (escalation_id,),
+    )
+    return {"escalation_id": escalation_id, "account_id": account_id, **changes}
+
+
+def reject_restructuring(escalation_id: str, reason: str | None) -> dict:
+    """Marks the escalation rejected -- never touches the account row,
+    since nothing was ever applied to it in the first place. reason is
+    optional, ops-entered free text shown back to the borrower (see
+    outbound/send.py's notify_restructuring_decision)."""
+    conn = get_connection()
+    row = conn.execute(
+        "select account_id, resolved_at from escalations where escalation_id = %s",
+        (escalation_id,),
+    ).fetchone()
+    if row is None:
+        raise EscalationNotFoundError(f"No escalation found for escalation_id={escalation_id!r}")
+    if row["resolved_at"] is not None:
+        raise EscalationAlreadyResolvedError(f"escalation_id={escalation_id!r} is already resolved")
+
+    conn.execute(
+        "update escalations set status = 'rejected', resolved_at = now(), resolution_reason = %s where escalation_id = %s",
+        (reason, escalation_id),
+    )
+    return {"escalation_id": escalation_id, "account_id": row["account_id"], "reason": reason}
+
+
+def set_telegram_chat_id(account_id: str, chat_id: int) -> None:
+    """Records the Telegram chat this account most recently verified
+    from -- called once, right after a successful credential check in
+    channels/telegram_bot.py's handle_incoming_message. Last-verified-
+    chat-wins by design (see the column's comment in schema.sql)."""
+    get_connection().execute(
+        "update accounts set telegram_chat_id = %s, updated_at = now() where account_id = %s",
+        (chat_id, account_id),
+    )
+
+
+_ESCALATION_COLUMNS = "escalation_id, account_id, reason, status, created_at, resolved_at, proposed_changes, resolution_reason"
 
 
 def get_escalations_for_account(account_id: str) -> list[Escalation]:
     rows = get_connection().execute(
-        "select escalation_id, account_id, reason, status, created_at, resolved_at "
-        "from escalations where account_id = %s order by created_at desc",
+        f"select {_ESCALATION_COLUMNS} from escalations where account_id = %s order by created_at desc",
         (account_id,),
     ).fetchall()
     return [_row_to_escalation(r) for r in rows]
+
+
+def get_escalation(escalation_id: str) -> Escalation | None:
+    row = get_connection().execute(
+        f"select {_ESCALATION_COLUMNS} from escalations where escalation_id = %s",
+        (escalation_id,),
+    ).fetchone()
+    return _row_to_escalation(row) if row else None
 
 
 def list_open_escalations() -> list[Escalation]:
     """The ops queue: every escalation still waiting on a human, oldest
     first -- the order a human should actually work through them in."""
     rows = get_connection().execute(
-        "select escalation_id, account_id, reason, status, created_at, resolved_at "
-        "from escalations where status = 'queued_for_human' order by created_at",
+        f"select {_ESCALATION_COLUMNS} from escalations where status = 'queued_for_human' order by created_at",
     ).fetchall()
     return [_row_to_escalation(r) for r in rows]
 

@@ -73,10 +73,89 @@ def test_prompt_forbids_claiming_to_have_sent_or_emailed_anything():
     assert "no email, SMS, or document-delivery capability" in prompt
 
 
+def test_prompt_grounds_nach_failure_answers_and_forbids_claiming_to_fix_a_mandate():
+    # accounts.nach_mandate_active is a real seeded column and
+    # faq_general.md frames this whole agent as existing because a
+    # borrower's auto-debit failed -- but nothing told the model to check
+    # that field (rather than guess a specific reason) or that it cannot
+    # itself re-register a mandate.
+    prompt = build_system_prompt(language="en")
+    assert "nach_mandate_active" in prompt
+    assert "nach_mandate_troubleshooting" in prompt
+    assert "Never claim you can re-register, reactivate, or otherwise fix a NACH mandate yourself" in prompt
+
+
 def test_prompt_declines_legal_advice_and_offers_escalation():
     prompt = build_system_prompt(language="en")
     assert "legal advice" in prompt
     assert "escalate" in prompt
+
+
+def test_prompt_escalates_fraud_or_identity_claims_as_more_urgent_than_a_routine_dispute():
+    # "this loan isn't mine" / "someone took this loan out in my name" is a
+    # categorically different claim than an ordinary billing dispute -- both
+    # currently could go through flag_dispute/escalate_to_human with no
+    # distinction, so the reason string handed to escalate_to_human must
+    # make the urgency unmistakable to whoever picks it up.
+    prompt = build_system_prompt(language="en")
+    assert "SUSPECTED FRAUD/IDENTITY CLAIM" in prompt
+    assert "escalate_to_human" in prompt
+    assert "ask them for 'proof'" in prompt
+
+
+def test_prompt_refuses_to_fabricate_a_due_date_change_and_offers_escalation_instead():
+    # This agent has no mechanism to actually move a due date -- it's tied
+    # to the NACH mandate with the borrower's bank, not something this
+    # system can self-serve. Same class of problem _NO_FABRICATED_ACTIONS
+    # guards against, named explicitly here since it's common enough to ask.
+    prompt = build_system_prompt(language="en")
+    assert "can't do that directly" in prompt
+    assert "NACH mandate" in prompt
+    assert "Never agree to 'note', 'arrange', or 'put in' a due-date change" in prompt
+
+
+def test_prompt_gives_only_general_credit_score_information_never_this_borrowers_specific_score():
+    # The system has no access to any borrower's actual credit report/CIBIL
+    # score. A general, factual answer is fine; a specific one about THIS
+    # borrower's score or personalized credit advice is not, since there is
+    # nothing to ground either in.
+    prompt = build_system_prompt(language="en")
+    assert "credit score" in prompt
+    assert "never state anything specific about THIS borrower's actual score or credit report" in prompt
+    assert "personalized financial advice" in prompt
+
+
+def test_prompt_holds_the_settlement_discount_firm_against_negotiation_pressure():
+    # SETTLEMENT_DISCOUNT_PCT is a fixed 5% policy constant -- an LLM under
+    # social pressure to be "helpful" can drift toward implying flexibility
+    # that doesn't exist. The prompt must require a real
+    # calculate_hypothetical call and state the figure is fixed, not
+    # negotiable.
+    prompt = build_system_prompt(language="en")
+    assert "currently 5%" in prompt
+    assert "calculate_hypothetical" in prompt
+    assert "not negotiable through this channel" in prompt
+
+
+def test_prompt_treats_an_explicit_complaint_as_a_grievance_grounded_in_check_policy():
+    # escalation_policy.md only ever covered handing an account to a human
+    # HERE -- nothing told the model what to do when the borrower is
+    # dissatisfied with HOW their case was handled, which is a distinct
+    # thing from a routine dispute or an ordinary escalate_to_human call.
+    prompt = build_system_prompt(language="en")
+    assert "file a complaint" in prompt
+    assert "grievance_redressal.md" in prompt
+    assert "grievance about handling, not a routine account matter" in prompt
+
+
+def test_prompt_never_states_ombudsman_contact_details_from_memory():
+    # No Ombudsman phone number, address, or URL exists anywhere in this
+    # system to ground one in -- stating one from memory would be exactly
+    # the class of fabrication _NO_FABRICATED_LINKS/_NO_FABRICATED_ACTIONS
+    # already guard against elsewhere in this prompt.
+    prompt = build_system_prompt(language="en")
+    assert "RBI Banking/NBFC Ombudsman" in prompt
+    assert "never state a specific phone number, address, or URL for it from memory" in prompt
 
 
 def test_hindi_prompt_requires_devanagari_script():

@@ -37,3 +37,12 @@ SETTLEMENT_DISCOUNT_PCT = 0.05
 # An open dispute or a mandatory-escalation-triggering promise history means
 # no automated restructuring offer — human only, context already assembled.
 DISPUTE_BLOCKS_AUTOMATED_RESTRUCTURING = True
+
+# Flat rupee late fee charged once an EMI is past GRACE_PERIOD_DAYS --
+# grace_period.md says no late fee applies WITHIN the grace period, which
+# implies one exists after it, but nothing in this codebase actually
+# defined an amount before this constant. 500 is an ASSUMED, illustrative
+# default in this project's existing style of round, simple constants
+# (see SETTLEMENT_DISCOUNT_PCT above) -- it is not a researched real NBFC
+# figure, and a real business adopting this should confirm/adjust it.
+LATE_FEE_FLAT_AMOUNT = 500

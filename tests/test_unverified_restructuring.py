@@ -37,6 +37,16 @@ def test_concrete_proposal_with_calculate_hypothetical_called_is_not_flagged():
     assert not result
 
 
+def test_concrete_proposal_with_propose_restructuring_called_is_not_flagged():
+    # propose_restructuring calls calculate_hypothetical internally, but
+    # the LLM tool-call trace this checks only ever sees the outer name.
+    result = check_unverified_restructuring_claim(
+        "can you extend it by 3 months instead", tools_called_this_turn={"propose_restructuring"},
+    )
+
+    assert not result
+
+
 def test_concrete_proposal_with_escalate_to_human_called_is_not_flagged():
     # Escalating IS a legitimate verified outcome here -- a human will
     # actually check the real number, just not automatically.

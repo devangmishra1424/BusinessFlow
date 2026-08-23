@@ -35,8 +35,11 @@ _RESTRUCTURING_INTENT_RE = re.compile(
 
 # Any one of these actually checks a concrete proposal against real
 # policy/account state -- if one of these ran this turn, the claim is
-# verified regardless of what specific number it involved.
-_VERIFYING_TOOLS = {"propose_partial_payment", "calculate_hypothetical", "escalate_to_human"}
+# verified regardless of what specific number it involved. propose_restructuring
+# (the tool that actually queues a human approval, see tools/
+# escalation_tools.py) calls calculate_hypothetical internally, but the
+# LLM tool-call trace this checks only ever sees the outer name.
+_VERIFYING_TOOLS = {"propose_partial_payment", "calculate_hypothetical", "escalate_to_human", "propose_restructuring"}
 
 
 class UnverifiedRestructuringClaim:

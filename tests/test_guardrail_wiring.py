@@ -109,6 +109,29 @@ def test_fabricated_action_claim_gets_rewritten_in_place(reseed_accounts):
     assert updated_conversation[-1]["content"] == reply
 
 
+def test_unapplied_restructuring_claim_gets_rewritten_in_place(reseed_accounts):
+    # Real bug found live via the Telegram channel: calculate_hypothetical's
+    # real numbers, described as already applied. check_grounding alone
+    # has nothing to catch here -- ₹10,294.12 IS a real number, it just
+    # was never actually written to the account.
+    conversation = [
+        {"role": "user", "content": "ok, do it and tell me the revised amounts"},
+        {
+            "role": "assistant",
+            "content": (
+                "Great! With a 3-month extension the loan now has 17 months left, "
+                "and the EMI will be reduced to about ₹10,294.12 each month."
+            ),
+        },
+    ]
+
+    updated_conversation, reply = _finalize_reply(conversation, verified_account_id="BF-1001")
+
+    assert "now has" not in reply
+    assert "connect you" in reply
+    assert updated_conversation[-1]["content"] == reply
+
+
 def test_restructuring_claim_with_a_real_verifying_tool_call_passes_through(reseed_accounts):
     conversation = [
         {"role": "user", "content": "can i at least pay like 20000 now instead of the full amount"},

@@ -141,11 +141,15 @@ def _finalize_reply(conversation: list[dict], verified_account_id: str | None) -
     just this turn), then rewritten in place if it fails, so the stored
     transcript reflects what was actually said, not the rejected draft.
 
-    Three independent checks, since they catch different failure modes:
+    Four independent checks, since they catch different failure modes:
     grounding.check_grounding (a stated URL/₹ amount not traceable to
     anything real), grounding.check_fabricated_action (a claimed action --
     "I've sent/emailed..." -- with no tool that could have made it true,
-    found live via the Telegram channel), and
+    found live via the Telegram channel), grounding.
+    check_unapplied_restructuring_claim (a restructuring described as
+    already applied -- "the loan now has 17 months left" -- when no tool
+    in this system ever commits one, same failure family as
+    check_fabricated_action but found in a different conversation), and
     check_unverified_restructuring_claim (a concrete restructuring/
     partial-payment proposal that never got checked via a real tool call
     this turn -- found live when two separate prompt fixes for the same
@@ -155,6 +159,9 @@ def _finalize_reply(conversation: list[dict], verified_account_id: str | None) -
 
     if not failure:
         failure = grounding.check_fabricated_action(reply_text)
+
+    if not failure:
+        failure = grounding.check_unapplied_restructuring_claim(reply_text)
 
     if not failure:
         turn_start = _index_of_last_user_message(conversation)
@@ -176,11 +183,29 @@ def _finalize_reply(conversation: list[dict], verified_account_id: str | None) -
 
 
 @langfuse.observe(name="agent_turn", as_type="agent")
-async def _run_turn_async(conversation: list[dict], verified_account_id: str | None = None) -> tuple[list[dict], str]:
+async def _run_turn_async(
+    conversation: list[dict], verified_account_id: str | None = None, reasoning_effort: str | None = None,
+) -> tuple[list[dict], str]:
+    """reasoning_effort, when given, is passed straight through to every
+    _create_completion call this turn makes (openai/gpt-oss-20b accepts
+    'none'/'default'/'low'/'medium'/'high'). Left unset (None) by
+    default -- the model's own default.
+
+    A/B'd against compound_account_status_question_en (scripts/
+    ab_reasoning_effort.py, real Groq calls): 5/5 passed and called
+    get_payment_status at the current default, 4/4 (a 5th run didn't
+    complete -- see below) did the same at "high". No clear win to
+    adopt "high" as the new default -- the default was already at
+    ceiling on this scenario, so "high" had no room to show an
+    improvement, the same no-clear-win outcome query_llm.py's
+    expand_query found (see README.md's "Status and known gaps"
+    section). Left unset for that reason; kept as an opt-in parameter
+    rather than removed, same as expand_query."""
     tools = await _tool_specs()
+    reasoning_kwargs = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
 
     for _ in range(MAX_TOOL_ROUNDS):
-        completion = _create_completion(model=MODEL, messages=conversation, tools=tools)
+        completion = _create_completion(model=MODEL, messages=conversation, tools=tools, **reasoning_kwargs)
         message = completion.choices[0].message
         conversation.append(message.model_dump(exclude_none=True))
 
@@ -204,7 +229,7 @@ async def _run_turn_async(conversation: list[dict], verified_account_id: str | N
         "role": "user",
         "content": "Please give your final answer now, without calling any more tools.",
     })
-    completion = _create_completion(model=MODEL, messages=conversation)
+    completion = _create_completion(model=MODEL, messages=conversation, **reasoning_kwargs)
     final_text = completion.choices[0].message.content
     conversation.append({"role": "assistant", "content": final_text})
     return _finalize_reply(conversation, verified_account_id)
@@ -214,7 +239,9 @@ def start_conversation(language: str = "en", account_id: str | None = None) -> l
     return [{"role": "system", "content": build_system_prompt(language, account_id)}]
 
 
-def run_turn(conversation: list[dict], verified_account_id: str | None = None) -> tuple[list[dict], str]:
+def run_turn(
+    conversation: list[dict], verified_account_id: str | None = None, reasoning_effort: str | None = None,
+) -> tuple[list[dict], str]:
     """Runs one user turn (the latest message in conversation must already
     be the user's) to completion, including any tool calls the model
     makes along the way. Returns the updated conversation and the final
@@ -222,8 +249,12 @@ def run_turn(conversation: list[dict], verified_account_id: str | None = None) -
 
     verified_account_id, when given, blocks any tool call that tries to
     touch a DIFFERENT account_id than this one -- existing callers that
-    don't pass it get the original, unenforced behavior unchanged."""
-    return asyncio.run(_run_turn_async(conversation, verified_account_id))
+    don't pass it get the original, unenforced behavior unchanged.
+
+    reasoning_effort, when given, is forwarded to the model for this turn
+    (see _run_turn_async) -- unset by default, same as before this
+    parameter existed."""
+    return asyncio.run(_run_turn_async(conversation, verified_account_id, reasoning_effort))
 
 
 def start_conversation_with_recap(language: str = "en", account_id: str | None = None) -> list[dict]:
