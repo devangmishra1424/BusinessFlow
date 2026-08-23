@@ -42,11 +42,21 @@ from typing import Any
 subprocess.run(
     [sys.executable, "-m", "pip", "install", "-q", "-U",
      "transformers", "peft", "ctranslate2", "faster-whisper", "jiwer", "soundfile",
-     # torch<2.10: Kaggle's free GPU is a Tesla P100 (Pascal, compute
-     # capability sm_60) -- confirmed live that torch 2.10 dropped CUDA
-     # kernels for it ("no kernel image is available" the moment training
-     # hit a real GPU op).
-     "torch<2.10"],
+     # torch<2.8: Kaggle's free GPU is a Tesla P100 (Pascal, compute
+     # capability sm_60). An earlier "torch<2.10" pin here was wrong --
+     # it happened to resolve to a build that still had sm_60 kernels at
+     # the time, but "latest matching <2.10" is a moving target, and a
+     # later pip resolution landed on 2.9.1+cu128, which doesn't ("no
+     # kernel image is available for execution on the device", confirmed
+     # live; the run's own CUDA warning listed its supported capabilities
+     # as sm_70 sm_75 sm_80 sm_86 sm_90 sm_100 sm_120 -- no sm_60).
+     # Verified via PyTorch's own compute-capability support table: 2.8.0
+     # is where the cu128 wheels dropped Pascal/sm_60 entirely, so 2.7.x
+     # is the actual last version that has it, not anything under 2.10.
+     # transformers>=2.5 and peft>=1.13.0 (this run's real floors, checked
+     # against PyPI) are both satisfied by 2.7.x, so this doesn't reopen
+     # bug #2 (the transformers-version drift from an earlier attempt).
+     "torch<2.8"],
     check=True,
 )
 # peft's LoRA dispatcher checks is_torchao_available(), which raises
@@ -58,7 +68,43 @@ subprocess.run(
 # since a torchao new enough for peft pulls in a torch new enough to drop
 # Pascal support -- removing it entirely sidesteps the tradeoff rather
 # than chasing a version of torchao that satisfies both constraints at once.
-subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "-q", "torchao"], check=True)
+#
+# torchvision: confirmed live (kernel log) that Kaggle preinstalls it
+# matched to the ORIGINAL (pre-pin) torch build --
+# "torchvision 0.25.0+cu128 requires torch==2.10.0, but you have torch
+# 2.9.1" -- so the torch<2.10 pin above strands it against a torch it
+# wasn't compiled for, breaking its compiled C extensions
+# ("operator torchvision::nms does not exist") and cascading into a
+# transformers import failure (transformers' lazy-module registry trips
+# over the broken torchvision import while building its class map, which
+# surfaces as an unrelated-looking "Could not import module
+# 'BloomPreTrainedModel'"). This script is audio-only (Whisper) and never
+# imports torchvision or any vision model class, so -- same reasoning as
+# torchao above -- removing it entirely sidesteps the version-matching
+# problem instead of chasing a torchvision build compiled for torch<2.10.
+#
+# torchaudio: same disease, one layer deeper. Removing torchvision fixed
+# that import, but the next kernel run (still on the same torch<2.10 pin)
+# hit an identical strand: Kaggle also preinstalls
+# "torchaudio 2.10.0+cu128 requires torch==2.10.0, but you have torch
+# 2.9.1", and transformers/audio_utils.py does an unconditional
+# `import torchaudio` at module scope -- pulled in transitively via
+# peft's `from transformers import BloomPreTrainedModel` (peft/utils/
+# constants.py) while building its lazy class registry, nothing to do
+# with Bloom or peft themselves. A present-but-broken torchaudio raises
+# OSError ("undefined symbol: torch_c10_cuda_free_error_msg") from its
+# own compiled extension loader, which is NOT the ImportError transformers'
+# availability-check machinery is written to catch (that check only
+# handles torchaudio being cleanly absent) -- so the broken-but-installed
+# case slips through as a hard crash instead of a graceful skip. This
+# script never uses torchaudio either (audio is loaded via `soundfile`
+# directly, confirmed by grep), so removing it outright turns "present
+# but broken" into "cleanly absent", which the availability check DOES
+# handle, exactly like the torchvision and torchao fixes above.
+subprocess.run(
+    [sys.executable, "-m", "pip", "uninstall", "-y", "-q", "torchao", "torchvision", "torchaudio"],
+    check=True,
+)
 
 import jiwer
 import peft
@@ -191,6 +237,17 @@ from transformers import Seq2SeqTrainer, Seq2SeqTrainingArguments, WhisperForCon
 processor = WhisperProcessor.from_pretrained("openai/whisper-base")
 model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-base")
 model.config.use_cache = False
+# Captured before get_peft_model reassigns `model` below -- Whisper's
+# decoder has a fixed positional-embedding capacity (448 for whisper-base,
+# confirmed via WhisperConfig().max_target_positions), and forward() raises
+# outright if a batch's labels exceed it. Confirmed live: 20+ minutes and
+# ~1,800 real steps into a full training run, one utterance's reference
+# text tokenized to 571 tokens and crashed the whole run. Truncating at
+# tokenization time is the standard fix for this (not a workaround specific
+# to this corpus) -- 448 tokens is far more than any real 30s utterance's
+# transcript should need, so this only ever clips a genuinely malformed
+# manifest entry, not a legitimately long one.
+_MAX_TARGET_POSITIONS = model.config.max_target_positions
 
 lora_config = LoraConfig(r=8, lora_alpha=16, target_modules=["q_proj", "v_proj"], lora_dropout=0.05)
 model = get_peft_model(model, lora_config)
@@ -212,7 +269,7 @@ class SpeechDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         entry = self.manifest[idx]
         audio, _sr = sf.read(str(self.audio_dir / entry["wav"]), dtype="float32")
-        labels = self.tokenizer(entry["reference"]).input_ids
+        labels = self.tokenizer(entry["reference"], truncation=True, max_length=_MAX_TARGET_POSITIONS).input_ids
         return {"audio": audio, "labels": labels}
 
 
