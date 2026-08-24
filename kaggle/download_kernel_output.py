@@ -17,8 +17,8 @@ load_dotenv(_PROJECT_ROOT / ".env")
 
 from kaggle.api.kaggle_api_extended import KaggleApi  # noqa: E402  (needs KAGGLE_API_TOKEN loaded first)
 
-KERNEL = "mishradevang14/notebookd3491b2506"
-FILE_PATTERN = r"businessflow-whisper-finetuned\.zip"
+KERNEL = "mishradevang14/businessflow-whisper-finetune-full-corpus"
+FILE_PATTERN = r"businessflow-whisper-finetuned.*\.zip"
 OUTPUT_DIR = _PROJECT_ROOT / "kaggle" / "downloaded_model"
 
 
