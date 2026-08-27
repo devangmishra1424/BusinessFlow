@@ -3,15 +3,19 @@ in-memory dict this started as. Public function signatures are unchanged
 from the mock -- the 8 tools that call these never needed to change for
 this swap, only the internals did.
 
-DEMO_TODAY still anchors "today" for the seeded demo accounts, for the
-same reason as before: days-past-due and grace-period state are computed
-relative to a fixed date, not the real clock, so the demo can't silently
-drift out of its intended scenario as real time passes.
+current_date() returns the real calendar date. The demo accounts'
+days-past-due/grace-period story stays intact regardless of when this
+runs because scripts/seed_accounts.py seeds every date relative to
+date.today() at seed time, not a fixed literal -- so re-seeding (e.g.
+the morning of a demo) keeps this function's real, live "today" in sync
+with the story, instead of the two silently drifting apart the longer a
+frozen anchor sat unseeded.
 """
 
 import json
 import logging
-from datetime import date, datetime
+import secrets
+from datetime import date, datetime, timezone
 
 import psycopg
 
@@ -19,8 +23,6 @@ from businessflow.accounts.db import get_connection
 from businessflow.accounts.models import Account, Escalation, PaymentRecord, PromiseToPay
 
 logger = logging.getLogger(__name__)
-
-DEMO_TODAY = date(2026, 8, 21)
 
 
 def _load_payment_history(account_id: str) -> list[PaymentRecord]:
@@ -87,11 +89,80 @@ def get_account_by_phone(phone_number: str) -> Account | None:
     return _row_to_account(row) if row else None
 
 
+def _next_account_id() -> str:
+    """BF-1001, BF-1002, ... -- the next id after whatever's already the
+    highest numbered account. Computed in Python from the existing rows
+    rather than a real Postgres sequence (like escalation_seq) -- ops
+    account creation is a rare, deliberate, one-at-a-time human action,
+    not a hot concurrent path, so the small window between this read and
+    the insert below racing another creation isn't worth a schema change
+    to close. Starts at BF-1001 if the table is somehow empty."""
+    row = get_connection().execute(
+        "select account_id from accounts where account_id ~ '^BF-[0-9]+$' order by (substring(account_id from 4))::int desc limit 1"
+    ).fetchone()
+    if row is None:
+        return "BF-1001"
+    next_number = int(row["account_id"].removeprefix("BF-")) + 1
+    return f"BF-{next_number:04d}"
+
+
+def create_account(
+    borrower_name: str, business_name: str, phone_number: str, language_preference: str,
+    loan_type: str, principal_amount: float, emi_amount: float, tenure_months: int,
+    emi_due_date: date, nach_mandate_active: bool, risk_tier: str,
+) -> tuple[Account, str]:
+    """Opens a brand-new loan account -- months_remaining starts equal to
+    tenure_months (nothing paid down yet) and dispute_open starts False;
+    every other real-world field (payment_history, promises, flags) only
+    accumulates from here through the account's normal real activity, the
+    same way a real newly-issued loan would. Returns (account, access_key):
+    access_key is a fresh random 6-digit PIN (this system's stand-in for a
+    real sign-up flow, same as every seeded demo account's) -- it isn't a
+    field on Account itself (see verify_account_key, which queries the
+    column directly), so this is the only place it's ever handed back;
+    the caller (ops/api.py) is responsible for showing it to whoever's
+    opening this account."""
+    account_id = _next_account_id()
+    access_key = f"{secrets.randbelow(1_000_000):06d}"
+    get_connection().execute(
+        """
+        insert into accounts (
+            account_id, borrower_name, business_name, phone_number, language_preference,
+            loan_type, principal_amount, emi_amount, tenure_months, months_remaining,
+            emi_due_date, nach_mandate_active, dispute_open, risk_tier, access_key
+        ) values (
+            %(account_id)s, %(borrower_name)s, %(business_name)s, %(phone_number)s, %(language_preference)s,
+            %(loan_type)s, %(principal_amount)s, %(emi_amount)s, %(tenure_months)s, %(tenure_months)s,
+            %(emi_due_date)s, %(nach_mandate_active)s, false, %(risk_tier)s, %(access_key)s
+        )
+        """,
+        {
+            "account_id": account_id, "borrower_name": borrower_name, "business_name": business_name,
+            "phone_number": phone_number, "language_preference": language_preference, "loan_type": loan_type,
+            "principal_amount": principal_amount, "emi_amount": emi_amount, "tenure_months": tenure_months,
+            "emi_due_date": emi_due_date, "nach_mandate_active": nach_mandate_active, "risk_tier": risk_tier,
+            "access_key": access_key,
+        },
+    )
+    return get_account_or_raise(account_id), access_key
+
+
 def current_date() -> date:
-    """The single seam tools call through for 'today'. Returns the fixed demo
-    anchor for now; swap this one function for date.today() once this runs
-    against real, non-seeded accounts instead of the demo data."""
-    return DEMO_TODAY
+    """The single seam tools call through for 'today' -- the real
+    calendar date, in UTC specifically, not date.today()'s local
+    timezone. Real, found-live reason: outbound/run.py's
+    _already_sent_today() combines this date with tzinfo=UTC to build a
+    "since midnight" cutoff compared against events.created_at (a real
+    Postgres timestamptz, itself UTC) -- on a host running any timezone
+    ahead of UTC (confirmed live in IST, UTC+5:30, during the ~5.5-hour
+    window after local midnight but before UTC midnight), date.today()
+    already reads as tomorrow while UTC is still today, producing a
+    since-midnight cutoff that's hours in the future relative to any
+    real event -- so the "already sent today" check could never find a
+    match and would resend the same reminder every time it's called.
+    See scripts/seed_accounts.py for why the demo data stays consistent
+    with this rather than pinning it to a fixed date."""
+    return datetime.now(timezone.utc).date()
 
 
 def add_promise(account_id: str, made_on: date, promised_date: date, promised_amount: float) -> bool:
@@ -321,6 +392,26 @@ def has_recent_event_with_detail(account_id: str, event_type: str, since: dateti
         (account_id, event_type, since, detail_key, str(detail_value)),
     ).fetchone()
     return row is not None
+
+
+def get_clarification_requests(account_id: str) -> list[dict]:
+    """Every clarification-request message ever sent to this account,
+    most recent first -- the ops dashboard's communication-history
+    thread for that borrower (see outbound/send.py's
+    notify_clarification_request, which is what actually writes these
+    events)."""
+    rows = get_connection().execute(
+        "select details, created_at from events where account_id = %s and event_type = %s order by created_at desc",
+        (account_id, "clarification_request_sent"),
+    ).fetchall()
+    return [
+        {
+            "message": r["details"]["message"],
+            "delivered_via_telegram": r["details"]["delivered_via_telegram"],
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
 
 
 def verify_account_key(account_id: str, access_key: str) -> bool:

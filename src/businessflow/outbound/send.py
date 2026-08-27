@@ -69,3 +69,12 @@ async def notify_restructuring_decision(account_id: str, approved: bool, message
     restructuring request. Returns True if the borrower was actually
     reached over Telegram."""
     return await _deliver_and_log(account_id, message, "restructuring_decision_notified", {"approved": approved})
+
+
+async def notify_clarification_request(account_id: str, message: str) -> bool:
+    """Called from ops/api.py right after an operator sends a
+    clarification request about an account's flags -- message is the
+    operator's own final wording (possibly LLM-polished via
+    outbound/compose.py, always human-reviewed before this is called).
+    Returns True if the borrower was actually reached over Telegram."""
+    return await _deliver_and_log(account_id, message, "clarification_request_sent", {})

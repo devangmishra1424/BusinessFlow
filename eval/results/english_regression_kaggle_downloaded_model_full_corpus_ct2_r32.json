@@ -1,0 +1,5 @@
+{
+  "model_size": "kaggle/downloaded_model/full_corpus_ct2_r32",
+  "utterances_scored": 10,
+  "wer": 0.054945054945054944
+}

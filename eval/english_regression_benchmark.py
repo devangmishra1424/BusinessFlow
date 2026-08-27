@@ -45,7 +45,13 @@ def main(model_size: str = "base"):
     print(json.dumps(result, indent=2))
 
     _RESULTS_DIR.mkdir(exist_ok=True)
-    out_path = _RESULTS_DIR / f"english_regression_{model_size}.json"
+    # model_size is sometimes a local filesystem path (a fine-tuned model
+    # directory, not a built-in size name like "base") -- embedding its
+    # separators straight into the filename would try to write through
+    # nonexistent nested directories instead of naming the result file.
+    # Same fix as eval/wer_benchmark.py's own safe_label.
+    safe_label = model_size.replace("/", "_").replace("\\", "_")
+    out_path = _RESULTS_DIR / f"english_regression_{safe_label}.json"
     out_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(f"saved to {out_path}")
     return result

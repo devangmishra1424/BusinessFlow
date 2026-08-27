@@ -5,6 +5,7 @@ from the canonical seed data, not whatever a previous test left behind.
 """
 
 import os
+from datetime import timedelta
 
 import pytest
 
@@ -23,6 +24,33 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _due_date(days_past_due: int) -> str:
+    """The real emi_due_date for an account currently `days_past_due`
+    overdue -- mirrors scripts/seed_accounts.py's _DAYS_PAST_DUE, which
+    seeds every date relative to date.today() rather than a fixed literal."""
+    return (store.current_date() - timedelta(days=days_past_due)).isoformat()
+
+
+def _days_before(due_iso: str, days: int) -> str:
+    from datetime import date
+
+    return (date.fromisoformat(due_iso) - timedelta(days=days)).isoformat()
+
+
+# An arbitrary date safely in the future relative to whenever these tests
+# actually run -- these tests only care that log_promise_to_pay accepts
+# and persists *some* promised_date, not this specific one.
+_FUTURE_PROMISE_DATE = (store.current_date() + timedelta(days=5)).isoformat()
+
+# BF-1001's 3 real seeded payments -- offsets (31/61/92 days before its
+# emi_due_date) match scripts/seed_accounts.py's _PAYMENT_HISTORY_OFFSETS
+# for BF-1001 exactly, most-recent-first.
+_BF1001_DUE = _due_date(3)
+_BF1001_PAYMENT_RECENT = _days_before(_BF1001_DUE, 31)
+_BF1001_PAYMENT_MID = _days_before(_BF1001_DUE, 61)
+_BF1001_PAYMENT_OLDEST = _days_before(_BF1001_DUE, 92)
+
+
 def test_get_payment_status_returns_real_account_fields(reseed_accounts):
     result = get_payment_status(account_id="BF-1001")
 
@@ -30,8 +58,8 @@ def test_get_payment_status_returns_real_account_fields(reseed_accounts):
     assert result["borrower_name"] == "Priya Sharma"
     assert result["principal_amount"] == 250_000.0
     assert result["emi_amount"] == 12500.0
-    assert result["emi_due_date"] == "2026-08-18"
-    assert result["days_past_due"] == 3  # DEMO_TODAY (2026-08-21) - emi_due_date
+    assert result["emi_due_date"] == _due_date(3)
+    assert result["days_past_due"] == 3  # seeded 3 days before store.current_date()
     assert result["tenure_months"] == 24
     assert result["months_remaining"] == 14
     assert result["outstanding_balance_approx"] == 175_000.0  # 12500 * 14, same approximation calculate_hypothetical uses
@@ -49,9 +77,9 @@ def test_get_payment_status_returns_real_account_fields(reseed_accounts):
 
 
 def test_get_payment_status_applies_late_fee_once_past_the_grace_period(reseed_accounts):
-    # BF-1002 is 11 days past due (real seeded emi_due_date 2026-08-10 vs
-    # DEMO_TODAY 2026-08-21) -- well past GRACE_PERIOD_DAYS (3), so this is
-    # the real seeded account that should trip late_fee_applicable. It also
+    # BF-1002 is seeded 11 days past due (relative to store.current_date(),
+    # see scripts/seed_accounts.py) -- well past GRACE_PERIOD_DAYS (3), so
+    # this is the real seeded account that should trip late_fee_applicable. It also
     # has nach_mandate_active=False in the real seed data, so this same
     # account covers both new fields' "true"/non-null branches together.
     result = get_payment_status(account_id="BF-1002")
@@ -68,38 +96,38 @@ def test_get_payment_status_raises_on_unknown_account(reseed_accounts):
 
 
 def test_log_promise_to_pay_persists_a_real_row(reseed_accounts):
-    result = log_promise_to_pay(account_id="BF-1001", promised_date="2026-08-25", promised_amount=12500)
+    result = log_promise_to_pay(account_id="BF-1001", promised_date=_FUTURE_PROMISE_DATE, promised_amount=12500)
 
     assert result == {
         "account_id": "BF-1001",
-        "promised_date": "2026-08-25",
+        "promised_date": _FUTURE_PROMISE_DATE,
         "promised_amount": 12500.0,
         "tolerance_days": 2,
         "logged": True,
         "already_logged": False,
     }
     account = store.get_account_or_raise("BF-1001")
-    assert any(p.promised_date.isoformat() == "2026-08-25" and p.promised_amount == 12500.0 for p in account.promises)
+    assert any(p.promised_date.isoformat() == _FUTURE_PROMISE_DATE and p.promised_amount == 12500.0 for p in account.promises)
 
 
 def test_log_promise_to_pay_is_idempotent_against_an_identical_repeat_call(reseed_accounts):
     # A retry, or the model calling this twice in one turn, should log the
     # promise once -- not create two rows for what was meant to be one
     # real-world commitment.
-    log_promise_to_pay(account_id="BF-1001", promised_date="2026-08-25", promised_amount=12500)
-    result = log_promise_to_pay(account_id="BF-1001", promised_date="2026-08-25", promised_amount=12500)
+    log_promise_to_pay(account_id="BF-1001", promised_date=_FUTURE_PROMISE_DATE, promised_amount=12500)
+    result = log_promise_to_pay(account_id="BF-1001", promised_date=_FUTURE_PROMISE_DATE, promised_amount=12500)
 
     assert result["already_logged"] is True
     account = store.get_account_or_raise("BF-1001")
-    matching = [p for p in account.promises if p.promised_date.isoformat() == "2026-08-25" and p.promised_amount == 12500.0]
+    matching = [p for p in account.promises if p.promised_date.isoformat() == _FUTURE_PROMISE_DATE and p.promised_amount == 12500.0]
     assert len(matching) == 1
 
 
 def test_log_promise_to_pay_with_a_different_amount_is_a_genuinely_new_promise(reseed_accounts):
     # Idempotency must only collapse true repeats -- a borrower revising
     # their own promise (different amount) has to still go through.
-    log_promise_to_pay(account_id="BF-1001", promised_date="2026-08-25", promised_amount=12500)
-    result = log_promise_to_pay(account_id="BF-1001", promised_date="2026-08-25", promised_amount=8000)
+    log_promise_to_pay(account_id="BF-1001", promised_date=_FUTURE_PROMISE_DATE, promised_amount=12500)
+    result = log_promise_to_pay(account_id="BF-1001", promised_date=_FUTURE_PROMISE_DATE, promised_amount=8000)
 
     assert result["already_logged"] is False
     account = store.get_account_or_raise("BF-1001")
@@ -117,7 +145,7 @@ def test_log_promise_to_pay_raises_on_malformed_date(reseed_accounts):
 
 def test_log_promise_to_pay_raises_on_unknown_account(reseed_accounts):
     with pytest.raises(ValueError, match="No account found"):
-        log_promise_to_pay(account_id="BF-9999", promised_date="2026-08-25", promised_amount=100)
+        log_promise_to_pay(account_id="BF-9999", promised_date=_FUTURE_PROMISE_DATE, promised_amount=100)
 
 
 def test_flag_dispute_opens_a_real_dispute(reseed_accounts):
@@ -153,23 +181,23 @@ def test_flag_dispute_is_idempotent_against_a_repeat_call(reseed_accounts):
 
 def test_get_payment_history_returns_real_seeded_records_most_recent_first(reseed_accounts):
     # BF-1001's real seeded payment_history has exactly 3 rows, oldest to
-    # newest in the seed data (2026-05-18, 06-18, 07-18) -- this checks the
-    # tool actually reverses that into most-recent-first, not just passes
-    # the store's own ascending order through.
+    # newest in the seed data -- this checks the tool actually reverses
+    # that into most-recent-first, not just passes the store's own
+    # ascending order through.
     result = get_payment_history(account_id="BF-1001")
 
     assert result["account_id"] == "BF-1001"
     assert result["payment_history"] == [
-        {"date": "2026-07-18", "amount": 12500.0, "on_time": True},
-        {"date": "2026-06-18", "amount": 12500.0, "on_time": True},
-        {"date": "2026-05-18", "amount": 12500.0, "on_time": True},
+        {"date": _BF1001_PAYMENT_RECENT, "amount": 12500.0, "on_time": True},
+        {"date": _BF1001_PAYMENT_MID, "amount": 12500.0, "on_time": True},
+        {"date": _BF1001_PAYMENT_OLDEST, "amount": 12500.0, "on_time": True},
     ]
 
 
 def test_get_payment_history_respects_a_smaller_limit(reseed_accounts):
     result = get_payment_history(account_id="BF-1001", limit=2)
 
-    assert [r["date"] for r in result["payment_history"]] == ["2026-07-18", "2026-06-18"]
+    assert [r["date"] for r in result["payment_history"]] == [_BF1001_PAYMENT_RECENT, _BF1001_PAYMENT_MID]
 
 
 def test_get_payment_history_clamps_a_limit_above_the_real_maximum(reseed_accounts):
@@ -199,7 +227,7 @@ def test_get_payment_history_clamps_a_non_positive_limit_up_to_one(reseed_accoun
     result = get_payment_history(account_id="BF-1001", limit=0)
 
     assert len(result["payment_history"]) == 1
-    assert result["payment_history"][0]["date"] == "2026-07-18"
+    assert result["payment_history"][0]["date"] == _BF1001_PAYMENT_RECENT
 
 
 def test_get_payment_history_raises_on_unknown_account(reseed_accounts):

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BusinessFlow · Chat</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+
+<div id="start-screen" class="start-screen">
+  <div class="start-glow"></div>
+  <div class="start-card">
+    <div class="brand">
+      <div class="brand-mark">BF</div>
+      <div class="brand-name">BusinessFlow</div>
+    </div>
+    <p class="start-tagline">Talk to us about your loan — in English, Hindi, or however's easiest.</p>
+
+    <div class="start-tabs">
+      <button class="start-tab active" data-mode="verified">My account</button>
+      <button class="start-tab" data-mode="anonymous">Just a question</button>
+    </div>
+
+    <form id="start-form" autocomplete="off">
+      <div id="verified-fields">
+        <label class="field-label" for="start-account-id">Account ID</label>
+        <input id="start-account-id" type="text" placeholder="BF-1001" autocomplete="off" />
+        <label class="field-label" for="start-access-key">Access key</label>
+        <input id="start-access-key" type="password" placeholder="6-digit key" autocomplete="off" inputmode="numeric" />
+      </div>
+
+      <label class="field-label">Language</label>
+      <div class="lang-toggle">
+        <button type="button" class="lang-btn active" data-lang="en">English</button>
+        <button type="button" class="lang-btn" data-lang="hi">हिन्दी</button>
+      </div>
+
+      <button type="submit" id="start-submit-btn" class="start-submit">
+        Start chatting
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <p id="start-error" class="start-error" hidden></p>
+    </form>
+    <p class="start-hint">Your account key stays on this device — it's only sent to verify you, once.</p>
+  </div>
+</div>
+
+<div id="chat-screen" class="chat-screen" hidden>
+  <header class="chat-header">
+    <div class="brand small">
+      <div class="brand-mark">BF</div>
+      <div class="brand-name">BusinessFlow</div>
+    </div>
+    <div class="chat-header-right">
+      <span class="account-chip" id="account-chip" hidden></span>
+      <button class="icon-btn" id="restart-btn" title="Start over">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M3 12a9 9 0 1 1 3 6.7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M3 21v-6h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main id="message-list" class="message-list"></main>
+
+  <form id="message-form" class="message-form" autocomplete="off">
+    <input id="message-input" type="text" placeholder="Type your message…" autocomplete="off" />
+    <button type="submit" id="send-btn" class="send-btn" aria-label="Send">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 12h16M13 5l7 7-7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </form>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

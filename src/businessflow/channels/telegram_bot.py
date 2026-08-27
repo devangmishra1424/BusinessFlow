@@ -46,7 +46,6 @@ Run: python -m businessflow.channels.telegram_bot
 import asyncio
 import io
 import os
-import re
 
 import groq
 import soundfile as sf
@@ -68,6 +67,7 @@ from businessflow.audio.asr import transcribe
 from businessflow.audio.tts import speak_english, speak_hindi
 from businessflow.audio.vad import trim_to_speech
 from businessflow.audio.verbalizer import verbalize
+from businessflow.channels.credentials import looks_like_credentials, parse_credentials
 
 # Matches agent/client.py's convention: load .env at import time, then
 # read os.environ directly wherever a value is needed (main(), below,
@@ -78,16 +78,6 @@ _MAX_VOICE_NOTE_SECONDS = 120  # an explicit, bounded cap on ASR compute -- not 
 
 _sessions: dict[int, dict] = {}  # chat_id -> {"account_id": str | None, "language": str, "messages": list[dict]}
 _language_choice: dict[int, str] = {}  # chat_id -> "en" | "hi", set via /hindi or /english before a session exists
-
-_CREDENTIALS_PATTERN = re.compile(r"^(\S+)\s+(\d{6})$")
-
-
-def _looks_like_credentials(text: str) -> bool:
-    """True if text is shaped like "<account_id> <6-digit access key>"
-    (e.g. "BF-1001 482913") -- shared by both the text and voice paths
-    below to decide whether an unauthenticated message is a verification
-    attempt."""
-    return bool(_CREDENTIALS_PATTERN.match(text.strip()))
 
 
 def handle_incoming_message(chat_id: int, text: str) -> str:
@@ -114,9 +104,8 @@ def handle_incoming_message(chat_id: int, text: str) -> str:
     session = _sessions.get(chat_id)
 
     if session is None or session.get("account_id") is None:
-        if _looks_like_credentials(text):
-            match = _CREDENTIALS_PATTERN.match(text.strip())
-            account_id, access_key = match.group(1), match.group(2)
+        if looks_like_credentials(text):
+            account_id, access_key = parse_credentials(text)
             language = session["language"] if session else _language_choice.get(chat_id, "en")
             try:
                 conversation = verify_and_start_conversation(language, account_id, access_key)
@@ -235,7 +224,7 @@ async def handle_incoming_voice(
     # So a credential-shaped transcript from a brand-new session is never
     # sent into verification -- ask for it as text instead, and don't
     # call handle_incoming_message at all (no failed-attempt side effect).
-    if chat_id not in _sessions and _looks_like_credentials(transcript):
+    if chat_id not in _sessions and looks_like_credentials(transcript):
         return transcript, (
             "That sounded like your account ID and access key -- to avoid a "
             'misheard digit locking your account, please TYPE them instead, '
@@ -296,7 +285,7 @@ def _transcript_echo(transcript: str) -> str:
     put the account_id + 6-digit access key into Telegram's chat history
     either way. Factored out from on_voice_message so this specific
     redaction behavior is directly testable without a fake Update."""
-    if _looks_like_credentials(transcript):
+    if looks_like_credentials(transcript):
         return "You said: [account details -- redacted]"
     return f"You said: {transcript}"
 

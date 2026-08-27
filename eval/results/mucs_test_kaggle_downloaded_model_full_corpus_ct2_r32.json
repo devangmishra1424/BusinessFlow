@@ -1,0 +1,18 @@
+{
+  "model_size": "kaggle/downloaded_model/full_corpus_ct2_r32",
+  "sample_size": 100,
+  "seed": 42,
+  "recordings_spanned": 27,
+  "wer": 0.5317460317460317,
+  "script_consistency_rate": 0.47,
+  "hypothesis_script_distribution": {
+    "latin": 8,
+    "devanagari": 47,
+    "mixed": 45
+  },
+  "reference_script_distribution": {
+    "mixed": 43,
+    "devanagari": 48,
+    "latin": 9
+  }
+}

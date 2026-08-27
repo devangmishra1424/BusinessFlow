@@ -239,6 +239,28 @@ def start_conversation(language: str = "en", account_id: str | None = None) -> l
     return [{"role": "system", "content": build_system_prompt(language, account_id)}]
 
 
+_sync_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _get_sync_loop() -> asyncio.AbstractEventLoop:
+    """One event loop, reused for the life of the process, instead of a
+    fresh asyncio.run() per call. Found live: calling run_turn()
+    repeatedly in one process (exactly what a long-running caller like
+    channels/telegram_bot.py or a benchmark loop does) degraded badly
+    after the first call -- 4.8s, then 52s, 29s, 57s on the next three,
+    with the tool call and each individual Groq completion independently
+    confirmed still fast in isolation. asyncio.run() tears the whole loop
+    down and builds a new one every call; something async-native this
+    turn depends on (most likely langfuse's own async client, which
+    holds real connections/background tasks) doesn't tolerate having its
+    loop pulled out from under it and rebuilt repeatedly. Keeping one
+    loop alive for the whole process avoids that churn entirely."""
+    global _sync_loop
+    if _sync_loop is None or _sync_loop.is_closed():
+        _sync_loop = asyncio.new_event_loop()
+    return _sync_loop
+
+
 def run_turn(
     conversation: list[dict], verified_account_id: str | None = None, reasoning_effort: str | None = None,
 ) -> tuple[list[dict], str]:
@@ -254,7 +276,7 @@ def run_turn(
     reasoning_effort, when given, is forwarded to the model for this turn
     (see _run_turn_async) -- unset by default, same as before this
     parameter existed."""
-    return asyncio.run(_run_turn_async(conversation, verified_account_id, reasoning_effort))
+    return _get_sync_loop().run_until_complete(_run_turn_async(conversation, verified_account_id, reasoning_effort))
 
 
 def start_conversation_with_recap(language: str = "en", account_id: str | None = None) -> list[dict]:

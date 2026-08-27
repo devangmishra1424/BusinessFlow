@@ -41,6 +41,19 @@ def test_retrieves_the_right_document(retriever, query, acceptable_headings):
     assert any(h in results[0]["headings"] for h in acceptable_headings)
 
 
+def test_document_type_filter_excludes_a_non_matching_type(retriever):
+    # scripts/seed_kb.py ingests the general policy KB with
+    # document_type="policy" -- a real, populated type. Filtering for a
+    # type nothing in this scope actually has (loan_agreement is only
+    # ever ingested per-account, via ops/api.py's upload endpoint) must
+    # come back empty rather than silently falling back to unfiltered.
+    matching = retriever.retrieve("can I get a few more days to pay", top_k=1, document_type="policy")
+    assert matching, "the filter should not have excluded the real policy chunk"
+
+    non_matching = retriever.retrieve("can I get a few more days to pay", top_k=1, document_type="loan_agreement")
+    assert non_matching == []
+
+
 def test_general_docs_are_visible_regardless_of_account_id():
     retriever = DocumentRetriever()
     results = retriever.retrieve("can I get a few more days to pay", top_k=1, account_id="BF-1001")

@@ -61,3 +61,7 @@ translit_debug.txt
 seed_a.log
 seed_b.log
 seed_c.log
+
+# Local agent-harness dev-server config -- personal to this machine's
+# directory layout, not project content.
+.claude/

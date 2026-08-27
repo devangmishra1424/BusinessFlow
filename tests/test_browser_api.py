@@ -84,3 +84,34 @@ def test_send_empty_message_returns_400(reseed_accounts):
     response = client.post(f"/conversations/{conversation_id}/messages", json={"message": "   "})
 
     assert response.status_code == 400
+
+
+@_pg_skip
+def test_sending_credentials_in_an_anonymous_chat_verifies_without_reaching_the_llm(reseed_accounts):
+    # Found live: a borrower typed "BF-1003 930571" straight into an
+    # anonymous chat, and (before this fix) both values were forwarded to
+    # the LLM as free text, which then passed the ACCESS KEY as
+    # account_id to get_payment_status and crashed the tool call. This
+    # must instead verify directly -- no run_turn_with_memory call, so no
+    # Groq key needed for this test.
+    start = client.post("/conversations", json={"language": "en"})
+    conversation_id = start.json()["conversation_id"]
+    assert start.json()["account_id"] is None
+
+    response = client.post(f"/conversations/{conversation_id}/messages", json={"message": "BF-1003 930571"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "BF-1003" in body["reply"]
+    assert body["tool_calls"] == []
+
+
+@_pg_skip
+def test_sending_credentials_with_a_wrong_key_does_not_verify(reseed_accounts):
+    start = client.post("/conversations", json={"language": "en"})
+    conversation_id = start.json()["conversation_id"]
+
+    response = client.post(f"/conversations/{conversation_id}/messages", json={"message": "BF-1003 000000"})
+
+    assert response.status_code == 200
+    assert "doesn't match" in response.json()["reply"]

@@ -17,20 +17,25 @@ default port 8000 -- run both side by side, they're independent apps).
 
 import logging
 import os
+import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Literal
 
 from docling.exceptions import ConversionError
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Security, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, field_validator
 
 from businessflow.accounts import store
 from businessflow.accounts.models import Account
 from businessflow.observability import metrics
 from businessflow.ops.flags import Flag, compute_flags
 from businessflow.outbound import send as notify
+from businessflow.outbound.compose import draft_clarification_message
 from businessflow.rag.extraction import extract_loan_terms
 from businessflow.rag.ingest import extract_document_text, ingest_document
 
@@ -42,6 +47,11 @@ app = FastAPI(title="BusinessFlow Ops API")
 # etc.) live on disk -- the permanent source file ingest_document() parses,
 # analogous to data/kb/ holding the general policy docs' source files.
 _DOCUMENTS_DIR = Path(__file__).resolve().parents[3] / "data" / "documents"
+
+# The ops dashboard's static frontend (index.html/styles.css/app.js) --
+# mounted below, after every API route, so an exact-path route like
+# GET /accounts is always matched before the static mount's catch-all.
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 # What ingest.py's Docling call actually supports (see its docstring) --
 # rejecting anything else here with a clear 400 beats letting
@@ -56,6 +66,13 @@ _ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".md"}
 # actually read, not by trusting the client-supplied Content-Length header.
 _MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 _UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
+
+# The real E.164 shape (models.py documents every account's phone_number
+# as E.164 but never enforced it -- every existing value came from a
+# hand-authored seed script, not user input). A new account opened
+# through this API is the first real input boundary for this field, so
+# it's validated here rather than left to whatever an ops person typed.
+_E164_PATTERN = re.compile(r"^\+[1-9]\d{6,14}$")
 
 app.add_middleware(
     CORSMiddleware,
@@ -134,6 +151,7 @@ class MetricsOut(BaseModel):
 
 class EscalationOut(BaseModel):
     escalation_id: str
+    account_id: str
     reason: str
     status: str
     created_at: datetime
@@ -160,6 +178,69 @@ class DocumentUploadOut(BaseModel):
     interest_rate_extracted: bool
 
 
+class ClarificationDraftIn(BaseModel):
+    operator_note: str
+
+
+class ClarificationDraftOut(BaseModel):
+    draft: str
+
+
+class ClarificationRequestIn(BaseModel):
+    # The final message text an operator has reviewed and wants sent --
+    # possibly the LLM-drafted wording, possibly hand-edited or written
+    # from scratch. Never auto-sent from a draft without this explicit call.
+    message: str
+
+
+class ClarificationRequestOut(BaseModel):
+    message: str
+    delivered_via_telegram: bool
+    created_at: datetime
+
+
+class AccountCreateIn(BaseModel):
+    borrower_name: str
+    business_name: str
+    phone_number: str
+    language_preference: Literal["hi", "en", "hinglish"]
+    loan_type: str
+    principal_amount: float
+    emi_amount: float
+    tenure_months: int
+    emi_due_date: date
+    nach_mandate_active: bool = True
+    risk_tier: Literal["low", "medium", "high"] = "low"
+
+    @field_validator("phone_number")
+    @classmethod
+    def _validate_e164(cls, v: str) -> str:
+        if not _E164_PATTERN.match(v):
+            raise ValueError(f"phone_number must be E.164 (e.g. +919812345001), got {v!r}")
+        return v
+
+    @field_validator("principal_amount", "emi_amount")
+    @classmethod
+    def _validate_positive_amount(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("must be a positive amount")
+        return v
+
+    @field_validator("tenure_months")
+    @classmethod
+    def _validate_positive_tenure(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("tenure_months must be positive")
+        return v
+
+
+class AccountCreateOut(BaseModel):
+    account: AccountSummaryOut
+    # Handed back exactly once, at creation -- see accounts.store.create_
+    # account's docstring for why this isn't recoverable any other way.
+    access_key: str
+
+
 class AccountDetailOut(AccountSummaryOut):
     phone_number: str
     language_preference: str
@@ -171,6 +252,7 @@ class AccountDetailOut(AccountSummaryOut):
     payment_history: list[PaymentRecordOut]
     promises: list[PromiseOut]
     escalations: list[EscalationOut]
+    clarification_requests: list[ClarificationRequestOut]
 
 
 def _summarize(account: Account, flags: list[Flag]) -> AccountSummaryOut:
@@ -203,6 +285,30 @@ def list_accounts(flag: str | None = None):
     return summaries
 
 
+@app.post("/accounts", response_model=AccountCreateOut, status_code=201, dependencies=[Depends(require_api_key)])
+def create_account(body: AccountCreateIn):
+    """Opens a brand-new loan account -- the ops-side equivalent of a real
+    sign-up flow this system doesn't otherwise have (see accounts.store.
+    create_account). A freshly created account has no payment history, no
+    promises, and no flags yet -- it enters the portfolio exactly the way
+    a real newly-issued loan would, and only accumulates real activity
+    from here."""
+    account, access_key = store.create_account(
+        borrower_name=body.borrower_name,
+        business_name=body.business_name,
+        phone_number=body.phone_number,
+        language_preference=body.language_preference,
+        loan_type=body.loan_type,
+        principal_amount=body.principal_amount,
+        emi_amount=body.emi_amount,
+        tenure_months=body.tenure_months,
+        emi_due_date=body.emi_due_date,
+        nach_mandate_active=body.nach_mandate_active,
+        risk_tier=body.risk_tier,
+    )
+    return AccountCreateOut(account=_summarize(account, compute_flags(account)), access_key=access_key)
+
+
 @app.get("/accounts/{account_id}", response_model=AccountDetailOut, dependencies=[Depends(require_api_key)])
 def get_account(account_id: str):
     account = store.get_account(account_id)
@@ -229,11 +335,14 @@ def get_account(account_id: str):
         ],
         escalations=[
             EscalationOut(
-                escalation_id=e.escalation_id, reason=e.reason, status=e.status,
+                escalation_id=e.escalation_id, account_id=e.account_id, reason=e.reason, status=e.status,
                 created_at=e.created_at, resolved_at=e.resolved_at,
                 proposed_changes=e.proposed_changes, resolution_reason=e.resolution_reason,
             )
             for e in escalations
+        ],
+        clarification_requests=[
+            ClarificationRequestOut(**c) for c in store.get_clarification_requests(account_id)
         ],
     )
 
@@ -363,23 +472,62 @@ async def upload_account_document(
     )
 
 
+@app.post(
+    "/accounts/{account_id}/clarification-requests/draft",
+    response_model=ClarificationDraftOut,
+    dependencies=[Depends(require_api_key)],
+)
+def draft_clarification(account_id: str, body: ClarificationDraftIn):
+    """A wording suggestion only -- grounded in the account's real,
+    current flags plus the operator's own note (see outbound/compose.py).
+    Nothing is sent or logged here; the operator reviews/edits the draft
+    and calls POST .../clarification-requests separately to actually send."""
+    account = store.get_account(account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
+
+    flags = compute_flags(account)
+    draft = draft_clarification_message(
+        borrower_name=account.borrower_name,
+        business_name=account.business_name,
+        flag_reasons=[f.reason for f in flags],
+        operator_note=body.operator_note,
+    )
+    return ClarificationDraftOut(draft=draft)
+
+
+@app.post(
+    "/accounts/{account_id}/clarification-requests",
+    response_model=ClarificationRequestOut,
+    dependencies=[Depends(require_api_key)],
+)
+async def send_clarification_request(account_id: str, body: ClarificationRequestIn):
+    """The real send: message is whatever the operator has already
+    reviewed (LLM-drafted, hand-edited, or written from scratch) --
+    delivered over Telegram if the account has a linked chat, logged
+    either way (see outbound/send.py's notify_clarification_request)."""
+    account = store.get_account(account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
+
+    await notify.notify_clarification_request(account_id, body.message)
+    # Re-fetch the just-logged event for its authoritative created_at
+    # rather than trust client-side time, same pattern as approve/reject.
+    latest = store.get_clarification_requests(account_id)[0]
+    return ClarificationRequestOut(**latest)
+
+
 @app.get("/escalations", response_model=list[EscalationOut], dependencies=[Depends(require_api_key)])
 def list_open_escalations():
     """The human-handoff queue: every escalation still waiting on a
     person, oldest first."""
-    return [
-        EscalationOut(
-            escalation_id=e.escalation_id, reason=e.reason, status=e.status,
-            created_at=e.created_at, resolved_at=e.resolved_at,
-            proposed_changes=e.proposed_changes, resolution_reason=e.resolution_reason,
-        )
-        for e in store.list_open_escalations()
-    ]
+    return [_escalation_out(e) for e in store.list_open_escalations()]
 
 
 def _escalation_out(escalation) -> EscalationOut:
     return EscalationOut(
-        escalation_id=escalation.escalation_id, reason=escalation.reason, status=escalation.status,
+        escalation_id=escalation.escalation_id, account_id=escalation.account_id,
+        reason=escalation.reason, status=escalation.status,
         created_at=escalation.created_at, resolved_at=escalation.resolved_at,
         proposed_changes=escalation.proposed_changes, resolution_reason=escalation.resolution_reason,
     )
@@ -447,3 +595,14 @@ def get_metrics(since_hours: float = 24.0):
         event_counts=metrics.event_counts_since(since),
         escalation_rate=metrics.escalation_rate(since),
     )
+
+
+@app.get("/", include_in_schema=False)
+def dashboard():
+    return FileResponse(_STATIC_DIR / "index.html")
+
+
+# Registered last so every API route above (exact paths like /accounts,
+# /metrics, /escalations/...) is matched first -- this only serves
+# /static/styles.css, /static/app.js, etc.
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")

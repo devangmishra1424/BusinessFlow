@@ -249,7 +249,18 @@ model.config.use_cache = False
 # manifest entry, not a legitimately long one.
 _MAX_TARGET_POSITIONS = model.config.max_target_positions
 
-lora_config = LoraConfig(r=8, lora_alpha=16, target_modules=["q_proj", "v_proj"], lora_dropout=0.05)
+# r=8/alpha=16 (the original proven recipe's config, unchanged since the
+# very first fine-tune attempt) is a real, measured bottleneck: train loss
+# flattened by epoch 3 of this run (~0.31, oscillating, not still trending
+# down) while WER/script-consistency still had real room left, suggesting
+# the adapter had run out of capacity to keep extracting more from the
+# data, not that the data itself was exhausted. r=32 gives 4x more
+# trainable capacity in the same q_proj/v_proj layers. alpha is scaled to
+# 64 to hold alpha/r (the actual update-magnitude scaling LoRA applies)
+# fixed at 2, same as before -- isolating rank/capacity as the one real
+# variable in this experiment, rather than also silently making every
+# update 4x gentler by leaving alpha at 16.
+lora_config = LoraConfig(r=32, lora_alpha=64, target_modules=["q_proj", "v_proj"], lora_dropout=0.05)
 model = get_peft_model(model, lora_config)
 model.print_trainable_parameters()
 

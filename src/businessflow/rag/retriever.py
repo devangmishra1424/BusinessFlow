@@ -90,24 +90,31 @@ class DocumentRetriever:
 
     def retrieve(
         self, query: str, top_k: int = 2, candidate_pool: int = 4,
-        account_id: str | None = None, expand: bool = False,
+        account_id: str | None = None, expand: bool = False, document_type: str | None = None,
     ) -> list[dict]:
         """Up to top_k chunks most relevant to a free-text query, after
         reranking. account_id, if given, restricts results to general
         documents plus that specific borrower's own documents -- never a
-        different borrower's. candidate_pool is how many candidates each
-        of BM25 and embedding search contribute before reranking, per
-        query variant. expand=True additionally generates a couple of
-        alternate phrasings of the query (query_llm.expand_query) and
-        pools candidates across all of them -- a real extra Groq call, so
-        it's opt-in rather than always-on; see eval/retrieval_benchmark.py
-        for the measured effect before deciding whether to default it on
-        for a given caller."""
+        different borrower's. document_type, if given, additionally
+        restricts to chunks ingested with that exact document_type (e.g.
+        "loan_agreement") -- ingest.py has always stamped this on every
+        chunk, but nothing read it back until now; every existing caller
+        that omits it gets the previous, unfiltered behavior unchanged.
+        candidate_pool is how many candidates each of BM25 and embedding
+        search contribute before reranking, per query variant. expand=True
+        additionally generates a couple of alternate phrasings of the
+        query (query_llm.expand_query) and pools candidates across all of
+        them -- a real extra Groq call, so it's opt-in rather than
+        always-on; see eval/retrieval_benchmark.py for the measured effect
+        before deciding whether to default it on for a given caller."""
         if not self._texts:
             return []
 
         allowed_scopes = {"general", account_id} if account_id else {"general"}
-        eligible = [i for i, m in enumerate(self._metadatas) if m.get("account_id") in allowed_scopes]
+        eligible = [
+            i for i, m in enumerate(self._metadatas)
+            if m.get("account_id") in allowed_scopes and (document_type is None or m.get("document_type") == document_type)
+        ]
         if not eligible:
             return []
 
@@ -130,12 +137,12 @@ class DocumentRetriever:
             #     embedding search alone had already ranked it correctly.
             # So for this case, skip both BM25 and the reranker, and trust
             # the multilingual embedding ranking as-is.
-            return self._embedding_only_results(query, top_k, candidate_pool, allowed_scopes)
+            return self._embedding_only_results(query, top_k, candidate_pool, allowed_scopes, document_type)
 
         queries = query_llm.expand_query(query) if expand else [query]
-        return self._hybrid_rerank_results(queries, eligible, top_k, candidate_pool, allowed_scopes)
+        return self._hybrid_rerank_results(queries, eligible, top_k, candidate_pool, allowed_scopes, document_type)
 
-    def _embed_candidates(self, query: str, candidate_pool: int, allowed_scopes: set) -> dict:
+    def _embed_candidates(self, query: str, candidate_pool: int, allowed_scopes: set, document_type: str | None = None) -> dict:
         """Runs one embedding query; returns {doc_id: distance} in the
         best-first order Chroma already returns them in.
 
@@ -153,14 +160,23 @@ class DocumentRetriever:
         nothing superseded yet the plain account_id filter is already the
         complete condition.
         """
-        where = {"account_id": {"$in": list(allowed_scopes)}}
+        conditions = [{"account_id": {"$in": list(allowed_scopes)}}]
         if self._superseded_at_values:
-            where = {"$and": [where, {"superseded_at": {"$nin": self._superseded_at_values}}]}
+            conditions.append({"superseded_at": {"$nin": self._superseded_at_values}})
+        if document_type is not None:
+            conditions.append({"document_type": document_type})
+        # Chroma rejects a single-clause $and (confirmed empirically, same
+        # as the existing $nin-only-when-non-empty guard above) -- the
+        # plain condition is used directly unless there's actually more
+        # than one to combine.
+        where = conditions[0] if len(conditions) == 1 else {"$and": conditions}
         result = self._collection.query(query_embeddings=[embed_query(query)], n_results=candidate_pool, where=where)
         return dict(zip(result["ids"][0], result["distances"][0]))
 
-    def _embedding_only_results(self, query: str, top_k: int, candidate_pool: int, allowed_scopes: set) -> list[dict]:
-        distance_by_id = self._embed_candidates(query, candidate_pool, allowed_scopes)
+    def _embedding_only_results(
+        self, query: str, top_k: int, candidate_pool: int, allowed_scopes: set, document_type: str | None = None,
+    ) -> list[dict]:
+        distance_by_id = self._embed_candidates(query, candidate_pool, allowed_scopes, document_type)
         ranked_ids = list(distance_by_id)  # already best-first from Chroma
         return [
             {
@@ -173,6 +189,7 @@ class DocumentRetriever:
 
     def _hybrid_rerank_results(
         self, queries: list[str], eligible: list[int], top_k: int, candidate_pool: int, allowed_scopes: set,
+        document_type: str | None = None,
     ) -> list[dict]:
         """Pools BM25 + embedding candidates across every query variant,
         then reranks the union against EVERY variant and keeps each
@@ -222,7 +239,7 @@ class DocumentRetriever:
                 bm25_scores = self._bm25.get_scores(q_tokens)
                 bm25_ranked = sorted(eligible, key=lambda i: bm25_scores[i], reverse=True)
                 candidate_indices |= set(bm25_ranked[:candidate_pool])
-            embed_ids = self._embed_candidates(q, candidate_pool, allowed_scopes)
+            embed_ids = self._embed_candidates(q, candidate_pool, allowed_scopes, document_type)
             for doc_id, distance in embed_ids.items():
                 i = self._ids.index(doc_id)
                 candidate_indices.add(i)

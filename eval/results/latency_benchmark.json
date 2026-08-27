@@ -1,53 +1,53 @@
 {
   "summary": {
     "run_count": 10,
-    "degraded_run_count": 2,
+    "degraded_run_count": 0,
     "clean": {
-      "run_count": 8,
-      "p50_seconds": 4.0,
-      "p90_seconds": 28.503,
-      "max_seconds": 38.5,
-      "mean_seconds": 12.529
+      "run_count": 10,
+      "p50_seconds": 51.961,
+      "p90_seconds": 54.958,
+      "max_seconds": 56.547,
+      "mean_seconds": 41.458
     },
     "raw_all_runs": {
       "run_count": 10,
-      "p50_seconds": 4.0,
-      "p90_seconds": 25.647,
-      "max_seconds": 38.5,
-      "mean_seconds": 10.645
+      "p50_seconds": 51.961,
+      "p90_seconds": 54.958,
+      "max_seconds": 56.547,
+      "mean_seconds": 41.458
     },
     "clean_mean_seconds_by_tool_call_count": {
-      "0": 1.875,
-      "1": 14.051
+      "0": 2.304,
+      "1": 51.246
     }
   },
   "results": [
     {
       "scenario_id": "no_tool_greeting_en",
-      "elapsed_seconds": 1.875,
+      "elapsed_seconds": 3.218,
       "tool_call_count": 0,
       "tools_called": [],
       "key_switches_during_turn": 0
     },
     {
       "scenario_id": "no_tool_greeting_en",
-      "elapsed_seconds": 1.515,
+      "elapsed_seconds": 1.39,
       "tool_call_count": 0,
       "tools_called": [],
-      "key_switches_during_turn": 1
+      "key_switches_during_turn": 0
     },
     {
       "scenario_id": "single_tool_balance_en",
-      "elapsed_seconds": 4.703,
+      "elapsed_seconds": 39.813,
       "tool_call_count": 1,
       "tools_called": [
         "get_payment_status"
       ],
-      "key_switches_during_turn": 3
+      "key_switches_during_turn": 0
     },
     {
       "scenario_id": "single_tool_balance_en",
-      "elapsed_seconds": 3.156,
+      "elapsed_seconds": 51.703,
       "tool_call_count": 1,
       "tools_called": [
         "get_payment_status"
@@ -56,7 +56,7 @@
     },
     {
       "scenario_id": "single_tool_promise_en",
-      "elapsed_seconds": 3.469,
+      "elapsed_seconds": 52.328,
       "tool_call_count": 1,
       "tools_called": [
         "log_promise_to_pay"
@@ -65,7 +65,7 @@
     },
     {
       "scenario_id": "single_tool_promise_en",
-      "elapsed_seconds": 2.781,
+      "elapsed_seconds": 50.328,
       "tool_call_count": 1,
       "tools_called": [
         "log_promise_to_pay"
@@ -74,7 +74,7 @@
     },
     {
       "scenario_id": "multi_tool_settlement_hi",
-      "elapsed_seconds": 21.703,
+      "elapsed_seconds": 52.25,
       "tool_call_count": 1,
       "tools_called": [
         "calculate_hypothetical"
@@ -83,16 +83,16 @@
     },
     {
       "scenario_id": "multi_tool_settlement_hi",
-      "elapsed_seconds": 24.219,
+      "elapsed_seconds": 52.219,
       "tool_call_count": 1,
       "tools_called": [
-        "get_payment_status"
+        "calculate_hypothetical"
       ],
       "key_switches_during_turn": 0
     },
     {
       "scenario_id": "policy_question_en",
-      "elapsed_seconds": 38.5,
+      "elapsed_seconds": 56.547,
       "tool_call_count": 1,
       "tools_called": [
         "check_policy"
@@ -101,7 +101,7 @@
     },
     {
       "scenario_id": "policy_question_en",
-      "elapsed_seconds": 4.531,
+      "elapsed_seconds": 54.781,
       "tool_call_count": 1,
       "tools_called": [
         "check_policy"

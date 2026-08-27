@@ -79,6 +79,62 @@ def test_list_accounts_filtered_by_flag_returns_only_matching_accounts(reseed_ac
 
 @_pg_skip
 @_ops_key_skip
+def test_create_account_endpoint_opens_a_real_new_account(reseed_accounts):
+    # New accounts aren't part of reseed_accounts' BF-1001..1004 reset, so
+    # this cleans up the row it creates itself rather than leaking a
+    # permanent extra account into the real demo database.
+    from businessflow.accounts import store
+
+    payload = {
+        "borrower_name": "Test Borrower",
+        "business_name": "Test Business",
+        "phone_number": "+919800011122",
+        "language_preference": "en",
+        "loan_type": "Working Capital Loan",
+        "principal_amount": 100_000,
+        "emi_amount": 8_500,
+        "tenure_months": 12,
+        "emi_due_date": "2026-09-15",
+        "nach_mandate_active": True,
+        "risk_tier": "low",
+    }
+    response = client.post("/accounts", json=payload, headers=_auth())
+    account_id = response.json()["account"]["account_id"] if response.status_code == 201 else None
+    try:
+        assert response.status_code == 201
+        body = response.json()
+        assert body["account"]["borrower_name"] == "Test Borrower"
+        assert body["account"]["flags"] == []
+        assert len(body["access_key"]) == 6 and body["access_key"].isdigit()
+
+        detail = client.get(f"/accounts/{account_id}", headers=_auth())
+        assert detail.status_code == 200
+        assert detail.json()["months_remaining"] == 12  # nothing paid down yet
+        assert detail.json()["payment_history"] == []
+    finally:
+        if account_id:
+            store.get_connection().execute("delete from accounts where account_id = %s", (account_id,))
+
+
+@_ops_key_skip
+def test_create_account_endpoint_rejects_an_invalid_phone_number():
+    payload = {
+        "borrower_name": "Test Borrower", "business_name": "Test Business", "phone_number": "9800011122",
+        "language_preference": "en", "loan_type": "Working Capital Loan", "principal_amount": 100_000,
+        "emi_amount": 8_500, "tenure_months": 12, "emi_due_date": "2026-09-15",
+    }
+    response = client.post("/accounts", json=payload, headers=_auth())
+    assert response.status_code == 422
+
+
+@_ops_key_skip
+def test_create_account_endpoint_rejects_a_missing_api_key():
+    response = client.post("/accounts", json={})
+    assert response.status_code == 401
+
+
+@_pg_skip
+@_ops_key_skip
 def test_get_account_detail_includes_flags_promises_and_payment_history(reseed_accounts):
     response = client.get("/accounts/BF-1003", headers=_auth())
 
@@ -240,6 +296,97 @@ def test_upload_document_endpoint_rejects_a_missing_api_key():
         data={"document_type": "loan_agreement"},
     )
     assert response.status_code == 401
+
+
+@_pg_skip
+@_ops_key_skip
+@_groq_skip
+def test_draft_clarification_endpoint_grounds_in_real_flags(reseed_accounts):
+    # BF-1003 carries real overdue/disputed/broken_promises flags after a
+    # reseed -- the draft should reflect that context, not the operator's
+    # note alone, and never invent an amount/date beyond what's given.
+    response = client.post(
+        "/accounts/BF-1003/clarification-requests/draft",
+        json={"operator_note": "Third missed promise this quarter, dispute still unresolved."},
+        headers=_auth(),
+    )
+
+    assert response.status_code == 200
+    draft = response.json()["draft"]
+    assert isinstance(draft, str)
+    assert len(draft.strip()) > 0
+
+
+@_ops_key_skip
+def test_draft_clarification_endpoint_404s_for_unknown_account():
+    response = client.post(
+        "/accounts/BF-9999/clarification-requests/draft",
+        json={"operator_note": "test"},
+        headers=_auth(),
+    )
+    assert response.status_code == 404
+
+
+@_pg_skip
+@_ops_key_skip
+def test_send_clarification_request_endpoint_logs_and_reports_delivery(reseed_accounts):
+    # BF-1001 has no linked telegram_chat_id after a reseed -- same real
+    # logged-fallback path as test_approve_escalation_endpoint_applies_
+    # real_changes_and_notifies, not a real network call to Telegram.
+    from businessflow.accounts import store
+
+    response = client.post(
+        "/accounts/BF-1001/clarification-requests",
+        json={"message": "Please contact us about your overdue payment at your earliest convenience."},
+        headers=_auth(),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["delivered_via_telegram"] is False
+    assert body["message"] == "Please contact us about your overdue payment at your earliest convenience."
+    assert body["created_at"] is not None
+
+    events = store.get_connection().execute(
+        "select details from events where account_id = %s and event_type = 'clarification_request_sent' "
+        "order by created_at desc limit 1",
+        ("BF-1001",),
+    ).fetchall()
+    assert len(events) == 1
+    assert events[0]["details"]["delivered_via_telegram"] is False
+
+
+@_ops_key_skip
+def test_send_clarification_request_endpoint_404s_for_unknown_account():
+    response = client.post(
+        "/accounts/BF-9999/clarification-requests",
+        json={"message": "test"},
+        headers=_auth(),
+    )
+    assert response.status_code == 404
+
+
+@_ops_key_skip
+def test_send_clarification_request_endpoint_requires_api_key():
+    response = client.post("/accounts/BF-1001/clarification-requests", json={"message": "test"})
+    assert response.status_code == 401
+
+
+@_pg_skip
+@_ops_key_skip
+def test_account_detail_includes_clarification_request_history(reseed_accounts):
+    send_response = client.post(
+        "/accounts/BF-1002/clarification-requests",
+        json={"message": "Your last two EMIs were late -- please reach out."},
+        headers=_auth(),
+    )
+    assert send_response.status_code == 200
+
+    detail = client.get("/accounts/BF-1002", headers=_auth()).json()
+
+    assert len(detail["clarification_requests"]) == 1
+    assert detail["clarification_requests"][0]["message"] == "Your last two EMIs were late -- please reach out."
+    assert detail["clarification_requests"][0]["delivered_via_telegram"] is False
 
 
 @_pg_skip

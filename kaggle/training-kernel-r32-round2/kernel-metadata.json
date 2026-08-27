@@ -1,0 +1,19 @@
+{
+  "id": "mishradevang14/businessflow-whisper-r32-round2",
+  "title": "BusinessFlow Whisper r32 Round 2 (expanded corpus)",
+  "code_file": "train_r32_round2.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "true",
+  "dataset_sources": [
+    "mishradevang14/training-set",
+    "mishradevang14/mucs-2021-hindi-english-test",
+    "mishradevang14/businessflow-whisper-finetuned-r32-hf"
+  ],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}

@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BusinessFlow · Ops</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+
+<div id="unlock-screen" class="unlock-screen">
+  <div class="unlock-glow"></div>
+  <div class="unlock-card">
+    <div class="brand">
+      <div class="brand-mark">BF</div>
+      <div class="brand-name">BusinessFlow<span>Ops</span></div>
+    </div>
+    <p class="unlock-sub">Enter your operator key to continue</p>
+    <form id="unlock-form" autocomplete="off">
+      <input id="unlock-input" type="password" placeholder="Ops API key" autocomplete="off" />
+      <button type="submit">Unlock<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </form>
+    <p id="unlock-error" class="unlock-error" hidden></p>
+    <p class="unlock-hint">This key is stored only in this browser and sent as <code>X-API-Key</code> on every request.</p>
+  </div>
+</div>
+
+<div id="shell" class="shell" hidden>
+  <header class="topbar">
+    <div class="brand small">
+      <div class="brand-mark">BF</div>
+      <div class="brand-name">BusinessFlow<span>Ops</span></div>
+    </div>
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-view="overview">Portfolio</button>
+      <button class="tab" data-view="escalations">Escalations<span class="tab-badge" id="escalation-count-badge" hidden>0</span></button>
+    </nav>
+    <div class="topbar-right">
+      <div class="since-select">
+        <select id="since-hours">
+          <option value="24">24h</option>
+          <option value="72">3d</option>
+          <option value="168">7d</option>
+          <option value="720">30d</option>
+        </select>
+      </div>
+      <button id="lock-btn" class="icon-btn" title="Lock">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" stroke-width="2"/><path d="M8 11V7a4 4 0 1 1 8 0v4" stroke="currentColor" stroke-width="2"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main id="view-overview" class="view">
+    <p class="portfolio-summary" id="portfolio-summary"></p>
+    <section class="kpi-row" id="kpi-row"></section>
+
+    <section class="toolbar">
+      <div class="filter-pills" id="filter-pills"></div>
+      <div class="toolbar-right-group">
+        <div class="search-wrap">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2.2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+          <input id="search-input" class="search-input" placeholder="Search borrower, business, or account ID" />
+        </div>
+        <button class="btn btn-approve" id="new-account-btn">+ New account</button>
+      </div>
+    </section>
+
+    <section class="account-grid" id="account-grid"></section>
+    <p class="empty-state" id="account-empty" hidden>No accounts match this filter.</p>
+  </main>
+
+  <main id="view-escalations" class="view" hidden>
+    <div class="view-heading">
+      <h1>Escalation queue</h1>
+      <p>Every request still waiting on a human, oldest first.</p>
+    </div>
+    <section class="escalation-list" id="escalation-list"></section>
+    <p class="empty-state" id="escalation-empty" hidden>The queue is empty — nothing waiting on a human right now.</p>
+  </main>
+</div>
+
+<div id="detail-backdrop" class="detail-backdrop" hidden></div>
+<aside id="detail-panel" class="detail-panel" hidden></aside>
+
+<div id="new-account-backdrop" class="detail-backdrop" hidden></div>
+<div id="new-account-modal" class="new-account-modal" hidden>
+  <div class="detail-close" id="new-account-close">✕</div>
+  <div class="detail-body">
+    <h2 class="modal-title">Open a new account</h2>
+    <p class="modal-subtitle">Every field here writes a real row to Postgres — this account enters the portfolio exactly like any other, with no payment history or flags yet.</p>
+    <form id="new-account-form" class="new-account-form">
+      <div class="na-grid">
+        <label class="clarify-label">Borrower name<input required id="na-borrower-name" type="text" /></label>
+        <label class="clarify-label">Business name<input required id="na-business-name" type="text" /></label>
+        <label class="clarify-label">Phone (E.164)<input required id="na-phone" type="text" placeholder="+919812345000" /></label>
+        <label class="clarify-label">Language
+          <select id="na-language">
+            <option value="en">English</option>
+            <option value="hi">Hindi</option>
+            <option value="hinglish">Hinglish</option>
+          </select>
+        </label>
+        <label class="clarify-label">Loan type<input required id="na-loan-type" type="text" placeholder="Working Capital Loan" /></label>
+        <label class="clarify-label">Risk tier
+          <select id="na-risk-tier">
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </select>
+        </label>
+        <label class="clarify-label">Principal (₹)<input required id="na-principal" type="number" min="1" step="1" /></label>
+        <label class="clarify-label">EMI (₹)<input required id="na-emi" type="number" min="1" step="1" /></label>
+        <label class="clarify-label">Tenure (months)<input required id="na-tenure" type="number" min="1" step="1" /></label>
+        <label class="clarify-label">First EMI due date<input required id="na-due-date" type="date" /></label>
+        <label class="clarify-label na-checkbox"><input id="na-nach" type="checkbox" checked /> NACH mandate active</label>
+      </div>
+      <div class="clarify-actions-row">
+        <button type="submit" class="btn btn-approve" id="na-submit-btn">Open account</button>
+        <span class="clarify-hint" id="na-error" style="color:var(--danger)"></span>
+      </div>
+    </form>
+    <div id="na-success" class="na-success" hidden></div>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

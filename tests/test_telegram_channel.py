@@ -28,9 +28,9 @@ import pytest
 import soundfile as sf
 
 from businessflow.channels import telegram_bot
+from businessflow.channels.credentials import looks_like_credentials
 from businessflow.channels.telegram_bot import (
     _decode_and_transcribe_voice_note,
-    _looks_like_credentials,
     _sessions,
     _transcript_echo,
     handle_incoming_message,
@@ -84,19 +84,19 @@ class _FakeTelegramFile:
         return bytearray(self._raw_bytes)
 
 
-# --- _looks_like_credentials -------------------------------------------------
+# --- looks_like_credentials -------------------------------------------------
 
 
 def test_looks_like_credentials_true_for_account_and_six_digit_key():
-    assert _looks_like_credentials("BF-1001 482913") is True
+    assert looks_like_credentials("BF-1001 482913") is True
 
 
 def test_looks_like_credentials_false_for_plain_sentence():
-    assert _looks_like_credentials("how much do I owe this month") is False
+    assert looks_like_credentials("how much do I owe this month") is False
 
 
 def test_looks_like_credentials_false_for_five_digit_key():
-    assert _looks_like_credentials("BF-1001 12345") is False
+    assert looks_like_credentials("BF-1001 12345") is False
 
 
 # --- handle_incoming_message -------------------------------------------------
