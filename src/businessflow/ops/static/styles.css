@@ -367,6 +367,26 @@ button, input, select { font-family: inherit; }
 .na-checkbox { flex-direction: row !important; align-items: center; gap: 8px !important; }
 .na-checkbox input { width: auto; }
 
+.na-financial { margin-bottom: 16px; }
+.na-mode-row { display: flex; align-items: center; gap: 10px; margin-top: 6px; flex-wrap: wrap; }
+.na-financial-summary { font-size: 12.5px; color: var(--success); font-weight: 600; }
+
+.na-popover {
+  margin-top: 12px; background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md); padding: 16px;
+}
+.na-popover-title { margin: 0 0 6px; font-family: var(--font-tight); font-size: 14.5px; font-weight: 700; color: var(--text-0); }
+.na-calc-result { font-size: 13px; color: var(--text-1); font-weight: 600; }
+.na-calc-result b { color: var(--sky-300); font-family: var(--font-tight); }
+
+.na-review-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px 20px; margin-bottom: 18px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 16px;
+}
+.na-review-item { font-size: 12.5px; color: var(--text-1); }
+.na-review-item .label { display: block; font-size: 10.5px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
+.na-review-item .value { color: var(--text-0); font-weight: 600; }
+
 .na-success { text-align: center; padding: 20px 10px; }
 .na-success-title { font-size: 16px; font-weight: 700; color: var(--success); margin: 0 0 10px; }
 .na-success-key { font-size: 20px; margin: 0 0 10px; }

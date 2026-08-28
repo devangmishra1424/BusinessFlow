@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/styles.css?v=2" />
+<link rel="stylesheet" href="/static/styles.css?v=3" />
 </head>
 <body>
 
@@ -111,23 +111,73 @@
             <option value="high">High</option>
           </select>
         </label>
-        <label class="clarify-label">Principal (₹)<input required id="na-principal" type="number" min="1" step="1" /></label>
-        <label class="clarify-label">EMI (₹)<input required id="na-emi" type="number" min="1" step="1" /></label>
-        <label class="clarify-label">Tenure (months)<input required id="na-tenure" type="number" min="1" step="1" /></label>
-        <label class="clarify-label">First EMI due date<input required id="na-due-date" type="date" /></label>
         <label class="clarify-label na-checkbox"><input id="na-nach" type="checkbox" checked /> NACH mandate active</label>
       </div>
+
+      <div class="na-financial">
+        <label class="clarify-label">Financial details</label>
+        <div class="na-mode-row">
+          <button type="button" class="pill" id="na-mode-manual-btn">Enter manually</button>
+          <button type="button" class="pill" id="na-mode-calc-btn">Calculate EMI</button>
+          <span class="na-financial-summary" id="na-financial-summary" hidden></span>
+        </div>
+
+        <div class="na-popover" id="na-manual-popover" hidden>
+          <p class="na-popover-title">Manual entry</p>
+          <div class="na-grid">
+            <label class="clarify-label">Principal (₹)<input id="na-m-principal" type="number" min="1" step="1" /></label>
+            <label class="clarify-label">EMI (₹)<input id="na-m-emi" type="number" min="1" step="1" /></label>
+            <label class="clarify-label">Tenure (months)<input id="na-m-tenure" type="number" min="1" step="1" /></label>
+            <label class="clarify-label">First EMI due date<input id="na-m-due-date" type="date" /></label>
+          </div>
+          <div class="clarify-actions-row">
+            <button type="button" class="btn btn-approve" id="na-manual-use-btn">Use these details</button>
+            <span class="clarify-hint" id="na-manual-error" style="color:var(--danger)"></span>
+          </div>
+        </div>
+
+        <div class="na-popover" id="na-calc-popover" hidden>
+          <p class="na-popover-title">EMI calculator</p>
+          <p class="modal-subtitle">Reducing-balance EMI, computed from principal, annual interest rate, and tenure — the same math a real amortization schedule uses.</p>
+          <div class="na-grid">
+            <label class="clarify-label">Principal (₹)<input id="na-c-principal" type="number" min="1" step="1" /></label>
+            <label class="clarify-label">Interest rate (% p.a.)<input id="na-c-rate" type="number" min="0" step="0.01" /></label>
+            <label class="clarify-label">Tenure (months)<input id="na-c-tenure" type="number" min="1" step="1" /></label>
+            <label class="clarify-label">First EMI due date<input id="na-c-due-date" type="date" /></label>
+          </div>
+          <div class="clarify-actions-row">
+            <button type="button" class="btn btn-reject" id="na-calc-run-btn">Calculate</button>
+            <span class="na-calc-result" id="na-calc-result"></span>
+          </div>
+          <div class="clarify-actions-row" id="na-calc-use-row" hidden>
+            <button type="button" class="btn btn-approve" id="na-calc-use-btn">Use this EMI</button>
+            <span class="clarify-hint" id="na-calc-error" style="color:var(--danger)"></span>
+          </div>
+        </div>
+      </div>
+
       <div class="clarify-actions-row">
-        <button type="submit" class="btn btn-approve" id="na-submit-btn">Open account</button>
+        <button type="submit" class="btn btn-approve" id="na-submit-btn">Review account</button>
         <span class="clarify-hint" id="na-error" style="color:var(--danger)"></span>
       </div>
     </form>
+
+    <div id="na-review" class="na-review" hidden>
+      <p class="na-popover-title">Review before creating this account</p>
+      <div class="na-review-grid" id="na-review-grid"></div>
+      <div class="clarify-actions-row">
+        <button type="button" class="btn btn-reject" id="na-review-edit-btn">Edit</button>
+        <button type="button" class="btn btn-approve" id="na-review-confirm-btn">Confirm — create account</button>
+        <span class="clarify-hint" id="na-review-error" style="color:var(--danger)"></span>
+      </div>
+    </div>
+
     <div id="na-success" class="na-success" hidden></div>
   </div>
 </div>
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="/static/app.js?v=2"></script>
+<script src="/static/app.js?v=3"></script>
 </body>
 </html>

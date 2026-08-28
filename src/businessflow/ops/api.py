@@ -211,6 +211,11 @@ class AccountCreateIn(BaseModel):
     emi_due_date: date
     nach_mandate_active: bool = True
     risk_tier: Literal["low", "medium", "high"] = "low"
+    # Only set when opened via the ops UI's EMI calculator (see
+    # store.set_interest_rate_pct, already used elsewhere for the exact
+    # same column via document-extracted rates) -- a manually-entered
+    # account has no rate to derive, so this stays None for those.
+    interest_rate_pct: float | None = None
 
     @field_validator("phone_number")
     @classmethod
@@ -306,6 +311,9 @@ def create_account(body: AccountCreateIn):
         nach_mandate_active=body.nach_mandate_active,
         risk_tier=body.risk_tier,
     )
+    if body.interest_rate_pct is not None:
+        store.set_interest_rate_pct(account.account_id, body.interest_rate_pct)
+        account = store.get_account_or_raise(account.account_id)
     return AccountCreateOut(account=_summarize(account, compute_flags(account)), access_key=access_key)
 
 

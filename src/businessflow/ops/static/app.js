@@ -638,11 +638,42 @@ document.addEventListener("keydown", (e) => {
 const $newAccountBackdrop = document.getElementById("new-account-backdrop");
 const $newAccountModal = document.getElementById("new-account-modal");
 const $newAccountForm = document.getElementById("new-account-form");
+const $newAccountReview = document.getElementById("na-review");
 const $newAccountSuccess = document.getElementById("na-success");
+
+// Financial details are collected via one of two popovers (manual entry
+// or the EMI calculator), not the main form's own inputs -- naFinancial
+// holds whichever one the ops user last confirmed with "Use these
+// details"/"Use this EMI", ready to merge into the create-account
+// payload once they get through the review step.
+let naFinancial = null;
+
+function naCloseFinancialPopovers() {
+  document.getElementById("na-manual-popover").hidden = true;
+  document.getElementById("na-calc-popover").hidden = true;
+}
+
+function naRenderFinancialSummary() {
+  const el = document.getElementById("na-financial-summary");
+  if (!naFinancial) {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  el.textContent = `✓ ₹${naFinancial.principal_amount.toLocaleString("en-IN")} principal, ₹${naFinancial.emi_amount}/mo for ${naFinancial.tenure_months} months`;
+}
 
 function openNewAccountModal() {
   $newAccountForm.reset();
+  naFinancial = null;
+  naCloseFinancialPopovers();
+  naRenderFinancialSummary();
+  document.getElementById("na-calc-use-row").hidden = true;
+  document.getElementById("na-calc-result").textContent = "";
+  document.getElementById("na-manual-error").textContent = "";
+  document.getElementById("na-calc-error").textContent = "";
   $newAccountForm.hidden = false;
+  $newAccountReview.hidden = true;
   $newAccountSuccess.hidden = true;
   document.getElementById("na-error").textContent = "";
   $newAccountModal.hidden = false;
@@ -666,10 +697,117 @@ document.getElementById("new-account-btn").addEventListener("click", openNewAcco
 document.getElementById("new-account-close").addEventListener("click", closeNewAccountModal);
 $newAccountBackdrop.addEventListener("click", closeNewAccountModal);
 
-$newAccountForm.addEventListener("submit", async (e) => {
+/* ---- Financial details: manual popover ---- */
+document.getElementById("na-mode-manual-btn").addEventListener("click", () => {
+  const popover = document.getElementById("na-manual-popover");
+  const wasOpen = !popover.hidden;
+  naCloseFinancialPopovers();
+  popover.hidden = wasOpen;
+});
+
+document.getElementById("na-manual-use-btn").addEventListener("click", () => {
+  const errorEl = document.getElementById("na-manual-error");
+  const principal = Number(document.getElementById("na-m-principal").value);
+  const emi = Number(document.getElementById("na-m-emi").value);
+  const tenure = Number(document.getElementById("na-m-tenure").value);
+  const dueDate = document.getElementById("na-m-due-date").value;
+  if (!principal || !emi || !tenure || !dueDate) {
+    errorEl.textContent = "Fill in all four fields.";
+    return;
+  }
+  errorEl.textContent = "";
+  naFinancial = { principal_amount: principal, emi_amount: emi, tenure_months: tenure, emi_due_date: dueDate };
+  naCloseFinancialPopovers();
+  naRenderFinancialSummary();
+});
+
+/* ---- Financial details: EMI calculator popover ---- */
+document.getElementById("na-mode-calc-btn").addEventListener("click", () => {
+  const popover = document.getElementById("na-calc-popover");
+  const wasOpen = !popover.hidden;
+  naCloseFinancialPopovers();
+  popover.hidden = wasOpen;
+});
+
+// Standard reducing-balance EMI: EMI = P*r*(1+r)^n / ((1+r)^n - 1), r =
+// monthly rate as a decimal. A 0% rate degenerates to a flat P/n split,
+// which the general formula can't handle (division by (1+0)^n - 1 = 0).
+function naCalculateEmi(principal, annualRatePct, months) {
+  const monthlyRate = annualRatePct / 12 / 100;
+  if (monthlyRate === 0) return principal / months;
+  const factor = Math.pow(1 + monthlyRate, months);
+  return (principal * monthlyRate * factor) / (factor - 1);
+}
+
+document.getElementById("na-calc-run-btn").addEventListener("click", () => {
+  const resultEl = document.getElementById("na-calc-result");
+  const useRow = document.getElementById("na-calc-use-row");
+  const principal = Number(document.getElementById("na-c-principal").value);
+  const rateInput = document.getElementById("na-c-rate").value;
+  const rate = Number(rateInput);
+  const tenure = Number(document.getElementById("na-c-tenure").value);
+  const dueDate = document.getElementById("na-c-due-date").value;
+  if (!principal || rateInput === "" || Number.isNaN(rate) || !tenure || !dueDate) {
+    resultEl.textContent = "Fill in principal, rate, tenure, and due date first.";
+    useRow.hidden = true;
+    return;
+  }
+  const emi = naCalculateEmi(principal, rate, tenure);
+  resultEl.innerHTML = `Estimated EMI: <b>₹${emi.toFixed(2)}</b>/month`;
+  useRow.hidden = false;
+  useRow.dataset.principal = principal;
+  useRow.dataset.rate = rate;
+  useRow.dataset.tenure = tenure;
+  useRow.dataset.dueDate = dueDate;
+  useRow.dataset.emi = emi.toFixed(2);
+});
+
+document.getElementById("na-calc-use-btn").addEventListener("click", () => {
+  const useRow = document.getElementById("na-calc-use-row");
+  naFinancial = {
+    principal_amount: Number(useRow.dataset.principal),
+    emi_amount: Number(useRow.dataset.emi),
+    tenure_months: Number(useRow.dataset.tenure),
+    emi_due_date: useRow.dataset.dueDate,
+    interest_rate_pct: Number(useRow.dataset.rate),
+  };
+  document.getElementById("na-calc-error").textContent = "";
+  naCloseFinancialPopovers();
+  naRenderFinancialSummary();
+});
+
+/* ---- Review step ---- */
+function naReviewRow(label, value) {
+  return `<div class="na-review-item"><span class="label">${escapeHtml(label)}</span><span class="value">${escapeHtml(String(value))}</span></div>`;
+}
+
+function naRenderReview(payload) {
+  const rows = [
+    naReviewRow("Borrower", payload.borrower_name),
+    naReviewRow("Business", payload.business_name),
+    naReviewRow("Phone", payload.phone_number),
+    naReviewRow("Language", payload.language_preference),
+    naReviewRow("Loan type", payload.loan_type),
+    naReviewRow("Risk tier", payload.risk_tier),
+    naReviewRow("Principal", `₹${payload.principal_amount.toLocaleString("en-IN")}`),
+    naReviewRow("EMI", `₹${payload.emi_amount}/month`),
+    naReviewRow("Tenure", `${payload.tenure_months} months`),
+    naReviewRow("First EMI due", payload.emi_due_date),
+    naReviewRow("NACH mandate", payload.nach_mandate_active ? "Active" : "Not active"),
+  ];
+  if (payload.interest_rate_pct != null) rows.push(naReviewRow("Interest rate", `${payload.interest_rate_pct}% p.a.`));
+  document.getElementById("na-review-grid").innerHTML = rows.join("");
+}
+
+$newAccountForm.addEventListener("submit", (e) => {
   e.preventDefault();
   const errorEl = document.getElementById("na-error");
-  errorEl.textContent = "";
+
+  if (!naFinancial) {
+    errorEl.textContent = "Set the financial details first, via either \"Enter manually\" or \"Calculate EMI\" above.";
+    return;
+  }
+
   const payload = {
     borrower_name: document.getElementById("na-borrower-name").value.trim(),
     business_name: document.getElementById("na-business-name").value.trim(),
@@ -677,19 +815,36 @@ $newAccountForm.addEventListener("submit", async (e) => {
     language_preference: document.getElementById("na-language").value,
     loan_type: document.getElementById("na-loan-type").value.trim(),
     risk_tier: document.getElementById("na-risk-tier").value,
-    principal_amount: Number(document.getElementById("na-principal").value),
-    emi_amount: Number(document.getElementById("na-emi").value),
-    tenure_months: Number(document.getElementById("na-tenure").value),
-    emi_due_date: document.getElementById("na-due-date").value,
     nach_mandate_active: document.getElementById("na-nach").checked,
+    ...naFinancial,
   };
+  if (!payload.borrower_name || !payload.business_name || !payload.phone_number || !payload.loan_type) {
+    errorEl.textContent = "Fill in borrower name, business name, phone, and loan type.";
+    return;
+  }
+  errorEl.textContent = "";
 
-  const submitBtn = document.getElementById("na-submit-btn");
-  submitBtn.disabled = true;
-  submitBtn.textContent = "Opening…";
+  naRenderReview(payload);
+  $newAccountForm.hidden = true;
+  $newAccountReview.hidden = false;
+  $newAccountReview.dataset.payload = JSON.stringify(payload);
+});
+
+document.getElementById("na-review-edit-btn").addEventListener("click", () => {
+  $newAccountReview.hidden = true;
+  $newAccountForm.hidden = false;
+});
+
+document.getElementById("na-review-confirm-btn").addEventListener("click", async () => {
+  const payload = JSON.parse($newAccountReview.dataset.payload);
+  const errorEl = document.getElementById("na-review-error");
+  errorEl.textContent = "";
+  const btn = document.getElementById("na-review-confirm-btn");
+  btn.disabled = true;
+  btn.textContent = "Opening…";
   try {
     const result = await createAccount(payload);
-    $newAccountForm.hidden = true;
+    $newAccountReview.hidden = true;
     $newAccountSuccess.hidden = false;
     $newAccountSuccess.innerHTML = `
       <p class="na-success-title">✓ ${escapeHtml(result.account.account_id)} opened for ${escapeHtml(payload.borrower_name)}</p>
@@ -703,8 +858,8 @@ $newAccountForm.addEventListener("submit", async (e) => {
   } catch (err) {
     errorEl.textContent = err.message;
   } finally {
-    submitBtn.disabled = false;
-    submitBtn.textContent = "Open account";
+    btn.disabled = false;
+    btn.textContent = "Confirm — create account";
   }
 });
 
