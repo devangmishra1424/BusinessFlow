@@ -496,6 +496,18 @@ button, input, select { font-family: inherit; }
 .promise-info b { color: var(--text-0); }
 .promise-meta { font-size: 11px; color: var(--text-3); }
 
+.timeline-list { max-height: 320px; overflow-y: auto; padding-right: 4px; }
+.timeline-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.timeline-row:last-child { border-bottom: none; }
+.timeline-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.timeline-dot.paid-on-time { background: var(--success); }
+.timeline-dot.paid-late { background: var(--warning); }
+.timeline-dot.overdue { background: var(--danger); box-shadow: 0 0 8px rgba(242, 131, 111, 0.6); }
+.timeline-dot.upcoming { background: var(--text-3); }
+.timeline-info { flex: 1; font-size: 12.5px; color: var(--text-1); }
+.timeline-info b { color: var(--text-0); }
+.timeline-meta { font-size: 11px; color: var(--text-3); }
+
 .escalation-mini { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 14px 16px; margin-bottom: 10px; }
 .reject-reason-row { display: none; gap: 8px; margin-top: 10px; }
 .reject-reason-row.open { display: flex; }

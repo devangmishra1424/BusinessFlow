@@ -956,6 +956,53 @@ function renderDetail(a) {
       <div class="bar-legend"><span><i class="on-time"></i>On time</span><span><i class="late"></i>Late</span></div>`
     : `<p class="no-data">No payment history yet.</p>`;
 
+  // Past entries come straight from real payment_history rows (already
+  // chronological -- store.py loads them "order by payment_date"). Future
+  // ones are computed, not stored: there's no "scheduled payments" table,
+  // so this projects monthly from the account's real emi_due_date/
+  // emi_amount for however many months_remaining says are left --
+  // exactly the cadence every other EMI-due-date computation in this
+  // codebase already assumes (get_payment_status, calculate_hypothetical).
+  function buildEmiTimeline(account) {
+    const past = account.payment_history.map((p) => ({
+      date: p.date,
+      amount: p.amount,
+      status: p.on_time ? "paid-on-time" : "paid-late",
+      label: p.on_time ? "Paid on time" : "Paid late",
+    }));
+
+    const upcoming = [];
+    if (account.months_remaining > 0 && account.emi_due_date) {
+      const cursor = new Date(`${account.emi_due_date}T00:00:00`);
+      for (let i = 0; i < account.months_remaining; i++) {
+        const isNextDue = i === 0;
+        upcoming.push({
+          date: cursor.toISOString().slice(0, 10),
+          amount: account.emi_amount,
+          status: isNextDue && account.days_past_due > 0 ? "overdue" : "upcoming",
+          label: isNextDue && account.days_past_due > 0 ? `Overdue — ${account.days_past_due}d past due` : "Scheduled",
+        });
+        cursor.setMonth(cursor.getMonth() + 1);
+      }
+    }
+    return [...past, ...upcoming];
+  }
+
+  const timeline = buildEmiTimeline(a);
+  const timelineHtml = timeline.length
+    ? timeline
+        .map(
+          (t) => `<div class="timeline-row">
+            <div class="timeline-dot ${t.status}"></div>
+            <div class="timeline-info">
+              <b>${fmtInr(t.amount)}</b> — ${escapeHtml(t.label)}
+              <div class="timeline-meta">${fmtDate(t.date)}</div>
+            </div>
+          </div>`
+        )
+        .join("")
+    : `<p class="no-data">No payment history and no scheduled EMIs.</p>`;
+
   const promisesHtml = a.promises.length
     ? a.promises
         .slice()
@@ -1102,6 +1149,12 @@ function renderDetail(a) {
             <p class="section-title">Payment history <span class="count">last ${payments.length}</span></p>
             <p class="section-subtitle">₹ amount per payment, colored by whether it arrived on time.</p>
             ${barsHtml}
+          </div>
+
+          <div class="section-block">
+            <p class="section-title">EMI timeline <span class="count">${timeline.length}</span></p>
+            <p class="section-subtitle">Every real past payment, plus every EMI still scheduled ahead — projected monthly from the next due date.</p>
+            <div class="timeline-list">${timelineHtml}</div>
           </div>
 
           <div class="section-block">
