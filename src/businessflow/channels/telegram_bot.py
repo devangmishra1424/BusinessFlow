@@ -53,8 +53,8 @@ import soundfile as sf
 import torch
 import torchaudio
 from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from businessflow.accounts import store
 from businessflow.agent.loop import (
@@ -69,6 +69,9 @@ from businessflow.audio.tts import speak_english, speak_hindi
 from businessflow.audio.vad import trim_to_speech
 from businessflow.audio.verbalizer import verbalize
 from businessflow.channels.credentials import looks_like_credentials, parse_credentials
+from businessflow.tools.account_tools import flag_dispute, get_payment_history, get_payment_status
+from businessflow.tools.escalation_tools import escalate_to_human, request_closure_certificate
+from businessflow.tools.payment_tools import generate_payment_link
 
 # Matches agent/client.py's convention: load .env at import time, then
 # read os.environ directly wherever a value is needed (main(), below,
@@ -81,6 +84,7 @@ _MAX_VOICE_NOTE_SECONDS = 120  # an explicit, bounded cap on ASR compute -- not 
 
 _sessions: dict[int, dict] = {}  # chat_id -> {"account_id": str | None, "language": str, "messages": list[dict]}
 _language_choice: dict[int, str] = {}  # chat_id -> "en" | "hi", set via /hindi or /english before a session exists
+_voice_preference: dict[int, bool] = {}  # chat_id -> True if text replies should also be spoken, via /voice
 
 
 def handle_incoming_message(chat_id: int, text: str) -> str:
@@ -255,7 +259,8 @@ async def handle_incoming_voice(
 async def on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         'Send your account ID and 6-digit access key together as TEXT (e.g. "BF-1001 482913") '
-        "to discuss your loan, or just start talking -- text or voice -- for a general question."
+        "to discuss your loan, or just start talking -- text or voice -- for a general question. "
+        "Send /menu any time to see everything I can do."
     )
 
 
@@ -266,14 +271,273 @@ async def on_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Conversation reset.")
 
 
+def _set_language(chat_id: int, language: str) -> None:
+    # _language_choice alone only affects a FUTURE session (read once at
+    # start_conversation/verify_and_start_conversation time) -- found live
+    # while wiring /language: if a session already exists, /hindi or
+    # /english appeared to work (replied "set") but silently did nothing
+    # to the conversation actually in progress. Also updating the live
+    # session's own language fixes that for all three entry points
+    # (/hindi, /english, /language) at once.
+    _language_choice[chat_id] = language
+    session = _sessions.get(chat_id)
+    if session is not None:
+        session["language"] = language
+
+
 async def on_hindi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    _language_choice[update.effective_chat.id] = "hi"
+    _set_language(update.effective_chat.id, "hi")
     await update.message.reply_text("Hindi set for this conversation.")
 
 
 async def on_english(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    _language_choice[update.effective_chat.id] = "en"
+    _set_language(update.effective_chat.id, "en")
     await update.message.reply_text("English set for this conversation.")
+
+
+_LANGUAGE_KEYBOARD = InlineKeyboardMarkup(
+    [[InlineKeyboardButton("English", callback_data="lang:en"), InlineKeyboardButton("हिन्दी", callback_data="lang:hi")]]
+)
+
+
+async def on_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text("Choose your language:", reply_markup=_LANGUAGE_KEYBOARD)
+
+
+_NOT_VERIFIED_MESSAGE = (
+    'This needs a verified account first -- send your account ID and 6-digit '
+    'access key together as text (e.g. "BF-1001 482913").'
+)
+
+
+def _verified_account_id(chat_id: int) -> str | None:
+    session = _sessions.get(chat_id)
+    return session["account_id"] if session else None
+
+
+def _log_tool_call(account_id: str, tool: str, arguments: dict, result: dict) -> None:
+    # A slash command calls these tools directly, bypassing agent.loop's
+    # LLM round trip entirely (no ambiguity to resolve for a deterministic
+    # lookup/action) -- but it's just as real a tool call as one the LLM
+    # makes, so it gets logged the same way, keeping the ops dashboard's
+    # and conversation_memory's account history complete either way.
+    store.log_event(account_id, "tool_called", {"tool": tool, "arguments": arguments, "result": result})
+
+
+async def _run_status(chat_id: int) -> str:
+    account_id = _verified_account_id(chat_id)
+    if account_id is None:
+        return _NOT_VERIFIED_MESSAGE
+    result = get_payment_status(account_id)
+    _log_tool_call(account_id, "get_payment_status", {"account_id": account_id}, result)
+    lines = [
+        f"{result['borrower_name']} -- account {result['account_id']}",
+        f"EMI: ₹{result['emi_amount']:,.2f}, next due {result['emi_due_date']}",
+        f"{result['months_remaining']} of {result['tenure_months']} months remaining",
+        f"Outstanding (approx): ₹{result['outstanding_balance_approx']:,.2f}",
+    ]
+    if result["days_past_due"] > 0:
+        due_line = f"{result['days_past_due']} days past due"
+        if result["late_fee_applicable"]:
+            due_line += f" -- a late fee of ₹{result['late_fee_amount']:,.2f} applies"
+        lines.append(due_line)
+    if result["dispute_open"]:
+        lines.append("A dispute is currently open on this account.")
+    return "\n".join(lines)
+
+
+async def _run_history(chat_id: int) -> str:
+    account_id = _verified_account_id(chat_id)
+    if account_id is None:
+        return _NOT_VERIFIED_MESSAGE
+    result = get_payment_history(account_id)
+    _log_tool_call(account_id, "get_payment_history", {"account_id": account_id}, result)
+    records = result["payment_history"]
+    if not records:
+        return "No payment history on record yet."
+    lines = ["Your recent payments:"]
+    lines += [f"₹{r['amount']:,.2f} on {r['date']} -- {'on time' if r['on_time'] else 'late'}" for r in records]
+    return "\n".join(lines)
+
+
+async def _run_pay(chat_id: int, args: list[str] | None) -> str:
+    account_id = _verified_account_id(chat_id)
+    if account_id is None:
+        return _NOT_VERIFIED_MESSAGE
+    if not args:
+        return "Usage: /pay <amount> -- e.g. /pay 5000"
+    try:
+        amount = float(args[0])
+    except ValueError:
+        return "That doesn't look like a number -- usage: /pay <amount>, e.g. /pay 5000"
+    if amount <= 0:
+        return "Amount must be greater than zero."
+    result = generate_payment_link(account_id, amount)
+    _log_tool_call(account_id, "generate_payment_link", {"account_id": account_id, "amount": amount}, result)
+    return (
+        f"Here's your payment link for ₹{amount:,.2f}:\n{result['payment_link']}\n\n"
+        "(This is a demo link -- it doesn't move real money.)"
+    )
+
+
+async def _run_dispute(chat_id: int, args: list[str] | None) -> str:
+    account_id = _verified_account_id(chat_id)
+    if account_id is None:
+        return _NOT_VERIFIED_MESSAGE
+    if not args:
+        return "Usage: /dispute <what happened> -- e.g. /dispute I already paid this via UPI on the 3rd"
+    reason = " ".join(args)
+    result = flag_dispute(account_id, reason)
+    _log_tool_call(account_id, "flag_dispute", {"account_id": account_id, "reason": reason}, result)
+    if result["already_open"]:
+        return "You already have a dispute open on this account -- a human will review it."
+    return (
+        "Got it -- I've flagged this account for review. No further automated collection "
+        "action will be taken until a human looks into it."
+    )
+
+
+async def _run_agent(chat_id: int, args: list[str] | None) -> str:
+    account_id = _verified_account_id(chat_id)
+    if account_id is None:
+        return _NOT_VERIFIED_MESSAGE
+    reason = " ".join(args) if args else "Borrower requested a human agent directly via /agent"
+    result = escalate_to_human(account_id, reason)
+    _log_tool_call(account_id, "escalate_to_human", {"account_id": account_id, "reason": reason}, result)
+    return f"I've forwarded your request to a human agent (reference {result['escalation_id']}). They'll get back to you soon."
+
+
+async def _run_closure(chat_id: int) -> str:
+    account_id = _verified_account_id(chat_id)
+    if account_id is None:
+        return _NOT_VERIFIED_MESSAGE
+    result = request_closure_certificate(account_id)
+    _log_tool_call(account_id, "request_closure_certificate", {"account_id": account_id}, result)
+    if result["eligible"]:
+        return (
+            f"Your loan shows as fully repaid. I've forwarded a request for your closure certificate "
+            f"to a human (reference {result['escalation_id']}) -- they'll issue the actual document."
+        )
+    return (
+        f"Your loan isn't fully repaid yet -- {result['months_remaining']} months remaining. "
+        "A closure certificate can only be issued once the loan is fully paid off."
+    )
+
+
+async def on_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(await _run_status(update.effective_chat.id))
+
+
+async def on_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(await _run_history(update.effective_chat.id))
+
+
+async def on_pay(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(await _run_pay(update.effective_chat.id, context.args))
+
+
+async def on_dispute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(await _run_dispute(update.effective_chat.id, context.args))
+
+
+async def on_agent(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(await _run_agent(update.effective_chat.id, context.args))
+
+
+async def on_closure(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(await _run_closure(update.effective_chat.id))
+
+
+def _voice_toggle_text(chat_id: int) -> str:
+    turning_on = not _voice_preference.get(chat_id, False)
+    _voice_preference[chat_id] = turning_on
+    return (
+        "Voice replies are now ON -- I'll speak my replies as well as typing them."
+        if turning_on
+        else "Voice replies are now OFF."
+    )
+
+
+async def on_voice_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(_voice_toggle_text(update.effective_chat.id))
+
+
+# (command, button label) -- also doubles as the /menu keyboard's contents.
+# Not every borrower knows slash commands are a thing at all; tappable
+# buttons are the accessible path in for exactly that person.
+_MENU_ITEMS = [
+    ("status", "📊 Check my status"),
+    ("history", "📜 Payment history"),
+    ("pay", "💳 Get a payment link"),
+    ("dispute", "⚠️ Flag a dispute"),
+    ("agent", "🧑 Talk to a human"),
+    ("closure", "📄 Closure certificate"),
+    ("language", "🌐 Change language"),
+    ("voice", "🔊 Toggle voice replies"),
+]
+
+
+async def on_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=f"menu:{cmd}")] for cmd, label in _MENU_ITEMS])
+    await update.message.reply_text("What would you like to do?", reply_markup=keyboard)
+
+
+async def on_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    chat_id = query.message.chat_id
+    data = query.data
+
+    if data.startswith("lang:"):
+        language = data.split(":", 1)[1]
+        _set_language(chat_id, language)
+        await query.message.reply_text("Hindi set for this conversation." if language == "hi" else "English set for this conversation.")
+        return
+
+    if not data.startswith("menu:"):
+        return
+    cmd = data.split(":", 1)[1]
+    # /pay and /dispute need a free-text argument a button tap can't
+    # supply -- rather than build a whole "now reply with the amount"
+    # follow-up flow, the button just shows the exact command to type,
+    # same as a borrower who typed /pay with no argument would see.
+    if cmd == "status":
+        text = await _run_status(chat_id)
+    elif cmd == "history":
+        text = await _run_history(chat_id)
+    elif cmd == "agent":
+        text = await _run_agent(chat_id, None)
+    elif cmd == "closure":
+        text = await _run_closure(chat_id)
+    elif cmd == "pay":
+        text = "Send /pay <amount> to get a payment link -- e.g. /pay 5000"
+    elif cmd == "dispute":
+        text = "Send /dispute <what happened> -- e.g. /dispute I already paid this via UPI on the 3rd"
+    elif cmd == "voice":
+        text = _voice_toggle_text(chat_id)
+    elif cmd == "language":
+        await query.message.reply_text("Choose your language:", reply_markup=_LANGUAGE_KEYBOARD)
+        return
+    else:
+        text = "Unknown option."
+    await query.message.reply_text(text)
+
+
+async def _send_spoken_reply(update: Update, chat_id: int, reply: str) -> None:
+    # Best-effort: the text reply already succeeded and was already sent
+    # by the caller -- a TTS failure here shouldn't take that back, just
+    # skip the bonus spoken version. Broad except is deliberate (VAD/ASR/
+    # TTS/network can all fail in ways worth treating identically here),
+    # but never silent -- logged with the real exception either way.
+    language = _sessions.get(chat_id, {}).get("language") or _language_choice.get(chat_id, "en")
+    try:
+        speech = speak_hindi(verbalize(reply)) if language == "hi" else speak_english(verbalize(reply))
+        buf = io.BytesIO()
+        sf.write(buf, speech.audio.numpy(), speech.sample_rate, format="OGG", subtype="OPUS")
+    except Exception:
+        logger.warning("Voice-reply synthesis failed for chat_id=%s", chat_id, exc_info=True)
+        return
+    await update.message.reply_voice(voice=buf.getvalue())
 
 
 async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -284,6 +548,8 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # coroutine already running on this event loop.
     reply = await asyncio.to_thread(handle_incoming_message, chat_id, update.message.text)
     await update.message.reply_text(reply)
+    if _voice_preference.get(chat_id):
+        await _send_spoken_reply(update, chat_id, reply)
 
 
 def _transcript_echo(transcript: str) -> str:
@@ -322,16 +588,47 @@ async def on_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_voice(voice=buf.getvalue())
 
 
+async def _register_commands(application: Application) -> None:
+    # Telegram's own "/" autocomplete menu reads this list -- real,
+    # native discoverability for a borrower who doesn't know a command
+    # exists at all, at zero extra UI cost.
+    await application.bot.set_my_commands(
+        [
+            ("start", "Begin or verify your account"),
+            ("status", "Check your EMI, due date, and balance"),
+            ("history", "See your recent payments"),
+            ("pay", "Get a payment link -- /pay <amount>"),
+            ("dispute", "Flag a dispute -- /dispute <what happened>"),
+            ("agent", "Talk to a human"),
+            ("closure", "Request a loan closure certificate"),
+            ("language", "Change your language"),
+            ("voice", "Toggle spoken replies on/off"),
+            ("menu", "Show all options as buttons"),
+            ("reset", "Start over"),
+        ]
+    )
+
+
 def main() -> None:
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set -- copy .env.example to .env and fill it in")
 
-    application = Application.builder().token(token).build()
+    application = Application.builder().token(token).post_init(_register_commands).build()
     application.add_handler(CommandHandler("start", on_start))
     application.add_handler(CommandHandler("reset", on_reset))
     application.add_handler(CommandHandler("hindi", on_hindi))
     application.add_handler(CommandHandler("english", on_english))
+    application.add_handler(CommandHandler("language", on_language))
+    application.add_handler(CommandHandler("status", on_status))
+    application.add_handler(CommandHandler("history", on_history))
+    application.add_handler(CommandHandler("pay", on_pay))
+    application.add_handler(CommandHandler("dispute", on_dispute))
+    application.add_handler(CommandHandler("agent", on_agent))
+    application.add_handler(CommandHandler("closure", on_closure))
+    application.add_handler(CommandHandler("voice", on_voice_toggle))
+    application.add_handler(CommandHandler("menu", on_menu))
+    application.add_handler(CallbackQueryHandler(on_callback_query))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_message))
     application.add_handler(MessageHandler(filters.VOICE, on_voice_message))
 
