@@ -59,7 +59,16 @@ async function api(path, opts = {}) {
     let detail = `request failed (${res.status})`;
     try {
       const body = await res.json();
-      detail = body.detail || detail;
+      // FastAPI's own validation errors (422s) send detail as a LIST of
+      // {loc, msg, type} objects, not a plain string -- passing that
+      // straight into an Error's message stringifies to "[object
+      // Object]" instead of anything readable. Every other error path
+      // (ValueError, HTTPException(detail=str)) already sends a string.
+      if (Array.isArray(body.detail)) {
+        detail = body.detail.map((e) => e.msg || JSON.stringify(e)).join("; ");
+      } else if (body.detail) {
+        detail = body.detail;
+      }
     } catch (_) {}
     throw new ApiError(res.status, detail);
   }
@@ -811,7 +820,10 @@ $newAccountForm.addEventListener("submit", (e) => {
   const payload = {
     borrower_name: document.getElementById("na-borrower-name").value.trim(),
     business_name: document.getElementById("na-business-name").value.trim(),
-    phone_number: document.getElementById("na-phone").value.trim(),
+    // E.164 has no internal whitespace, but "+91 9022854526" is exactly
+    // how a person naturally types an Indian number -- strip spaces
+    // rather than reject a real phone number over formatting.
+    phone_number: document.getElementById("na-phone").value.trim().replace(/\s+/g, ""),
     language_preference: document.getElementById("na-language").value,
     loan_type: document.getElementById("na-loan-type").value.trim(),
     risk_tier: document.getElementById("na-risk-tier").value,

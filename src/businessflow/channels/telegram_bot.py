@@ -45,6 +45,7 @@ Run: python -m businessflow.channels.telegram_bot
 
 import asyncio
 import io
+import logging
 import os
 
 import groq
@@ -73,6 +74,8 @@ from businessflow.channels.credentials import looks_like_credentials, parse_cred
 # read os.environ directly wherever a value is needed (main(), below,
 # still checks TELEGRAM_BOT_TOKEN explicitly and raises if it's missing).
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 _MAX_VOICE_NOTE_SECONDS = 120  # an explicit, bounded cap on ASR compute -- not an unbounded wait on a huge file
 
@@ -140,11 +143,18 @@ def handle_incoming_message(chat_id: int, text: str) -> str:
     try:
         updated_conversation, reply = run_turn_with_memory(session["messages"], session["account_id"])
     except groq.RateLimitError as e:
+        # Deliberately not including e.message in the reply -- it's Groq's raw
+        # error body (org ID, exact token counts, an "upgrade to Dev
+        # Tier" link), never meant for a borrower to see. Logged instead,
+        # same as browser_api.py's equivalent path already does at the
+        # HTTP layer (its frontend just never renders the raw detail).
         session["messages"].pop()  # don't leave a user message with no reply appended
-        return f"I'm getting rate-limited by the LLM provider right now -- please try again shortly. ({e.message})"
+        logger.warning("Groq rate limit hit for chat_id=%s: %s", chat_id, e)
+        return "I'm getting rate-limited by the LLM provider right now -- please try again shortly."
     except groq.APIStatusError as e:
         session["messages"].pop()
-        return f"The LLM provider had an error on its end -- please try again. ({e.message})"
+        logger.warning("Groq API error for chat_id=%s: %s", chat_id, e)
+        return "The LLM provider had an error on its end -- please try again."
     session["messages"] = updated_conversation
     return reply
 
