@@ -55,3 +55,21 @@ jobs:
 
       - name: Run tests
         run: pytest tests/ -v
+
+  deploy:
+    needs: pytest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull latest and restart services on the VM
+        # The deploy key's authorized_keys entry on the VM has a forced
+        # command -- whatever we send over ssh is ignored, and the VM
+        # always runs its own fixed pull-and-restart sequence instead.
+        # This means a leaked VM_SSH_KEY secret can only ever trigger that
+        # one sequence, not an arbitrary command on the box.
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.VM_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} deploy
