@@ -36,6 +36,17 @@ jobs:
           pip install -r requirements.txt
           pip install -e .
 
+      - name: Download the Piper English TTS voice model
+        # en_US-lessac-medium.onnx (63MB) is deliberately not committed to
+        # git -- only its small .onnx.json sidecar is tracked. A fresh
+        # checkout (CI, or a new clone anywhere else) is missing it unless
+        # something fetches it explicitly, which is exactly what caused
+        # test_pipeline.py's two voice-roundtrip tests to fail with
+        # onnxruntime.NoSuchFile on every run since this workflow existed.
+        run: |
+          curl -L -o data/models/piper/en_US-lessac-medium.onnx \
+            "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx"
+
       - name: Seed the policy knowledge base
         # The retriever tests assume this has already been run (same
         # requirement as running locally) -- data/kb/*.md is real,
