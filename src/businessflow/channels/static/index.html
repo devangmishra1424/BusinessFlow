@@ -23,6 +23,7 @@
     <div class="start-tabs">
       <button class="start-tab active" data-mode="verified">My account</button>
       <button class="start-tab" data-mode="anonymous">Just a question</button>
+      <button class="start-tab" data-mode="ops">Ops team</button>
     </div>
 
     <form id="start-form" autocomplete="off">
@@ -33,10 +34,17 @@
         <input id="start-access-key" type="password" placeholder="6-digit key" autocomplete="off" inputmode="numeric" />
       </div>
 
-      <label class="field-label">Language</label>
-      <div class="lang-toggle">
-        <button type="button" class="lang-btn active" data-lang="en">English</button>
-        <button type="button" class="lang-btn" data-lang="hi">हिन्दी</button>
+      <div id="ops-fields" hidden>
+        <label class="field-label" for="start-ops-key">Ops API key</label>
+        <input id="start-ops-key" type="password" placeholder="Ops API key" autocomplete="off" />
+      </div>
+
+      <div id="lang-field">
+        <label class="field-label">Language</label>
+        <div class="lang-toggle">
+          <button type="button" class="lang-btn active" data-lang="en">English</button>
+          <button type="button" class="lang-btn" data-lang="hi">हिन्दी</button>
+        </div>
       </div>
 
       <button type="submit" id="start-submit-btn" class="start-submit">

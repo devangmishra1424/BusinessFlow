@@ -1083,8 +1083,18 @@ function boot() {
    Entry
    ============================================================ */
 (function init() {
-  if (state.apiKey) {
-    tryUnlock(state.apiKey).then((ok) => {
+  // Arriving from the shared login page's "Ops team" box, which redirects
+  // here as `#key=...` rather than a query string -- the fragment never
+  // gets sent to (or logged by) any server, unlike a query param would.
+  // Stripped from the URL immediately either way, so it doesn't linger in
+  // the address bar or browser history a moment longer than this load.
+  const hashMatch = location.hash.match(/^#key=(.+)$/);
+  const incomingKey = hashMatch ? decodeURIComponent(hashMatch[1]) : null;
+  if (hashMatch) history.replaceState(null, "", location.pathname + location.search);
+
+  const keyToTry = incomingKey || state.apiKey;
+  if (keyToTry) {
+    tryUnlock(keyToTry).then((ok) => {
       if (!ok) {
         $unlockScreen.hidden = false;
         $unlockError.hidden = true;

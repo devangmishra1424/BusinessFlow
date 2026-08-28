@@ -66,6 +66,14 @@ const $chatScreen = document.getElementById("chat-screen");
 const $startForm = document.getElementById("start-form");
 const $startError = document.getElementById("start-error");
 const $verifiedFields = document.getElementById("verified-fields");
+const $opsFields = document.getElementById("ops-fields");
+const $langField = document.getElementById("lang-field");
+
+// The ops dashboard lives on its own subdomain (see the "Ops team" tab
+// below) -- separate apps, separate asset paths, avoids the path-prefix
+// asset collisions a single shared domain would hit. Kept as one constant
+// since it's the only cross-service coupling point in this file.
+const OPS_DASHBOARD_URL = "https://businessflowai-ops.duckdns.org";
 
 document.querySelectorAll(".start-tab").forEach((tab) =>
   tab.addEventListener("click", () => {
@@ -73,6 +81,8 @@ document.querySelectorAll(".start-tab").forEach((tab) =>
     tab.classList.add("active");
     state.mode = tab.dataset.mode;
     $verifiedFields.hidden = state.mode !== "verified";
+    $opsFields.hidden = state.mode !== "ops";
+    $langField.hidden = state.mode === "ops";
   })
 );
 
@@ -87,6 +97,20 @@ document.querySelectorAll(".lang-btn").forEach((btn) =>
 $startForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   $startError.hidden = true;
+
+  if (state.mode === "ops") {
+    const opsKey = document.getElementById("start-ops-key").value.trim();
+    if (!opsKey) {
+      $startError.textContent = "Enter the ops API key.";
+      $startError.hidden = false;
+      return;
+    }
+    // A URL fragment, not a query param -- never sent to (or logged by)
+    // any server, just read client-side by the ops app's own init() once
+    // it loads. See ops/static/app.js's init() for the other half of this.
+    window.location.href = `${OPS_DASHBOARD_URL}/#key=${encodeURIComponent(opsKey)}`;
+    return;
+  }
 
   const payload = { language: state.language };
   if (state.mode === "verified") {
