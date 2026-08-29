@@ -7,6 +7,7 @@ import os
 
 import pytest
 
+from businessflow.accounts import store
 from businessflow.tools.payment_tools import calculate_hypothetical, generate_payment_link, propose_partial_payment
 
 pytestmark = pytest.mark.skipif(
@@ -15,14 +16,27 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_generate_payment_link_returns_synthetic_link_with_the_given_amount(reseed_accounts):
+def test_generate_payment_link_returns_a_real_redeemable_token(reseed_accounts):
+    # The link is a real, single-use token (accounts.store.create_payment_token),
+    # not the account_id/amount embedded directly in the URL -- deliberately,
+    # so an edited/guessed URL can't be used to "pay" a different account
+    # or amount (see payment_tools.py's own docstring).
     result = generate_payment_link(account_id="BF-1004", amount=28000)
 
     assert result["account_id"] == "BF-1004"
     assert result["amount"] == 28000
     assert result["synthetic"] is True
-    assert "BF-1004" in result["payment_link"]
-    assert "28000" in result["payment_link"]
+    assert result["payment_link"].endswith("/pay/" + result["payment_link"].rsplit("/pay/", 1)[1])
+    token = result["payment_link"].rsplit("/pay/", 1)[1]
+    assert "BF-1004" not in token and "28000" not in token
+
+    info = store.get_payment_token_info(token)
+    try:
+        assert info["account_id"] == "BF-1004"
+        assert info["amount"] == 28000
+        assert info["status"] == "pending"
+    finally:
+        store.get_connection().execute("delete from payment_tokens where token = %s", (token,))
 
 
 def test_generate_payment_link_raises_on_unknown_account(reseed_accounts):

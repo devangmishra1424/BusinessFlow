@@ -223,6 +223,7 @@ def main():
         conn.execute("delete from disputes where account_id = any(%s)", (_ACCOUNT_IDS,))
         conn.execute("delete from promises where account_id = any(%s)", (_ACCOUNT_IDS,))
         conn.execute("delete from payment_history where account_id = any(%s)", (_ACCOUNT_IDS,))
+        conn.execute("delete from payment_tokens where account_id = any(%s)", (_ACCOUNT_IDS,))
 
         for a in accounts:
             conn.execute(

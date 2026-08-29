@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from businessflow.accounts import store
 from businessflow.channels.browser_api import app
 
 client = TestClient(app)
@@ -36,6 +37,31 @@ def _start_verified_conversation(account_id: str, access_key: str) -> str:
     start = client.post("/conversations", json={"account_id": account_id, "access_key": access_key, "language": "en"})
     assert start.status_code == 200
     return start.json()["conversation_id"]
+
+
+@pytest.fixture
+def throwaway_account():
+    """A real account created and fully torn down (accounts/events/
+    payment_tokens/payment_history, in FK-safe order) around one test --
+    for the /pay/{token} tests below, which need to mutate real account
+    state (months_remaining, emi_due_date, payment_history) and must
+    never do that against a real seeded demo account (BF-1001..1004) that
+    a live deployment or another test run might be relying on."""
+    from datetime import date
+
+    account, _ = store.create_account(
+        borrower_name="Pay Test Borrower", business_name="Pay Test Co", phone_number="+919800011111",
+        language_preference="en", loan_type="Test Loan", principal_amount=60_000, emi_amount=3_000,
+        tenure_months=20, emi_due_date=date(2026, 10, 1), nach_mandate_active=True, risk_tier="low",
+    )
+    try:
+        yield account
+    finally:
+        conn = store.get_connection()
+        conn.execute("delete from payment_tokens where account_id = %s", (account.account_id,))
+        conn.execute("delete from payment_history where account_id = %s", (account.account_id,))
+        conn.execute("delete from events where account_id = %s", (account.account_id,))
+        conn.execute("delete from accounts where account_id = %s", (account.account_id,))
 
 
 def test_health():
@@ -431,7 +457,7 @@ def test_quick_action_payment_link_rejects_a_non_positive_amount(reseed_accounts
 
 
 @_pg_skip
-def test_quick_action_payment_link_returns_a_real_synthetic_link(reseed_accounts):
+def test_quick_action_payment_link_returns_a_real_redeemable_link(reseed_accounts):
     conversation_id = _start_verified_conversation("BF-1001", "482913")
 
     response = client.post(f"/conversations/{conversation_id}/quick-actions/payment-link", json={"amount": 5000})
@@ -440,7 +466,99 @@ def test_quick_action_payment_link_returns_a_real_synthetic_link(reseed_accounts
     body = response.json()
     assert body["account_id"] == "BF-1001"
     assert body["amount"] == 5000
-    # generate_payment_link f-strings the raw float amount in verbatim (see
-    # tools/payment_tools.py) -- 5000.0, not 5000, is the real, correct link.
-    assert body["payment_link"] == "https://demo.businessflow.local/pay/BF-1001?amount=5000.0"
     assert body["synthetic"] is True
+    # The account_id/amount are never embedded in the URL itself (see
+    # payment_tools.py's own docstring) -- only a real, single-use token is.
+    token = body["payment_link"].rsplit("/pay/", 1)[1]
+    assert "BF-1001" not in token and "5000" not in token
+
+    info = store.get_payment_token_info(token)
+    try:
+        assert info == {
+            "account_id": "BF-1001", "amount": 5000.0, "business_name": "Cotton Threads Boutique",
+            "borrower_name": "Priya Sharma", "status": "pending",
+        }
+    finally:
+        store.get_connection().execute("delete from payment_tokens where token = %s", (token,))
+
+
+@_pg_skip
+def test_payment_info_endpoint_returns_pending_for_a_fresh_token(throwaway_account):
+    token = store.create_payment_token(throwaway_account.account_id, 3000)
+
+    response = client.get(f"/pay/{token}/info")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "account_id": throwaway_account.account_id, "amount": 3000.0,
+        "business_name": "Pay Test Co", "borrower_name": "Pay Test Borrower", "status": "pending",
+    }
+
+
+def test_payment_info_endpoint_404s_for_an_unknown_token():
+    response = client.get("/pay/totally-made-up-token/info")
+
+    assert response.status_code == 404
+
+
+@_pg_skip
+def test_payment_confirm_endpoint_records_a_real_payment(throwaway_account):
+    token = store.create_payment_token(throwaway_account.account_id, 3000)
+
+    response = client.post(f"/pay/{token}/confirm")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["amount"] == 3000.0
+    assert body["months_remaining"] == throwaway_account.months_remaining - 1
+    assert body["next_emi_due_date"] == "2026-11-01"  # one month past the fixture's 2026-10-01
+
+    updated = store.get_account_or_raise(throwaway_account.account_id)
+    assert updated.months_remaining == throwaway_account.months_remaining - 1
+    assert len(updated.payment_history) == 1
+    assert updated.payment_history[0].amount == 3000.0
+    assert updated.payment_history[0].on_time is True  # paid before/on the original 2026-10-01 due date
+
+    # A real tool_called event, same as an LLM- or slash-command-triggered
+    # payment would log -- an operator/ops dashboard has no separate way
+    # to see a confirmed payment link otherwise.
+    events = store.get_connection().execute(
+        "select event_type, details from events where account_id = %s order by created_at", (throwaway_account.account_id,)
+    ).fetchall()
+    assert any(e["event_type"] == "tool_called" and e["details"]["tool"] == "record_payment" for e in events)
+
+
+@_pg_skip
+def test_payment_confirm_endpoint_rejects_a_double_confirm(throwaway_account):
+    token = store.create_payment_token(throwaway_account.account_id, 3000)
+    first = client.post(f"/pay/{token}/confirm")
+    assert first.status_code == 200
+
+    second = client.post(f"/pay/{token}/confirm")
+
+    assert second.status_code == 409
+    # Only one real payment recorded, not two, from the rejected retry.
+    updated = store.get_account_or_raise(throwaway_account.account_id)
+    assert len(updated.payment_history) == 1
+
+
+def test_payment_confirm_endpoint_404s_for_an_unknown_token():
+    response = client.post("/pay/totally-made-up-token/confirm")
+
+    assert response.status_code == 404
+
+
+@_pg_skip
+def test_payment_confirm_endpoint_410s_for_an_expired_token(throwaway_account):
+    token = store.create_payment_token(throwaway_account.account_id, 3000)
+    # Force it into the past rather than waiting real hours for the real
+    # TTL to elapse -- the only way to exercise this path in a fast test.
+    store.get_connection().execute(
+        "update payment_tokens set expires_at = now() - interval '1 hour' where token = %s", (token,)
+    )
+
+    response = client.post(f"/pay/{token}/confirm")
+
+    assert response.status_code == 410
+    updated = store.get_account_or_raise(throwaway_account.account_id)
+    assert len(updated.payment_history) == 0

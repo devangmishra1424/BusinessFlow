@@ -23,8 +23,8 @@ from businessflow.accounts.policy import GRACE_PERIOD_DAYS, HEADS_UP_DAYS_BEFORE
 @dataclass
 class OutboundReminder:
     account_id: str
-    kind: str  # "heads_up" | "follow_up"
-    days: int  # days until due (heads_up) or days past due (follow_up)
+    kind: str  # "heads_up" | "due_now" | "follow_up"
+    days: int  # days until due (heads_up), or days past due (due_now/follow_up -- 0 on the due date itself)
 
 
 def decide_reminder(account: Account, as_of: date | None = None) -> OutboundReminder | None:
@@ -38,9 +38,22 @@ def decide_reminder(account: Account, as_of: date | None = None) -> OutboundRemi
     if 0 < days_until_due <= HEADS_UP_DAYS_BEFORE_DUE:
         return OutboundReminder(account.account_id, "heads_up", days_until_due)
 
-    days_past_due = account.days_past_due(as_of)
-    if days_past_due > GRACE_PERIOD_DAYS:
-        return OutboundReminder(account.account_id, "follow_up", days_past_due)
+    # Found live: heads_up stops firing once days_until_due hits 0, and
+    # follow_up only starts once days_past_due exceeds the grace period --
+    # nothing fired on the due date itself, or anywhere in the grace
+    # period in between, even though "pay now, no late fee yet" is exactly
+    # the moment a payment link matters most. due_now closes that gap.
+    #
+    # Gated on days_until_due <= 0, NOT on account.days_past_due(as_of)
+    # directly -- that method floors at 0 (max(delta, 0)) for a due date
+    # that's still in the future, so it alone can't tell "due in 10 days"
+    # apart from "due today." Once we're already in the days_until_due<=0
+    # branch, delta is guaranteed >= 0 and days_past_due(as_of) is exact.
+    if days_until_due <= 0:
+        days_past_due = account.days_past_due(as_of)
+        if days_past_due > GRACE_PERIOD_DAYS:
+            return OutboundReminder(account.account_id, "follow_up", days_past_due)
+        return OutboundReminder(account.account_id, "due_now", days_past_due)
 
     return None
 

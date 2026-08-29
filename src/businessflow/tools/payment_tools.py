@@ -1,6 +1,13 @@
-"""Tools that touch money -- all synthetic. No real payment gateway exists
-anywhere in this project; generate_payment_link returns a fake local URL, and
-nothing here ever calls out to a real payment processor."""
+"""Tools that touch money -- no real payment gateway exists anywhere in
+this project. generate_payment_link's link is still real in every sense
+that matters for this demo, though: it's a genuine, single-use, expiring
+token (accounts.store.create_payment_token) that a real confirm page
+(channels/browser_api.py's /pay/{token}) can actually redeem, which
+really does call store.record_payment and really does move
+months_remaining/emi_due_date/payment_history forward -- there's just no
+real bank or card processor sitting behind the "confirm" click."""
+
+import os
 
 from businessflow.accounts import store
 from businessflow.accounts.policy import (
@@ -27,16 +34,29 @@ def _blocked_from_automated_restructuring(account) -> str | None:
     return None
 
 
+def _chat_app_base_url() -> str:
+    # No real payment processor exists, so there's no "return URL" a real
+    # gateway would redirect back to -- this is just this project's own
+    # borrower-facing app, wherever it's actually reachable (localhost in
+    # dev, the real deployed domain in production). Defaults to localhost
+    # so a fresh checkout works before anyone sets this.
+    return os.environ.get("CHAT_APP_BASE_URL", "http://localhost:8000")
+
+
 @mcp.tool
 def generate_payment_link(account_id: str, amount: float) -> dict:
-    """Generate a synthetic payment link for the given amount. This is a
-    demo stub only -- it does not move real money and is not connected to
-    any real payment processor."""
-    account = store.get_account_or_raise(account_id)
+    """Generate a payment link for the given amount -- a real, single-use,
+    expiring link (see accounts.store.create_payment_token) that actually
+    records a real payment when confirmed on the page it points to. No
+    real bank/card processor sits behind it -- confirming just runs this
+    project's own record_payment, the same as a real gateway's webhook
+    would, minus the gateway."""
+    store.get_account_or_raise(account_id)  # raises if the account doesn't exist
+    token = store.create_payment_token(account_id, amount)
     return {
-        "account_id": account.account_id,
+        "account_id": account_id,
         "amount": amount,
-        "payment_link": f"https://demo.businessflow.local/pay/{account.account_id}?amount={amount}",
+        "payment_link": f"{_chat_app_base_url()}/pay/{token}",
         "synthetic": True,
     }
 

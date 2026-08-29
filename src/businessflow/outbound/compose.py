@@ -35,14 +35,25 @@ _REMINDER_SYSTEM_PROMPT = (
 
 def compose_message(account: Account, reminder: OutboundReminder) -> str:
     """One real Groq call per reminder. reminder.kind is "heads_up" (EMI
-    due in reminder.days days) or "follow_up" (reminder.days days past
-    due, already beyond the grace period -- see decide.py). Grounded
-    strictly in the account's real fields; the caller (outbound/run.py)
-    is responsible for send.py's own real-vs-logged delivery split, not
-    this function."""
+    due in reminder.days days), "due_now" (due today, or within the
+    grace period -- reminder.days days past due, no late fee yet), or
+    "follow_up" (reminder.days days past due, already beyond the grace
+    period -- see decide.py). Grounded strictly in the account's real
+    fields; the caller (outbound/run.py) is responsible for send.py's own
+    real-vs-logged delivery split, not this function.
+
+    The payment link itself is NOT woven into this text -- it's attached
+    separately as a real Telegram button (see outbound/run.py and
+    send.py), never asked of the LLM, since a composed-prose URL risks
+    exactly the kind of fabricated/mangled link this project's live
+    conversational agent is separately instructed never to produce."""
     emi_str = f"{account.emi_amount:,.0f}"
     if reminder.kind == "heads_up":
         situation = f"Their EMI of {emi_str} rupees is due in {reminder.days} day(s), on {account.emi_due_date.isoformat()}."
+    elif reminder.kind == "due_now":
+        situation = (
+            f"Their EMI of {emi_str} rupees is due now (day {reminder.days} of the grace period, no late fee yet)."
+        )
     else:
         situation = f"Their EMI of {emi_str} rupees is now {reminder.days} day(s) past due."
 

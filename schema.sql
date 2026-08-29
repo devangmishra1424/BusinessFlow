@@ -113,6 +113,21 @@ create table escalations (
     resolution_reason text
 );
 
+-- A single-use, expiring link minted for one specific payment (the
+-- borrower-facing "Get a payment link" quick action, and the proactive
+-- outbound reminder's own "Pay now" button) -- the token itself, not the
+-- account_id, is what's embedded in the URL, so a guessable/edited link
+-- can't be used to "pay" a different account or amount (see
+-- accounts/store.py's redeem_payment_token).
+create table payment_tokens (
+    token       text primary key,
+    account_id  text not null references accounts(account_id),
+    amount      numeric not null,
+    created_at  timestamptz not null default now(),
+    expires_at  timestamptz not null,
+    used_at     timestamptz
+);
+
 -- Generic audit/telemetry log -- every tool call (successful or failed)
 -- and every conversation turn (see memory/conversation_memory.py) is
 -- logged here as one event_type or another, rather than each concern

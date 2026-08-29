@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BusinessFlow · Pay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/static/styles.css?v=4" />
+</head>
+<body>
+
+<div class="start-screen">
+  <div class="start-glow"></div>
+  <div class="start-card pay-card">
+    <div class="brand">
+      <div class="brand-mark">BF</div>
+      <div class="brand-name">BusinessFlow</div>
+    </div>
+
+    <div id="pay-loading" class="pay-state">
+      <p>Loading your payment link…</p>
+    </div>
+
+    <div id="pay-pending" class="pay-state" hidden>
+      <p class="pay-label">Confirm your payment</p>
+      <p class="pay-amount" id="pay-amount"></p>
+      <p class="pay-sub" id="pay-business"></p>
+      <button type="button" class="start-submit pay-confirm-btn" id="pay-confirm-btn">
+        Confirm payment
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <p class="pay-hint">This is a demo payment -- no real money moves, but it really does record a real payment on your account.</p>
+    </div>
+
+    <div id="pay-success" class="pay-state" hidden>
+      <div class="pay-check">✓</div>
+      <p class="pay-label">Payment received</p>
+      <p class="pay-amount" id="pay-success-amount"></p>
+      <p class="pay-sub" id="pay-success-next"></p>
+    </div>
+
+    <div id="pay-error" class="pay-state" hidden>
+      <p class="pay-label pay-label-error" id="pay-error-text"></p>
+    </div>
+  </div>
+</div>
+
+<script src="/static/pay.js?v=1"></script>
+</body>
+</html>

@@ -12,15 +12,17 @@ with the story, instead of the two silently drifting apart the longer a
 frozen anchor sat unseeded.
 """
 
+import calendar
 import json
 import logging
 import secrets
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import psycopg
 
 from businessflow.accounts.db import get_connection
 from businessflow.accounts.models import Account, Escalation, PaymentRecord, PromiseToPay
+from businessflow.accounts.policy import PAYMENT_TOKEN_TTL_HOURS
 
 logger = logging.getLogger(__name__)
 
@@ -344,6 +346,149 @@ def set_telegram_chat_id(account_id: str, chat_id: int) -> None:
         "update accounts set telegram_chat_id = %s, updated_at = now() where account_id = %s",
         (chat_id, account_id),
     )
+
+
+def record_payment(account_id: str, amount: float, payment_date: date | None = None) -> dict:
+    """The one place a payment actually LANDS: every other payment_history
+    row in this system is seed data, never a live event this app itself
+    produced. Called only from redeem_payment_token below -- never
+    reachable directly from a borrower-facing tool, since a payment must
+    always be gated by a real, single-use token (see that function's own
+    docstring for why).
+
+    Real reducing-balance EMI semantics, kept deliberately simple to match
+    this project's existing "one flat EMI cuts one month" model (same
+    simplification calculate_hypothetical and get_payment_status's
+    outstanding_balance_approx already rely on): one payment always
+    retires exactly one month, regardless of the amount actually paid.
+    months_remaining floors at 0 rather than going negative on a stray
+    extra payment against an already-closed loan."""
+    if payment_date is None:
+        payment_date = current_date()
+    conn = get_connection()
+    account = get_account_or_raise(account_id)
+
+    on_time = payment_date <= account.emi_due_date
+    conn.execute(
+        "insert into payment_history (account_id, payment_date, amount, on_time) values (%s, %s, %s, %s)",
+        (account_id, payment_date, amount, on_time),
+    )
+    new_months_remaining = max(0, account.months_remaining - 1)
+    next_due_date = add_one_month(account.emi_due_date)
+    conn.execute(
+        "update accounts set months_remaining = %s, emi_due_date = %s, updated_at = now() where account_id = %s",
+        (new_months_remaining, next_due_date, account_id),
+    )
+    return {
+        "account_id": account_id,
+        "amount": amount,
+        "payment_date": payment_date.isoformat(),
+        "on_time": on_time,
+        "months_remaining": new_months_remaining,
+        "next_emi_due_date": next_due_date.isoformat(),
+    }
+
+
+def add_one_month(d: date) -> date:
+    """Calendar-correct month rollover (Jan 31 + 1mo = Feb 28, not a spill
+    into March) -- deliberately NOT "add 30 days," which drifts the due
+    date earlier every few cycles. The one shared implementation: this
+    used to be duplicated privately in channels/browser_api.py for its
+    projected-EMI-timeline display math (a DIFFERENT use from
+    record_payment's real one here, but the same calendar arithmetic) --
+    that copy now imports this one instead of keeping its own."""
+    if d.month == 12:
+        year, month = d.year + 1, 1
+    else:
+        year, month = d.year, d.month + 1
+    last_day_of_month = calendar.monthrange(year, month)[1]
+    return date(year, month, min(d.day, last_day_of_month))
+
+
+class PaymentTokenNotFoundError(ValueError):
+    pass
+
+
+class PaymentTokenExpiredError(ValueError):
+    pass
+
+
+class PaymentTokenAlreadyUsedError(ValueError):
+    pass
+
+
+def create_payment_token(account_id: str, amount: float) -> str:
+    """Mints a real, single-use, expiring link for one specific payment --
+    the account_id and amount are baked into this server-side row, never
+    trusted from the URL itself, so a borrower can only ever pay exactly
+    what this token was minted for for their own account (see
+    redeem_payment_token). token_urlsafe(24) gives ~144 bits of entropy --
+    not realistically guessable, the same class of unpredictability a
+    real payment provider's own one-time link would rely on."""
+    token = secrets.token_urlsafe(24)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=PAYMENT_TOKEN_TTL_HOURS)
+    get_connection().execute(
+        "insert into payment_tokens (token, account_id, amount, expires_at) values (%s, %s, %s, %s)",
+        (token, account_id, amount, expires_at),
+    )
+    return token
+
+
+def get_payment_token_info(token: str) -> dict | None:
+    """Read-only lookup for the confirmation PAGE itself (before the
+    borrower has clicked Confirm) -- returns the real account/amount/
+    status so the page can render "Confirm ₹X for [business]" without
+    ever redeeming anything. None only for a token that never existed at
+    all; an expired or already-used token still returns its real status
+    rather than None, so the page can say WHY it can't be paid instead of
+    a generic "not found\" for every case alike."""
+    row = get_connection().execute(
+        """
+        select pt.account_id, pt.amount, pt.expires_at, pt.used_at, a.business_name, a.borrower_name
+        from payment_tokens pt join accounts a on a.account_id = pt.account_id
+        where pt.token = %s
+        """,
+        (token,),
+    ).fetchone()
+    if row is None:
+        return None
+    now = datetime.now(timezone.utc)
+    if row["used_at"] is not None:
+        status = "used"
+    elif row["expires_at"] < now:
+        status = "expired"
+    else:
+        status = "pending"
+    return {
+        "account_id": row["account_id"],
+        "amount": float(row["amount"]),
+        "business_name": row["business_name"],
+        "borrower_name": row["borrower_name"],
+        "status": status,
+    }
+
+
+def redeem_payment_token(token: str) -> dict:
+    """The only path by which a "pay now" link can actually move the
+    account forward -- confirming re-checks used_at/expires_at rather
+    than trusting the caller already checked via get_payment_token_info
+    (that read can go stale between page-load and the borrower's click),
+    so a double-submit or a replayed request can never record two
+    payments for one token."""
+    conn = get_connection()
+    row = conn.execute(
+        "select account_id, amount, expires_at, used_at from payment_tokens where token = %s",
+        (token,),
+    ).fetchone()
+    if row is None:
+        raise PaymentTokenNotFoundError(f"no payment token found for token={token!r}")
+    if row["used_at"] is not None:
+        raise PaymentTokenAlreadyUsedError("this payment link has already been used")
+    if row["expires_at"] < datetime.now(timezone.utc):
+        raise PaymentTokenExpiredError("this payment link has expired")
+
+    conn.execute("update payment_tokens set used_at = now() where token = %s", (token,))
+    return record_payment(row["account_id"], float(row["amount"]))
 
 
 _ESCALATION_COLUMNS = "escalation_id, account_id, reason, status, created_at, resolved_at, proposed_changes, resolution_reason"

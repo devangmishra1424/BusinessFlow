@@ -15,7 +15,6 @@ separate FastAPI app on port 8001 -- run both side by side, they don't
 share state or a port.
 """
 
-import calendar
 import uuid
 from datetime import date, datetime
 from pathlib import Path
@@ -194,23 +193,11 @@ def _log_quick_action(account_id: str, tool: str, arguments: dict, result: dict)
     store.log_event(account_id, "tool_called", {"tool": tool, "arguments": arguments, "result": result})
 
 
-def _add_one_month(d: date) -> date:
-    """Adds one calendar month, clamping the day to the target month's last
-    day if it would otherwise overflow (e.g. Jan 31 -> Feb 28). This is a
-    deliberate, small departure from ops/static/app.js's buildEmiTimeline,
-    which advances via JS's `cursor.setMonth(cursor.getMonth() + 1)` --
-    when a day overflows the target month, JS's Date silently ROLLS FORWARD
-    into the following month (e.g. Jan 31 -> Mar 3, not Feb 28) rather than
-    clamping. Every other part of this function is a faithful port; this
-    one corner case is intentionally the more predictable "clamp to month
-    end" behavior instead of replicating JS's rollover quirk, since nothing
-    about that quirk is part of the real EMI cadence being modeled."""
-    if d.month == 12:
-        year, month = d.year + 1, 1
-    else:
-        year, month = d.year, d.month + 1
-    last_day_of_month = calendar.monthrange(year, month)[1]
-    return date(year, month, min(d.day, last_day_of_month))
+# add_one_month lives in accounts.store now -- record_payment (the real,
+# money-moving version of "advance one EMI cycle") needs the exact same
+# calendar arithmetic this timeline projection does, so there's one
+# shared implementation instead of two copies that could quietly drift
+# apart. See its docstring for the JS-parity note this used to carry here.
 
 
 def _build_emi_timeline(account: Account, days_past_due: int) -> list[dict]:
@@ -246,7 +233,7 @@ def _build_emi_timeline(account: Account, days_past_due: int) -> list[dict]:
                     "label": f"Overdue -- {days_past_due}d past due" if overdue else "Scheduled",
                 }
             )
-            cursor = _add_one_month(cursor)
+            cursor = store.add_one_month(cursor)
 
     return past + upcoming
 
@@ -465,6 +452,69 @@ def quick_action_payment_link_endpoint(conversation_id: str, req: QuickActionPay
         account_id, "generate_payment_link", {"account_id": account_id, "amount": req.amount}, result
     )
     return result
+
+
+class PaymentTokenInfoOut(BaseModel):
+    account_id: str
+    amount: float
+    business_name: str
+    borrower_name: str
+    status: str  # "pending" | "used" | "expired"
+
+
+class PaymentConfirmOut(BaseModel):
+    amount: float
+    months_remaining: int
+    next_emi_due_date: str
+
+
+@app.get("/pay/{token}/info", response_model=PaymentTokenInfoOut)
+def payment_token_info_endpoint(token: str):
+    """Read-only -- what the confirm PAGE calls on load to render "Confirm
+    ₹X for [business]" before anything is actually redeemed. A genuinely
+    unknown token is the only 404 case here; an expired or already-used
+    one still returns its real status (see store.get_payment_token_info)
+    so the page can tell the borrower WHY it can't be paid, not just that
+    it can't."""
+    info = store.get_payment_token_info(token)
+    if info is None:
+        raise HTTPException(status_code=404, detail=f"no payment link found for token={token!r}")
+    return PaymentTokenInfoOut(**info)
+
+
+@app.post("/pay/{token}/confirm", response_model=PaymentConfirmOut)
+def payment_confirm_endpoint(token: str):
+    """The only endpoint that can actually move an account forward from a
+    payment link -- store.redeem_payment_token re-checks used_at/
+    expires_at itself rather than trusting this endpoint already did (a
+    double-submit from a slow network or an impatient double-tap must
+    never record two payments for one token)."""
+    try:
+        result = store.redeem_payment_token(token)
+    except store.PaymentTokenNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except store.PaymentTokenAlreadyUsedError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except store.PaymentTokenExpiredError as e:
+        raise HTTPException(status_code=410, detail=str(e)) from e
+    store.log_event(
+        result["account_id"], "tool_called",
+        {"tool": "record_payment", "arguments": {"token": token}, "result": result},
+    )
+    return PaymentConfirmOut(
+        amount=result["amount"], months_remaining=result["months_remaining"], next_emi_due_date=result["next_emi_due_date"]
+    )
+
+
+@app.get("/pay/{token}", include_in_schema=False)
+def payment_page(token: str):
+    """Serves the standalone confirm-payment page shell -- deliberately
+    NOT redeeming anything on this GET (a payment link is exactly the
+    kind of URL a chat client, a Telegram link preview, or a bot might
+    pre-fetch; a GET must never have that side effect). The page's own
+    JS calls /pay/{token}/info to render, then POSTs /pay/{token}/confirm
+    only once the borrower actually clicks Confirm."""
+    return FileResponse(_STATIC_DIR / "pay.html")
 
 
 @app.get("/", include_in_schema=False)

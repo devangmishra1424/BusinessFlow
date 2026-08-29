@@ -48,17 +48,36 @@ def test_one_day_beyond_the_heads_up_window_gets_nothing_yet():
 
 def test_due_today_is_not_a_heads_up_case():
     # days_until_due == 0 -- due today isn't "before due" any more, and
-    # isn't past the grace period yet either.
+    # isn't past the grace period yet either. It's the due_now case: no
+    # late fee has kicked in, but "pay now" is exactly the right message.
     account = _account(emi_due_date=_TODAY)
 
-    assert decide_reminder(account, as_of=_TODAY) is None
+    reminder = decide_reminder(account, as_of=_TODAY)
+
+    assert reminder is not None
+    assert reminder.kind == "due_now"
+    assert reminder.days == 0
 
 
-def test_exactly_at_the_grace_period_boundary_gets_no_follow_up():
+def test_exactly_at_the_grace_period_boundary_gets_due_now_not_follow_up():
     account = _account(emi_due_date=date(2026, 8, 18))  # 3 days past due, exactly at GRACE_PERIOD_DAYS
     assert (_TODAY - account.emi_due_date).days == GRACE_PERIOD_DAYS
 
-    assert decide_reminder(account, as_of=_TODAY) is None
+    reminder = decide_reminder(account, as_of=_TODAY)
+
+    assert reminder is not None
+    assert reminder.kind == "due_now"
+    assert reminder.days == GRACE_PERIOD_DAYS
+
+
+def test_one_day_past_due_within_grace_gets_due_now():
+    account = _account(emi_due_date=date(2026, 8, 20))  # 1 day past due, well within the 3-day grace period
+
+    reminder = decide_reminder(account, as_of=_TODAY)
+
+    assert reminder is not None
+    assert reminder.kind == "due_now"
+    assert reminder.days == 1
 
 
 def test_one_day_past_the_grace_period_gets_a_follow_up():
@@ -108,8 +127,9 @@ def test_decide_reminders_against_real_seeded_accounts(reseed_accounts):
     reminders = decide_reminders()
     by_id = {r.account_id: r for r in reminders}
 
-    # BF-1001: 3 days past due -- exactly at the grace boundary, no reminder.
-    assert "BF-1001" not in by_id
+    # BF-1001: 3 days past due -- exactly at the grace boundary, a due_now
+    # reminder (no late fee yet, but "pay now" still applies).
+    assert by_id["BF-1001"].kind == "due_now"
     # BF-1003: has an open dispute -- suppressed regardless of days past due.
     assert "BF-1003" not in by_id
 
@@ -183,6 +203,24 @@ def test_send_reminder_attempts_real_telegram_delivery_when_a_chat_is_linked(res
     store.set_telegram_chat_id("BF-1001", 900999)
 
     delivered = send_reminder("BF-1001", "follow_up", "Your EMI is overdue.")
+
+    assert delivered is False
+
+
+@_pg_skip
+def test_send_reminder_with_a_payment_link_still_attempts_real_delivery(reseed_accounts):
+    # Same "fake chat_id, real rejection" proof as the test above, but
+    # exercising the reply_markup/InlineKeyboardButton construction path --
+    # confirms building a real "Pay now" button doesn't itself raise
+    # before the message even reaches Telegram.
+    from businessflow.accounts import store
+    from businessflow.outbound.send import send_reminder
+
+    store.set_telegram_chat_id("BF-1001", 900999)
+
+    delivered = send_reminder(
+        "BF-1001", "due_now", "Your EMI is due today.", payment_url="https://example.com/pay/faketoken", payment_amount=12500
+    )
 
     assert delivered is False
 

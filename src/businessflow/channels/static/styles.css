@@ -131,6 +131,25 @@ button, input { font-family: inherit; }
 .start-hint { margin: 16px 0 0; font-size: 11.5px; color: var(--text-3); line-height: 1.5; text-align: center; }
 
 /* ============================================================
+   Payment confirmation page (pay.html) -- reuses .start-screen/
+   .start-glow/.start-card/.brand above for the same centered-card
+   shell, adds only what's specific to this one page.
+   ============================================================ */
+.pay-card { text-align: center; }
+.pay-state[hidden] { display: none; }
+.pay-label { margin: 4px 0 10px; font-size: 15px; font-weight: 600; color: var(--text-1); }
+.pay-label-error { color: var(--danger); margin-top: 0; }
+.pay-amount { margin: 0 0 8px; font-family: var(--font-tight); font-size: 34px; font-weight: 800; color: var(--text-0); }
+.pay-sub { margin: 0 0 22px; font-size: 13.5px; color: var(--text-2); }
+.pay-confirm-btn { margin-top: 4px; }
+.pay-hint { margin: 16px 0 0; font-size: 11.5px; color: var(--text-3); line-height: 1.5; }
+.pay-check {
+  width: 56px; height: 56px; margin: 0 auto 14px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 800;
+  background: var(--success-dim); color: var(--success);
+}
+
+/* ============================================================
    Dashboard screen
    ============================================================ */
 .dashboard-screen { position: fixed; inset: 0; display: flex; flex-direction: column; }

@@ -46,3 +46,9 @@ DISPUTE_BLOCKS_AUTOMATED_RESTRUCTURING = True
 # (see SETTLEMENT_DISCOUNT_PCT above) -- it is not a researched real NBFC
 # figure, and a real business adopting this should confirm/adjust it.
 LATE_FEE_FLAT_AMOUNT = 500
+
+# How long a minted "pay now" link (payment_tokens) stays redeemable before
+# it must be re-requested -- long enough that a borrower who taps a
+# Telegram reminder a day or two later still finds it valid, short enough
+# that a leaked/forwarded link doesn't stay usable indefinitely.
+PAYMENT_TOKEN_TTL_HOURS = 72
