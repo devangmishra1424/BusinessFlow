@@ -258,6 +258,23 @@ def main():
                 a,
             )
 
+        # Found live: dispute_open=True was set directly on the account row
+        # for every seeded account that needed it, but nothing ever wrote a
+        # matching disputes row -- so ops/flags.py's "disputed" flag had a
+        # real dispute_open flag but no real reason behind it to surface
+        # (see accounts/store.py's get_latest_open_dispute_reason, and the
+        # ops dashboard's own new "Disputes" section, both of which read
+        # this table directly). Keeps the demo internally consistent: a
+        # disputed seeded account now has the same real backing row a
+        # dispute opened through flag_dispute/the client dashboard's
+        # "Contest" action would.
+        for a in accounts:
+            if a["dispute_open"]:
+                conn.execute(
+                    "insert into disputes (account_id, reason) values (%s, %s)",
+                    (a["account_id"], "An incorrectly applied late fee -- please review and correct it."),
+                )
+
         for account_id, payment_date, amount, on_time in payment_history:
             conn.execute(
                 "insert into payment_history (account_id, payment_date, amount, on_time) values (%s, %s, %s, %s)",

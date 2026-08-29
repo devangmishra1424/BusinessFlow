@@ -141,12 +141,24 @@ class DocumentOut(BaseModel):
     uploaded_at: datetime
 
 
+class WarningOut(BaseModel):
+    label: str  # "overdue" | "disputed" | "broken_promises" -- drives which action(s) the UI offers, never shown directly
+    text: str
+
+
+class MessageOut(BaseModel):
+    message: str
+    delivered_via_telegram: bool
+    created_at: datetime
+
+
 class DashboardResponse(BaseModel):
     account: AccountSnapshotOut
     timeline: list[TimelineEntryOut]
-    warnings: list[str]
+    warnings: list[WarningOut]
     escalations: list[DashboardEscalationOut]
     documents: list[DocumentOut]
+    messages: list[MessageOut]
 
 
 class QuickActionDisputeRequest(BaseModel):
@@ -250,29 +262,37 @@ def _build_emi_timeline(account: Account, days_past_due: int) -> list[dict]:
 # the output (days overdue, late fee amount, broken-promise count) is real,
 # taken from payment_status (itself get_payment_status's own real result) or
 # the flag -- never fabricated or estimated here.
-def _build_warnings(flags: list[Flag], payment_status: dict) -> list[str]:
+def _build_warnings(flags: list[Flag], payment_status: dict) -> list[dict]:
+    """Returns {label, text} per warning, not just text -- label is what
+    the dashboard's own UI uses to decide which action(s) a warning can
+    offer (see channels/static/app.js's WARNING_ACTIONS): "overdue" and
+    "broken_promises" can be paid off or contested, "disputed" is already
+    an active claim under review and offers neither. The label is never
+    shown to the borrower directly -- only text is, same reframing rule
+    as before."""
     warnings = []
     for flag in flags:
         if flag.label == "overdue":
             days = payment_status["days_past_due"]
             if payment_status["late_fee_applicable"]:
-                warnings.append(
+                text = (
                     f"Your EMI is {days} days overdue -- pay soon to avoid a late fee of "
                     f"₹{payment_status['late_fee_amount']:,.2f}."
                 )
             else:
-                warnings.append(f"Your EMI is {days} days overdue -- pay soon.")
+                text = f"Your EMI is {days} days overdue -- pay soon."
         elif flag.label == "disputed":
-            warnings.append("You have an open dispute -- our team is reviewing it.")
+            text = "You have an open dispute -- our team is reviewing it."
         elif flag.label == "broken_promises":
-            warnings.append(f"You have {payment_status['broken_promise_count']} missed payment promises on record.")
+            text = f"You have {payment_status['broken_promise_count']} missed payment promises on record."
         else:
             # Defensive only: no flag label besides the three above exists
             # today (see ops/flags.py's compute_flags). Falling back to the
             # raw, staff-toned reason for an unrecognized future label is a
             # real warning a borrower should still see, wrong tone and all --
             # strictly better than silently dropping it.
-            warnings.append(flag.reason)
+            text = flag.reason
+        warnings.append({"label": flag.label, "text": text})
     return warnings
 
 
@@ -392,7 +412,7 @@ def get_dashboard_endpoint(conversation_id: str):
     return DashboardResponse(
         account=AccountSnapshotOut(**payment_status),
         timeline=[TimelineEntryOut(**entry) for entry in _build_emi_timeline(account, payment_status["days_past_due"])],
-        warnings=_build_warnings(flags, payment_status),
+        warnings=[WarningOut(**w) for w in _build_warnings(flags, payment_status)],
         escalations=[
             DashboardEscalationOut(
                 escalation_id=e.escalation_id, reason=e.reason, status=e.status,
@@ -401,6 +421,13 @@ def get_dashboard_endpoint(conversation_id: str):
             for e in escalations
         ],
         documents=[DocumentOut(**d) for d in documents],
+        # A clarification request is a real message from ops about this
+        # account's flags -- previously visible to the borrower ONLY if
+        # Telegram was linked and delivery succeeded; otherwise it was
+        # silently lost to them (still logged, but nowhere they'd ever
+        # see it). Surfacing the same real history here means it's never
+        # lost, regardless of Telegram.
+        messages=[MessageOut(**m) for m in store.get_clarification_requests(account_id)],
     )
 
 

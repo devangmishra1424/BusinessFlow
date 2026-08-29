@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/styles.css?v=4" />
+<link rel="stylesheet" href="/static/styles.css?v=5" />
 </head>
 <body>
 
@@ -87,6 +87,7 @@
 
     <div class="dash-body" id="dash-body" hidden>
       <div class="dash-warnings" id="dash-warnings"></div>
+      <div class="action-result" id="warnings-action-result" hidden></div>
 
       <section class="dash-hero">
         <div class="hero-identity">
@@ -177,6 +178,12 @@
         <h2 class="dash-section-title">Documents</h2>
         <div class="dash-documents" id="dash-documents"></div>
       </section>
+
+      <section class="dash-section">
+        <h2 class="dash-section-title">Messages from us</h2>
+        <p class="dash-section-sub">Shown here whether or not Telegram is linked -- nothing sent to you is ever only visible there.</p>
+        <div class="dash-messages" id="dash-messages"></div>
+      </section>
     </div>
   </main>
 
@@ -186,11 +193,12 @@
   </button>
 </div>
 
+<div id="chat-backdrop" class="chat-backdrop" hidden></div>
 <div id="chat-screen" class="chat-screen" hidden>
   <header class="chat-header">
     <div class="chat-header-left">
-      <button class="icon-btn" id="chat-back-btn" title="Back to dashboard" hidden>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <button class="icon-btn" id="chat-back-btn" title="Close chat" hidden>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M18 6 6 18M6 6l12 12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
       </button>
       <div class="brand small">
         <div class="brand-mark">BF</div>
@@ -215,6 +223,6 @@
   </form>
 </div>
 
-<script src="/static/app.js?v=3"></script>
+<script src="/static/app.js?v=4"></script>
 </body>
 </html>

@@ -108,6 +108,7 @@ function initials(name) {
    ============================================================ */
 const $startScreen = document.getElementById("start-screen");
 const $chatScreen = document.getElementById("chat-screen");
+const $chatBackdrop = document.getElementById("chat-backdrop");
 const $dashboardScreen = document.getElementById("dashboard-screen");
 const $chatBackBtn = document.getElementById("chat-back-btn");
 const $startForm = document.getElementById("start-form");
@@ -199,10 +200,10 @@ function friendlyStartError(err) {
   return "Couldn't start the chat — please try again in a moment.";
 }
 
-function enterChat() {
-  $startScreen.hidden = true;
-  $dashboardScreen.hidden = true;
-  $chatScreen.hidden = false;
+// Shared by both entry points below -- account chip + the one-time greet
+// message are identical whether chat is opened fullscreen (anonymous, no
+// dashboard behind it at all) or as a panel over the dashboard (verified).
+function _prepareChatContent() {
   const chip = document.getElementById("account-chip");
   if (state.accountId) {
     chip.hidden = false;
@@ -210,12 +211,6 @@ function enterChat() {
   } else {
     chip.hidden = true;
   }
-  // A verified account has a dashboard to go back to; an anonymous chat
-  // never entered one, so there's nothing behind the back arrow for it.
-  $chatBackBtn.hidden = !state.accountId;
-  // Only greet once per conversation -- this is also the "Chat with us"
-  // entry point from the dashboard, which can be opened/closed repeatedly
-  // without re-adding the intro line each time.
   if (!$messageList.children.length) {
     addSystemMessage(
       state.accountId
@@ -224,6 +219,51 @@ function enterChat() {
     );
   }
   document.getElementById("message-input").focus();
+}
+
+// Anonymous entry point only (start-form's own submit handler, see
+// below) -- chat genuinely IS the whole screen here, nothing exists
+// behind it to return to, so there's no close/back button and no panel
+// treatment at all.
+function enterChat() {
+  $startScreen.hidden = true;
+  $dashboardScreen.hidden = true;
+  $chatScreen.classList.remove("as-panel", "open");
+  $chatScreen.hidden = false;
+  $chatBackBtn.hidden = true;
+  _prepareChatContent();
+}
+
+// The dashboard's "Chat with us" entry point -- opens as a real slide-in
+// panel OVER the dashboard, which is deliberately never hidden
+// underneath (unlike enterChat's anonymous case above). Closing this is
+// just removing these two classes; there's no "screen" to navigate back
+// from, so it can never get a borrower stuck the way a full-screen swap
+// with a broken/missing back button could.
+function openChatPanel() {
+  $chatBackBtn.hidden = false;
+  $chatScreen.classList.add("as-panel");
+  $chatScreen.hidden = false;
+  $chatBackdrop.hidden = false;
+  setTimeout(() => {
+    $chatScreen.classList.add("open");
+    $chatBackdrop.classList.add("open");
+  }, 10);
+  _prepareChatContent();
+}
+
+function closeChatPanel() {
+  $chatScreen.classList.remove("open");
+  $chatBackdrop.classList.remove("open");
+  setTimeout(() => {
+    $chatScreen.hidden = true;
+    $chatBackdrop.hidden = true;
+    $chatScreen.classList.remove("as-panel");
+  }, 300);
+  // Chat may have driven tool calls (a dispute flagged, an escalation
+  // raised, a payment logged) since the dashboard was last shown -- the
+  // dashboard was never hidden, but its numbers could be stale now.
+  loadDashboard();
 }
 
 // Shared by both the chat screen's restart button and the dashboard's --
@@ -235,20 +275,21 @@ function restartAll() {
   document.getElementById("message-list").innerHTML = "";
   document.getElementById("start-access-key").value = "";
   $chatScreen.hidden = true;
+  $chatScreen.classList.remove("as-panel", "open");
+  $chatBackdrop.hidden = true;
+  $chatBackdrop.classList.remove("open");
   $dashboardScreen.hidden = true;
   $startScreen.hidden = false;
 }
 
 document.getElementById("restart-btn").addEventListener("click", restartAll);
 
-$chatBackBtn.addEventListener("click", () => {
-  $chatScreen.hidden = true;
-  $dashboardScreen.hidden = false;
-  // Chat may have driven tool calls (a dispute flagged, an escalation
-  // raised, a payment logged) since the dashboard was last shown -- refetch
-  // rather than show stale numbers.
-  loadDashboard();
-});
+// Closing the panel and the anonymous full-screen exit both land here --
+// anonymous chat has no dashboard to return to (restartAll goes to the
+// start screen instead), so this only ever needs to close the panel; the
+// button itself stays hidden the whole time for anonymous (see enterChat).
+$chatBackBtn.addEventListener("click", closeChatPanel);
+$chatBackdrop.addEventListener("click", closeChatPanel);
 
 /* ============================================================
    Chat screen
@@ -406,16 +447,85 @@ function ringChartSvg(fraction, color) {
 
 const WARNING_ICON =
   '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const CHEVRON_ICON =
+  '<svg class="dash-warning-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const DOC_ICON =
   '<svg class="doc-icon" width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M14 2v6h6" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>';
 
-function renderDashboard(data) {
-  const { account, timeline, warnings, escalations, documents } = data;
+// Which warning labels can be acted on, and what each button really does
+// -- wired to the exact same quick-action endpoints as the Quick Actions
+// cards below, never a separate/fake code path. "disputed" is deliberately
+// NOT in this map: it's already an active claim under review (raised via
+// one of these same "Contest" buttons, or by ops directly), so its
+// expanded body shows a plain note instead of buttons -- see ops/flags.py
+// and _build_warnings in browser_api.py for the label contract.
+const WARNING_ACTIONS = {
+  overdue: {
+    resolveLabel: "Get a payment link",
+    resolve: (account) =>
+      postPaymentLink(state.conversationId, account.emi_amount + (account.late_fee_applicable ? account.late_fee_amount : 0)),
+    resolveResultHtml: (result) =>
+      `Payment link for ${escapeHtml(fmtInr(result.amount))}:<br><a href="${escapeHtml(result.payment_link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(result.payment_link)}</a>`,
+    // A link alone doesn't move any account field until it's actually
+    // paid -- same reasoning as the Quick Actions "Get a payment link"
+    // card, which also never refreshes the dashboard after generating one.
+    refreshAfterResolve: false,
+    contestReason: (text) => `Contesting overdue status: ${text}`,
+  },
+  broken_promises: {
+    resolveLabel: "Talk to a human",
+    resolve: () => postAgent(state.conversationId, "Following up on the missed payment promises flagged on my account"),
+    resolveResultHtml: (result) =>
+      escapeHtml(`Request sent — our team has been notified (status: ${STATUS_LABELS[result.status] || result.status}).`),
+    refreshAfterResolve: true, // a new escalation just appeared in "Your requests"
+    contestReason: (text) => `Contesting missed payment promises: ${text}`,
+  },
+};
 
-  // Warnings -- rendered exactly as the backend wrote them, never re-worded.
+// Set fresh by every renderDashboard call below -- the warning-action
+// click handler (wired once, outside renderDashboard) reads these at
+// click time so it always acts on the row the borrower actually sees,
+// not a stale snapshot from an earlier render.
+let _lastWarnings = [];
+let _lastAccount = null;
+
+function renderDashboard(data) {
+  const { account, timeline, warnings, escalations, documents, messages } = data;
+  _lastWarnings = warnings;
+  _lastAccount = account;
+
+  // Warnings -- text is rendered exactly as the backend wrote it, never
+  // re-worded; label decides which action(s) (if any) the expanded body
+  // offers. Collapsed by default, same as escalations/documents below.
   document.getElementById("dash-warnings").innerHTML = warnings
-    .map((w) => `<div class="dash-warning">${WARNING_ICON}<span>${escapeHtml(w)}</span></div>`)
+    .map((w, i) => {
+      const cfg = WARNING_ACTIONS[w.label];
+      const body = cfg
+        ? `<div class="dash-warning-actions">
+             <button type="button" class="btn-primary" data-warning-action="resolve" data-warning-idx="${i}">${escapeHtml(cfg.resolveLabel)}</button>
+             <button type="button" class="btn-cancel" data-warning-action="contest" data-warning-idx="${i}">Contest this</button>
+           </div>`
+        : `<p class="dash-warning-note">This is already an open claim -- our team is reviewing it, no further action needed here.</p>`;
+      return `<div class="dash-warning">
+        <button type="button" class="dash-warning-head" data-warning-toggle="${i}">
+          ${WARNING_ICON}<span>${escapeHtml(w.text)}</span>${CHEVRON_ICON}
+        </button>
+        <div class="dash-warning-body" id="warning-body-${i}" hidden>${body}</div>
+      </div>`;
+    })
     .join("");
+
+  // Messages from ops -- same list regardless of Telegram delivery, so a
+  // clarification request is never lost just because Telegram wasn't
+  // linked or delivery failed (see MessageOut's docstring in browser_api.py).
+  document.getElementById("dash-messages").innerHTML = messages.length
+    ? messages
+        .map(
+          (m) =>
+            `<div class="dash-msg-card"><div><p class="dash-msg-text">${escapeHtml(m.message)}</p><p class="dash-msg-meta">${fmtDateTime(m.created_at)}</p></div><span class="dash-msg-badge ${m.delivered_via_telegram ? "yes" : "no"}">${m.delivered_via_telegram ? "Sent via Telegram" : "Telegram not linked"}</span></div>`
+        )
+        .join("")
+    : `<p class="dash-no-data">No messages from us yet.</p>`;
 
   // Hero identity
   document.getElementById("dash-avatar").textContent = initials(account.borrower_name);
@@ -485,10 +595,58 @@ function renderDashboard(data) {
     : `<p class="dash-no-data">No documents uploaded yet.</p>`;
 }
 
+// Wired once, not per-render -- #dash-warnings' own innerHTML is fully
+// replaced on every renderDashboard call, so binding to individual
+// buttons there would leak listeners (and silently stop working the
+// moment a warning is added/removed). Delegation on the stable container
+// means this keeps working across every reload.
+document.getElementById("dash-warnings").addEventListener("click", async (e) => {
+  const toggleBtn = e.target.closest("[data-warning-toggle]");
+  if (toggleBtn) {
+    const idx = toggleBtn.dataset.warningToggle;
+    const $body = document.getElementById(`warning-body-${idx}`);
+    const opening = $body.hidden;
+    $body.hidden = !opening;
+    toggleBtn.closest(".dash-warning").classList.toggle("open", opening);
+    return;
+  }
+
+  const actionBtn = e.target.closest("[data-warning-action]");
+  if (!actionBtn) return;
+  const warning = _lastWarnings[Number(actionBtn.dataset.warningIdx)];
+  const cfg = warning && WARNING_ACTIONS[warning.label];
+  if (!cfg) return;
+  const $result = document.getElementById("warnings-action-result");
+  actionBtn.disabled = true;
+  try {
+    if (actionBtn.dataset.warningAction === "resolve") {
+      const result = await cfg.resolve(_lastAccount);
+      showActionResult($result, cfg.resolveResultHtml(result), true);
+      if (cfg.refreshAfterResolve) loadDashboard();
+    } else {
+      const result = await postDispute(state.conversationId, cfg.contestReason(warning.text));
+      showActionResult(
+        $result,
+        escapeHtml(
+          result.already_open
+            ? "You already have an open dispute — our team is reviewing it."
+            : "Dispute raised — our team will review it."
+        ),
+        true
+      );
+      loadDashboard(); // a "disputed" warning + a new entry in the ops-side Disputes section just appeared
+    }
+  } catch (err) {
+    showActionResult($result, friendlyActionError(err), false);
+  } finally {
+    actionBtn.disabled = false;
+  }
+});
+
 document.getElementById("dash-retry-btn").addEventListener("click", loadDashboard);
 document.getElementById("dash-refresh-btn").addEventListener("click", loadDashboard);
 document.getElementById("dash-restart-btn").addEventListener("click", restartAll);
-document.getElementById("dash-chat-btn").addEventListener("click", enterChat);
+document.getElementById("dash-chat-btn").addEventListener("click", openChatPanel);
 
 /* ============================================================
    Quick actions -- each POSTs directly (bypassing the LLM, exactly like
@@ -511,12 +669,23 @@ function friendlyActionError(err) {
   return "Something went wrong — please check your connection and try again.";
 }
 
+// Found live: each quick-action card toggled only its OWN form, so
+// opening "Get a payment link" never closed "Raise a dispute" if it was
+// already open -- clicking through all three left all three expanded at
+// once instead of one at a time. _allActionForms is the shared registry
+// every wireActionToggle call adds itself to, so opening one can close
+// the rest.
+const _allActionForms = [];
+
 function wireActionToggle(btnId, formId, resultId) {
   const $btn = document.getElementById(btnId);
   const $form = document.getElementById(formId);
   const $result = document.getElementById(resultId);
+  _allActionForms.push($form);
   $btn.addEventListener("click", () => {
-    $form.hidden = !$form.hidden;
+    const opening = $form.hidden;
+    _allActionForms.forEach((f) => { f.hidden = true; });
+    $form.hidden = !opening;
     if (!$form.hidden) $result.hidden = true;
   });
   return { $form, $result };

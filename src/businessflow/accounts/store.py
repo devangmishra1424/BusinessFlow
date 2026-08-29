@@ -206,6 +206,31 @@ def open_dispute(account_id: str, reason: str) -> bool:
     return True
 
 
+def get_disputes_for_account(account_id: str) -> list[dict]:
+    """Every dispute ever opened on this account, newest first -- the
+    real reason text a borrower (or a warning's "Contest" action) gave,
+    which flags.py's own "disputed" flag never carries (it's a fixed
+    generic string, not this). Ops has had no way to see WHY an account
+    is disputed without a direct database query until this existed."""
+    rows = get_connection().execute(
+        "select reason, status, opened_at, resolved_at from disputes where account_id = %s order by opened_at desc",
+        (account_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_latest_open_dispute_reason(account_id: str) -> str | None:
+    """The single most recent still-open dispute's real reason -- what
+    flags.py's compute_flags uses instead of a generic "has an open,
+    unresolved dispute" string, so an ops operator glancing at the flags
+    list sees the actual claim, not just that one exists."""
+    row = get_connection().execute(
+        "select reason from disputes where account_id = %s and status = 'open' order by opened_at desc limit 1",
+        (account_id,),
+    ).fetchone()
+    return row["reason"] if row else None
+
+
 def set_interest_rate_pct(account_id: str, interest_rate_pct: float) -> None:
     """Writes a real, extracted interest rate onto the account row --
     called once, right after a loan_agreement upload's structured

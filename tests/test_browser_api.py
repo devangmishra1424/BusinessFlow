@@ -231,15 +231,17 @@ def test_dashboard_reframes_ops_flags_into_borrower_toned_warnings(reseed_accoun
 
     assert response.status_code == 200
     warnings = response.json()["warnings"]
+    texts = [w["text"] for w in warnings]
 
     assert len(warnings) == 3
-    assert any("20 days overdue" in w and "late fee" in w and "500" in w for w in warnings)
-    assert any("open dispute" in w and "reviewing" in w for w in warnings)
-    assert any("2 missed payment promises" in w for w in warnings)
+    assert {w["label"] for w in warnings} == {"overdue", "disputed", "broken_promises"}
+    assert any("20 days overdue" in t and "late fee" in t and "500" in t for t in texts)
+    assert any("open dispute" in t and "reviewing" in t for t in texts)
+    assert any("2 missed payment promises" in t for t in texts)
     # The reframing is deliberate -- never the raw, staff-toned ops/flags.py
     # wording verbatim (see that module's Flag.reason strings).
-    assert not any("grace period" in w for w in warnings)
-    assert not any("unresolved" in w for w in warnings)
+    assert not any("grace period" in t for t in texts)
+    assert not any("unresolved" in t for t in texts)
 
 
 # ---------------------------------------------------------------------------

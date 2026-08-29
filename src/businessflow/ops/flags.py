@@ -40,7 +40,8 @@ def compute_flags(account: Account, as_of=None) -> list[Flag]:
         ))
 
     if account.dispute_open:
-        flags.append(Flag("disputed", "has an open, unresolved dispute"))
+        real_reason = store.get_latest_open_dispute_reason(account.account_id)
+        flags.append(Flag("disputed", real_reason or "has an open, unresolved dispute"))
 
     broken = account.broken_promise_count()
     if broken >= BROKEN_PROMISES_BEFORE_MANDATORY_ESCALATION:

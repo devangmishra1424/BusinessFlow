@@ -1137,6 +1137,26 @@ function renderDetail(a, documents) {
         .join("")
     : `<p class="no-data">No promises to pay logged.</p>`;
 
+  // The real reason text behind THIS account's dispute(s) -- previously
+  // invisible anywhere in the ops UI (the flags list only ever showed a
+  // fixed generic "has an open, unresolved dispute" string; see
+  // flags.py). Matters directly for the client dashboard's "Contest"
+  // warning action: an operator opening this profile needs to see WHAT
+  // was actually contested, not just that something was.
+  const disputesHtml = a.disputes.length
+    ? a.disputes
+        .map(
+          (d) => `<div class="promise-row">
+            <div class="promise-dot ${d.status === "open" ? "broken" : "kept"}">${d.status === "open" ? "!" : "✓"}</div>
+            <div class="promise-info">
+              ${escapeHtml(d.reason)}
+              <div class="promise-meta">opened ${fmtDate(d.opened_at.slice(0, 10))} · ${d.status}${d.resolved_at ? ` ${fmtDate(d.resolved_at.slice(0, 10))}` : ""}</div>
+            </div>
+          </div>`
+        )
+        .join("")
+    : `<p class="no-data">No disputes on this account.</p>`;
+
   const escalationsHtml = a.escalations.length
     ? a.escalations
         .slice()
@@ -1276,6 +1296,12 @@ function renderDetail(a, documents) {
             <p class="section-title">Promises to pay <span class="count">${a.promises.length}</span></p>
             <p class="section-subtitle">Commitments the borrower made to pay by a specific date — kept, broken, or still pending.</p>
             ${promisesHtml}
+          </div>
+
+          <div class="section-block">
+            <p class="section-title">Disputes <span class="count">${a.disputes.length}</span></p>
+            <p class="section-subtitle">The borrower's own stated reason for each dispute -- including one raised via "Contest" on their dashboard.</p>
+            ${disputesHtml}
           </div>
 
           <div class="section-block">

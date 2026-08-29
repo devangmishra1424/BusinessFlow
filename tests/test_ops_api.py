@@ -146,6 +146,15 @@ def test_get_account_detail_includes_flags_promises_and_payment_history(reseed_a
     assert len(body["promises"]) >= 2
     assert isinstance(body["payment_history"], list)
 
+    # The "disputed" flag's reason is the real dispute's own text, not a
+    # generic placeholder -- and that same real reason is independently
+    # visible via the new disputes list, not just embedded in the flag.
+    assert len(body["disputes"]) >= 1
+    real_reason = body["disputes"][0]["reason"]
+    disputed_flag_reason = next(f["reason"] for f in body["flags"] if f["label"] == "disputed")
+    assert disputed_flag_reason == real_reason
+    assert disputed_flag_reason != "has an open, unresolved dispute"
+
 
 @_pg_skip
 @_ops_key_skip

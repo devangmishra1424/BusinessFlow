@@ -143,6 +143,13 @@ class PromiseOut(BaseModel):
     kept: bool | None
 
 
+class DisputeOut(BaseModel):
+    reason: str
+    status: str  # 'open' | 'resolved'
+    opened_at: datetime
+    resolved_at: datetime | None
+
+
 class MetricsOut(BaseModel):
     since_hours: float
     event_counts: dict[str, int]
@@ -262,6 +269,7 @@ class AccountDetailOut(AccountSummaryOut):
     dispute_open: bool
     payment_history: list[PaymentRecordOut]
     promises: list[PromiseOut]
+    disputes: list[DisputeOut]
     escalations: list[EscalationOut]
     clarification_requests: list[ClarificationRequestOut]
 
@@ -355,6 +363,7 @@ def get_account(account_id: str):
             )
             for e in escalations
         ],
+        disputes=[DisputeOut(**d) for d in store.get_disputes_for_account(account_id)],
         clarification_requests=[
             ClarificationRequestOut(**c) for c in store.get_clarification_requests(account_id)
         ],

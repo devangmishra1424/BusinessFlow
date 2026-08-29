@@ -185,14 +185,28 @@ button, input { font-family: inherit; }
 
 .dash-body { max-width: 860px; width: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
 
-/* Warnings -- prominent, near the top, never re-worded client-side */
+/* Warnings -- prominent, near the top, text never re-worded client-side.
+   Each row is a clickable header + a collapsible body offering real
+   Resolve/Contest actions (see WARNING_ACTIONS in app.js); "disputed"
+   warnings expand to a plain note instead, since that's already an open
+   claim under review. */
 .dash-warnings { display: flex; flex-direction: column; gap: 8px; }
 .dash-warning {
-  display: flex; align-items: flex-start; gap: 10px; background: var(--danger-dim);
-  border: 1px solid rgba(242, 131, 111, 0.3); border-radius: var(--radius-md); padding: 12px 15px;
-  color: var(--text-0); font-size: 13.5px; line-height: 1.5; animation: rise 0.4s var(--ease);
+  background: var(--danger-dim); border: 1px solid rgba(242, 131, 111, 0.3); border-radius: var(--radius-md);
+  color: var(--text-0); font-size: 13.5px; line-height: 1.5; animation: rise 0.4s var(--ease); overflow: hidden;
 }
-.dash-warning svg { flex-shrink: 0; margin-top: 1px; color: var(--danger); }
+.dash-warning-head {
+  display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 12px 15px; border: none;
+  background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.dash-warning-head > span { flex: 1; }
+.dash-warning-head svg { flex-shrink: 0; margin-top: 1px; color: var(--danger); }
+.dash-warning-chevron { color: var(--text-3) !important; transition: transform 0.2s var(--ease); }
+.dash-warning.open .dash-warning-chevron { transform: rotate(180deg); }
+.dash-warning-body { padding: 0 15px 14px; display: flex; flex-direction: column; gap: 10px; }
+.dash-warning-body[hidden] { display: none; }
+.dash-warning-note { font-size: 12.5px; color: var(--text-2); margin: 0; }
+.dash-warning-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* Hero */
 .dash-hero {
@@ -325,6 +339,22 @@ button, input { font-family: inherit; }
 }
 .doc-download:hover { filter: brightness(1.08); }
 
+/* Messages from ops -- same list whether or not Telegram delivery succeeded */
+.dash-section-sub { font-size: 12px; color: var(--text-3); margin: -8px 0 12px; }
+.dash-messages { display: flex; flex-direction: column; gap: 10px; }
+.dash-msg-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 13px 15px;
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+}
+.dash-msg-text { font-size: 13px; color: var(--text-0); line-height: 1.45; margin: 0 0 4px; }
+.dash-msg-meta { font-size: 11.5px; color: var(--text-3); }
+.dash-msg-badge {
+  flex-shrink: 0; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 4px 10px; border-radius: var(--radius-pill); white-space: nowrap;
+}
+.dash-msg-badge.yes { color: var(--success); background: var(--success-dim); }
+.dash-msg-badge.no { color: var(--text-3); background: var(--border); }
+
 /* Floating chat entry point */
 .dash-chat-fab {
   position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 5;
@@ -340,6 +370,27 @@ button, input { font-family: inherit; }
    ============================================================ */
 .chat-screen { position: fixed; inset: 0; display: flex; flex-direction: column; }
 .chat-screen[hidden] { display: none; }
+
+/* Panel mode -- opened via the dashboard's "Chat with us" button. The
+   dashboard is never hidden underneath (unlike the anonymous/no-.as-panel
+   case above, which really is the whole screen) -- closing this is just
+   removing these two classes, nothing to "navigate back" from. */
+.chat-backdrop {
+  position: fixed; inset: 0; background: rgba(3, 8, 15, 0.55); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+  opacity: 0; transition: opacity 0.25s var(--ease); z-index: 40;
+}
+.chat-backdrop[hidden] { display: none; }
+.chat-backdrop.open { opacity: 1; }
+
+.chat-screen.as-panel {
+  inset: 0 0 0 auto; width: min(440px, 100vw); border-left: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-lift); background: var(--bg-0);
+  transform: translateX(100%); transition: transform 0.3s var(--ease); z-index: 41;
+}
+.chat-screen.as-panel.open { transform: translateX(0); }
+@media (max-width: 560px) {
+  .chat-screen.as-panel { width: 100vw; }
+}
 
 .chat-header {
   display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 20px;
