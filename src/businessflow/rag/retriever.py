@@ -8,9 +8,10 @@ regulatory circulars), not just the hand-written policy KB it started as.
 from rank_bm25 import BM25Okapi
 from sentence_transformers import CrossEncoder
 
+from businessflow.accounts.db import get_connection
 from businessflow.rag import query_llm
 from businessflow.rag.embeddings import embed_query
-from businessflow.rag.store import get_collection
+from businessflow.rag.store import embedding_literal
 from businessflow.rag.tokenize import dominant_script as _dominant_script
 from businessflow.rag.tokenize import tokenize as _tokenize
 
@@ -42,45 +43,28 @@ class DocumentRetriever:
     one for the lifetime of a long-running process."""
 
     def __init__(self):
-        self._collection = get_collection()
-        corpus = self._collection.get(include=["documents", "metadatas"])
+        self._conn = get_connection()
 
-        # Active means no real superseded_at value (see ingest.py's
+        # Active means superseded_at is null (see ingest.py's
         # _supersede_existing_chunks) -- a corrected document's old chunks
         # stay in the store for the compliance trail, but must never be
-        # retrievable. Filtered here in Python (not via a Chroma `where`)
-        # because this call already pulls every row's metadata into memory
-        # regardless, and Chroma's own where-filter grammar (verified
-        # against the installed chromadb version) has no "$eq: None" /
-        # "field is absent" operator to express this directly with -- see
-        # _embed_candidates below for where that verified-real limitation
-        # actually matters (a live ANN query that can't just be scanned in
-        # Python afterward).
-        active = [
-            (chunk_id, document, metadata)
-            for chunk_id, document, metadata in zip(corpus["ids"], corpus["documents"], corpus["metadatas"])
-            if not metadata.get("superseded_at")
+        # retrievable. A plain WHERE clause now; the live ANN query in
+        # _embed_candidates uses the same condition directly rather than
+        # needing a separately-tracked exclusion list the way Chroma's
+        # filter grammar (no "is null" operator) once required.
+        rows = self._conn.execute(
+            "select id, document_text, source_document, document_type, account_id, chunk_index, headings "
+            "from document_chunks where superseded_at is null"
+        ).fetchall()
+        self._ids = [r["id"] for r in rows]
+        self._texts = [r["document_text"] for r in rows]
+        self._metadatas = [
+            {
+                "source_document": r["source_document"], "document_type": r["document_type"],
+                "account_id": r["account_id"], "chunk_index": r["chunk_index"], "headings": r["headings"],
+            }
+            for r in rows
         ]
-        self._ids = [a[0] for a in active]
-        self._texts = [a[1] for a in active]
-        self._metadatas = [a[2] for a in active]
-
-        # The set of superseded_at values actually in use right now,
-        # captured once here (not recomputed per query) for the same
-        # rebuild-after-ingest reason the class docstring already gives
-        # for self._bm25/self._ids going stale otherwise. _embed_candidates
-        # uses it to exclude superseded chunks from Chroma's own ANN
-        # search via $nin -- confirmed empirically (chromadb 1.5.9) that:
-        # $eq/$ne with a None operand both raise ValueError (no
-        # LiteralValue for None), and $ne against an arbitrary sentinel
-        # matches BOTH an absent key AND any differently-valued real
-        # timestamp, so it can't isolate "absent" on its own. $nin against
-        # this concrete, currently-real list of values is what actually
-        # works: it drops every chunk that has one of them, and passes
-        # through every chunk that has no superseded_at key at all.
-        self._superseded_at_values = list(
-            {metadata["superseded_at"] for metadata in corpus["metadatas"] if metadata.get("superseded_at")}
-        )
 
         self._bm25 = BM25Okapi([_tokenize(t) for t in self._texts]) if self._texts else None
 
@@ -144,40 +128,36 @@ class DocumentRetriever:
 
     def _embed_candidates(self, query: str, candidate_pool: int, allowed_scopes: set, document_type: str | None = None) -> dict:
         """Runs one embedding query; returns {doc_id: distance} in the
-        best-first order Chroma already returns them in.
+        best-first order the ORDER BY already returns them in.
 
-        Excludes superseded chunks via self._superseded_at_values (see
-        __init__) -- this can't be left to Python-side filtering after the
-        fact the way __init__'s own corpus load is: this is a live ANN
-        query straight against the collection, capped at candidate_pool
-        results, so a stale chunk with a near-identical embedding to its
-        own corrected successor (exactly the case that motivates this
-        feature) could otherwise occupy one of a small pool's slots ahead
+        A live ANN query straight against document_chunks, capped at
+        candidate_pool results -- excludes superseded chunks in the same
+        WHERE clause (not left to Python-side filtering after the fact,
+        the way __init__'s own corpus load can afford to be): a stale
+        chunk with a near-identical embedding to its own corrected
+        successor could otherwise occupy one of a small pool's slots ahead
         of a genuinely active candidate, or get returned as a doc_id
-        self._ids (active-only) can't look up at all. The $nin clause is
-        only added when there's actually something to exclude -- an empty
-        $nin list is rejected by Chroma (confirmed empirically), and with
-        nothing superseded yet the plain account_id filter is already the
-        complete condition.
+        self._ids (active-only) can't look up at all.
         """
-        conditions = [{"account_id": {"$in": list(allowed_scopes)}}]
-        if self._superseded_at_values:
-            conditions.append({"superseded_at": {"$nin": self._superseded_at_values}})
+        params: list = [embedding_literal(embed_query(query))]
+        where = "account_id = any(%s) and superseded_at is null"
+        params.append(list(allowed_scopes))
         if document_type is not None:
-            conditions.append({"document_type": document_type})
-        # Chroma rejects a single-clause $and (confirmed empirically, same
-        # as the existing $nin-only-when-non-empty guard above) -- the
-        # plain condition is used directly unless there's actually more
-        # than one to combine.
-        where = conditions[0] if len(conditions) == 1 else {"$and": conditions}
-        result = self._collection.query(query_embeddings=[embed_query(query)], n_results=candidate_pool, where=where)
-        return dict(zip(result["ids"][0], result["distances"][0]))
+            where += " and document_type = %s"
+            params.append(document_type)
+        params.append(candidate_pool)
+        rows = self._conn.execute(
+            f"select id, embedding <=> %s::vector as distance from document_chunks "
+            f"where {where} order by distance limit %s",
+            tuple(params),
+        ).fetchall()
+        return {r["id"]: r["distance"] for r in rows}
 
     def _embedding_only_results(
         self, query: str, top_k: int, candidate_pool: int, allowed_scopes: set, document_type: str | None = None,
     ) -> list[dict]:
         distance_by_id = self._embed_candidates(query, candidate_pool, allowed_scopes, document_type)
-        ranked_ids = list(distance_by_id)  # already best-first from Chroma
+        ranked_ids = list(distance_by_id)  # already best-first from the ORDER BY
         return [
             {
                 "text": self._texts[i],

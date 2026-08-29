@@ -140,3 +140,44 @@ create table events (
     details     jsonb not null default '{}',
     created_at  timestamptz not null default now()
 );
+
+-- RAG vector store: every ingested chunk (general policy KB, or a
+-- specific borrower's uploaded loan agreement/KYC/etc), on the same
+-- Postgres project as everything above rather than a separate local
+-- ChromaDB file -- that file was a per-machine artifact nothing in the
+-- deploy process ever rebuilt, so a fresh VM deploy silently ran with an
+-- empty index instead of failing loudly. See rag/store.py, rag/ingest.py,
+-- rag/retriever.py.
+create extension if not exists vector;
+
+create table document_chunks (
+    id               text primary key,  -- sha1(source_document :: chunk_index :: ingested_at), see ingest.py
+    source_document  text not null,
+    document_type    text not null,  -- 'policy' | 'loan_agreement' | 'kyc' | 'regulatory' | 'other'
+
+    -- 'general' sentinel for documents that apply to every borrower (the
+    -- hand-written policy KB); a real account_id scopes a document to one
+    -- specific borrower's own upload. Not an FK to accounts(account_id) --
+    -- 'general' isn't a real account, and a chunk must survive its
+    -- account being deleted (it never is today, but nothing here should
+    -- assume that).
+    account_id       text not null default 'general',
+
+    chunk_index      integer not null,
+    headings         text not null default '',  -- e.g. "Restructuring options > One-time settlement"
+    document_text    text not null,
+    embedding        vector(384) not null,  -- intfloat/multilingual-e5-small's real output size
+
+    -- NULL means active. A corrected re-upload of the same source_document
+    -- marks the previous generation's chunks superseded (never deletes
+    -- them, so a compliance/history look-back can still see what a
+    -- document said before) -- see ingest.py's _supersede_existing_chunks.
+    -- Retrieval only ever considers superseded_at is null.
+    superseded_at    timestamptz,
+
+    created_at       timestamptz not null default now()
+);
+
+create index document_chunks_embedding_idx on document_chunks using hnsw (embedding vector_cosine_ops);
+create index document_chunks_account_active_idx on document_chunks (account_id) where superseded_at is null;
+create index document_chunks_source_document_idx on document_chunks (source_document);

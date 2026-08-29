@@ -7,7 +7,8 @@ onnxruntime
 groq                # Agent LLM (Llama-3.1-8B), the one deliberate API call
 
 # --- RAG ---
-chromadb            # vector store, no separate server process
+# Vector store is pgvector on the same Supabase Postgres project as
+# everything else (see rag/store.py) -- no separate vector-store package.
 sentence-transformers[onnx]  # multilingual-e5-small (bi-encoder) + cross-encoder reranker, ONNX backend
 rank-bm25           # BM25 half of hybrid retrieval
 docling             # document ingestion (PDF/markdown/docx -> heading-aware chunks)

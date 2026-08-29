@@ -119,7 +119,7 @@ def test_hindi_document_candidate_is_not_demoted_by_the_english_only_reranker(mo
     import tempfile
 
     from businessflow.rag.ingest import ingest_document
-    from businessflow.rag.store import get_collection
+    from businessflow.rag.store import delete_chunks_for_document
     from businessflow.rag.tokenize import dominant_script
 
     query = (
@@ -211,7 +211,7 @@ def test_hindi_document_candidate_is_not_demoted_by_the_english_only_reranker(mo
     finally:
         # Same discipline as test_one_borrowers_documents_are_not_visible_
         # to_another: clean the persistent store, not just the temp file.
-        get_collection().delete(where={"source_document": temp_path})
+        delete_chunks_for_document(temp_path)
         os.unlink(temp_path)
 
 
@@ -277,7 +277,7 @@ def test_reingesting_a_file_path_supersedes_instead_of_deleting():
     import tempfile
 
     from businessflow.rag.ingest import ingest_document
-    from businessflow.rag.store import get_collection
+    from businessflow.rag.store import delete_chunks_for_document, get_chunk_texts_for_document
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f:
         f.write("# Loan terms v1\n\nThe original waiver percentage is exactly twelve percent.\n")
@@ -314,23 +314,22 @@ def test_reingesting_a_file_path_supersedes_instead_of_deleting():
         # Bypassing DocumentRetriever entirely: the OLD chunk must still
         # be physically present, not deleted, with a real superseded_at
         # timestamp -- that's the actual compliance-trail requirement.
-        raw = get_collection().get(where={"source_document": temp_path}, include=["documents", "metadatas"])
-        raw_by_text = dict(zip(raw["documents"], raw["metadatas"]))
-        old_entries = [(text, meta) for text, meta in raw_by_text.items() if "twelve percent" in text.lower()]
-        new_entries = [(text, meta) for text, meta in raw_by_text.items() if "forty percent" in text.lower()]
+        raw = get_chunk_texts_for_document(temp_path)
+        old_entries = [r for r in raw if "twelve percent" in r["document_text"].lower()]
+        new_entries = [r for r in raw if "forty percent" in r["document_text"].lower()]
 
-        assert old_entries, "the superseded chunk must still be present via a direct collection.get(), not deleted"
-        assert new_entries, "the new chunk must be present via a direct collection.get()"
-        for _, meta in old_entries:
-            assert meta.get("superseded_at"), f"superseded chunk must carry a real superseded_at timestamp, got {meta}"
-        for _, meta in new_entries:
-            assert not meta.get("superseded_at"), f"active chunk must not carry a superseded_at value, got {meta}"
+        assert old_entries, "the superseded chunk must still be present via a direct query, not deleted"
+        assert new_entries, "the new chunk must be present via a direct query"
+        for r in old_entries:
+            assert r["superseded_at"], f"superseded chunk must carry a real superseded_at timestamp, got {r}"
+        for r in new_entries:
+            assert not r["superseded_at"], f"active chunk must not carry a superseded_at value, got {r}"
     finally:
         # Clean up BOTH active and superseded rows for this file_path --
-        # collection.delete() has no "active only" restriction, so this
-        # removes the whole history, same discipline as the other tests
-        # in this file that leave no permanent test data behind.
-        get_collection().delete(where={"source_document": temp_path})
+        # delete_chunks_for_document has no "active only" restriction, so
+        # this removes the whole history, same discipline as the other
+        # tests in this file that leave no permanent test data behind.
+        delete_chunks_for_document(temp_path)
         os.unlink(temp_path)
 
 
@@ -339,7 +338,7 @@ def test_one_borrowers_documents_are_not_visible_to_another():
     import tempfile
 
     from businessflow.rag.ingest import ingest_document
-    from businessflow.rag.store import get_collection
+    from businessflow.rag.store import delete_chunks_for_document
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f:
         f.write("# Priya's loan agreement\n\nA special one-time waiver clause applies to this loan.\n")
@@ -358,5 +357,5 @@ def test_one_borrowers_documents_are_not_visible_to_another():
         # Clean up the persistent store, not just the temp file -- this
         # test would otherwise leave permanent test data mixed in with
         # real ingested documents.
-        get_collection().delete(where={"source_document": temp_path})
+        delete_chunks_for_document(temp_path)
         os.unlink(temp_path)

@@ -480,7 +480,7 @@ def test_upload_document_ingests_into_the_account_scoped_rag_store(reseed_accoun
     from pathlib import Path
 
     from businessflow.rag.retriever import DocumentRetriever
-    from businessflow.rag.store import get_collection
+    from businessflow.rag.store import delete_chunks_for_document
 
     saved_path = Path(__file__).resolve().parents[1] / "data" / "documents" / "BF-1001" / "test_agreement.md"
     body = (
@@ -510,7 +510,7 @@ def test_upload_document_ingests_into_the_account_scoped_rag_store(reseed_accoun
         other_results = DocumentRetriever().retrieve("relocation waiver clause", top_k=1, account_id="BF-1002")
         assert not any("relocation waiver" in r["text"].lower() for r in other_results)
     finally:
-        get_collection().delete(where={"source_document": str(saved_path)})
+        delete_chunks_for_document(str(saved_path))
         saved_path.unlink(missing_ok=True)
 
 
@@ -538,9 +538,9 @@ def test_upload_non_loan_agreement_document_never_attempts_rate_extraction(resee
         assert response.json()["interest_rate_extracted"] is False
         assert store.get_account_or_raise("BF-1002").interest_rate_pct is None
     finally:
-        from businessflow.rag.store import get_collection
+        from businessflow.rag.store import delete_chunks_for_document
 
-        get_collection().delete(where={"source_document": str(saved_path)})
+        delete_chunks_for_document(str(saved_path))
         saved_path.unlink(missing_ok=True)
 
 
@@ -549,7 +549,7 @@ def test_upload_non_loan_agreement_document_never_attempts_rate_extraction(resee
 def test_list_documents_returns_uploaded_files_newest_first(reseed_accounts):
     from pathlib import Path
 
-    from businessflow.rag.store import get_collection
+    from businessflow.rag.store import delete_chunks_for_document
 
     account_dir = Path(__file__).resolve().parents[1] / "data" / "documents" / "BF-1001"
     older_path = account_dir / "test_older.md"
@@ -584,7 +584,7 @@ def test_list_documents_returns_uploaded_files_newest_first(reseed_accounts):
         assert newer_entry["uploaded_at"] is not None
     finally:
         for path in (older_path, newer_path):
-            get_collection().delete(where={"source_document": str(path)})
+            delete_chunks_for_document(str(path))
             path.unlink(missing_ok=True)
 
 
@@ -613,7 +613,7 @@ def test_list_documents_rejects_a_missing_api_key():
 def test_download_document_serves_the_real_uploaded_bytes(reseed_accounts):
     from pathlib import Path
 
-    from businessflow.rag.store import get_collection
+    from businessflow.rag.store import delete_chunks_for_document
 
     saved_path = Path(__file__).resolve().parents[1] / "data" / "documents" / "BF-1001" / "test_download.md"
     body = b"# a document ops uploaded and should be able to download back"
@@ -632,7 +632,7 @@ def test_download_document_serves_the_real_uploaded_bytes(reseed_accounts):
         assert response.content == body
         assert "test_download.md" in response.headers.get("content-disposition", "")
     finally:
-        get_collection().delete(where={"source_document": str(saved_path)})
+        delete_chunks_for_document(str(saved_path))
         saved_path.unlink(missing_ok=True)
 
 
@@ -677,7 +677,7 @@ def test_upload_loan_agreement_with_a_stated_rate_extracts_and_persists_interest
     from pathlib import Path
 
     from businessflow.accounts import store
-    from businessflow.rag.store import get_collection
+    from businessflow.rag.store import delete_chunks_for_document
 
     # BF-1002, not BF-1001 -- test_account_tools.py separately asserts
     # BF-1001's interest_rate_pct is null, and reseed_accounts' upsert
@@ -708,7 +708,7 @@ def test_upload_loan_agreement_with_a_stated_rate_extracts_and_persists_interest
         assert account.interest_rate_pct is not None
         assert abs(account.interest_rate_pct - 14.5) < 0.5
     finally:
-        get_collection().delete(where={"source_document": str(saved_path)})
+        delete_chunks_for_document(str(saved_path))
         saved_path.unlink(missing_ok=True)
         store.get_connection().execute(
             "update accounts set interest_rate_pct = null where account_id = %s", ("BF-1002",)

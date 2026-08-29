@@ -19,9 +19,6 @@ data/documents/
 *.pt
 *.gguf
 
-.chroma/
-chroma_db/
-
 *.wav
 *.ogg
 *.mp3

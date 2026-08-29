@@ -12,8 +12,9 @@ from pathlib import Path
 from docling.chunking import HybridChunker
 from docling.document_converter import DocumentConverter
 
+from businessflow.accounts.db import get_connection
 from businessflow.rag.embeddings import embed_passages
-from businessflow.rag.store import get_collection
+from businessflow.rag.store import embedding_literal
 
 
 def ingest_document(file_path: str, document_type: str, account_id: str | None = None) -> int:
@@ -26,25 +27,25 @@ def ingest_document(file_path: str, document_type: str, account_id: str | None =
 
     Re-ingesting the same file_path is safe to run twice: any existing
     (not-already-superseded) chunks for that file are marked superseded --
-    via _supersede_existing_chunks, which sets a real superseded_at ISO
+    via _supersede_existing_chunks, which sets a real superseded_at
     timestamp on them in place -- rather than deleted, so a correction to a
     policy/loan document doesn't erase the record of what it said before.
     DocumentRetriever only ever considers chunks without a real
     superseded_at value, so this is invisible to retrieval; it's only
-    reachable via a direct collection.get(where={"source_document": ...}).
+    reachable via a direct query against document_chunks by source_document.
 
     Returns the number of NEW chunks stored (matches the old contract:
     superseded chunks from previous generations aren't counted).
     """
     doc = DocumentConverter().convert(file_path).document
     chunks = list(HybridChunker().chunk(doc))
-    collection = get_collection()
+    conn = get_connection()
 
     # One timestamp for this whole call: it's both the superseded_at value
     # stamped on the old generation below, and (see the id comment in the
     # loop) folded into the new generation's ids.
-    now = datetime.now(timezone.utc).isoformat()
-    _supersede_existing_chunks(collection, file_path, now)
+    now = datetime.now(timezone.utc)
+    _supersede_existing_chunks(conn, file_path, now)
 
     if not chunks:
         return 0
@@ -52,9 +53,7 @@ def ingest_document(file_path: str, document_type: str, account_id: str | None =
     texts = [c.text for c in chunks]
     embeddings = embed_passages(texts)
 
-    ids = []
-    metadatas = []
-    for i, chunk in enumerate(chunks):
+    for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
         # Folds `now` in, not just file_path + index: the old id scheme
         # (file_path + index alone) is what let re-ingestion overwrite the
         # same ids in place, which was correct back when re-ingestion
@@ -65,61 +64,39 @@ def ingest_document(file_path: str, document_type: str, account_id: str | None =
         # marking this whole feature exists to preserve. Folding in `now`
         # guarantees this generation's ids can't collide with the one it's
         # superseding.
-        chunk_id = hashlib.sha1(f"{file_path}::{i}::{now}".encode()).hexdigest()
-        ids.append(chunk_id)
-        metadatas.append({
-            "source_document": file_path,
-            "document_type": document_type,
-            "account_id": account_id or "general",
-            "chunk_index": i,
-            "headings": " > ".join(chunk.meta.headings or []),
-            # superseded_at is deliberately omitted here: absent means
-            # active (see DocumentRetriever). A later re-ingestion of this
-            # same file_path is what adds it, via _supersede_existing_
-            # chunks, once this generation is itself superseded.
-        })
-
-    collection.upsert(ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas)
+        chunk_id = hashlib.sha1(f"{file_path}::{i}::{now.isoformat()}".encode()).hexdigest()
+        conn.execute(
+            """
+            insert into document_chunks
+                (id, source_document, document_type, account_id, chunk_index, headings, document_text, embedding)
+            values (%s, %s, %s, %s, %s, %s, %s, %s::vector)
+            """,
+            (
+                chunk_id, file_path, document_type, account_id or "general", i,
+                " > ".join(chunk.meta.headings or []), chunk.text, embedding_literal(embedding),
+            ),
+        )
     return len(chunks)
 
 
-def _supersede_existing_chunks(collection, file_path: str, superseded_at: str) -> None:
+def _supersede_existing_chunks(conn, file_path: str, superseded_at: datetime) -> None:
     """Marks every currently-active chunk stored for file_path as
-    superseded, in place, ahead of ingest_document() upserting a new
+    superseded, in place, ahead of ingest_document() inserting a new
     generation.
 
-    Chroma has no "patch just this one metadata key on an existing row"
-    operation -- upsert is the only in-place-update primitive, and it
-    requires the full record (embedding + document text), which is why
-    those are fetched back out via collection.get() rather than
-    reconstructed. Re-upserting at the SAME ids these chunks already have
-    updates them in place instead of creating duplicates.
-
-    Only touches chunks that are currently active (no superseded_at, or
-    a prior ingest never having set one) -- a chunk from an even older
-    generation that's already superseded is left completely alone, so
-    its original superseded_at timestamp (when it actually stopped being
-    current) is never overwritten by a later, unrelated re-ingestion.
+    Only touches chunks that are currently active (superseded_at is null)
+    -- a chunk from an even older generation that's already superseded is
+    left completely alone, so its original superseded_at timestamp (when
+    it actually stopped being current) is never overwritten by a later,
+    unrelated re-ingestion.
 
     Does nothing if file_path has never been ingested before, or every
     chunk for it is already superseded -- nothing active to mark.
     """
-    existing = collection.get(
-        where={"source_document": file_path}, include=["documents", "metadatas", "embeddings"]
+    conn.execute(
+        "update document_chunks set superseded_at = %s where source_document = %s and superseded_at is null",
+        (superseded_at, file_path),
     )
-    active = [
-        (chunk_id, document, metadata, embedding)
-        for chunk_id, document, metadata, embedding in zip(
-            existing["ids"], existing["documents"], existing["metadatas"], existing["embeddings"]
-        )
-        if not metadata.get("superseded_at")
-    ]
-    if not active:
-        return
-
-    ids, documents, metadatas, embeddings = (list(field) for field in zip(*active))
-    superseded_metadatas = [{**metadata, "superseded_at": superseded_at} for metadata in metadatas]
-    collection.upsert(ids=ids, embeddings=embeddings, documents=documents, metadatas=superseded_metadatas)
 
 
 def purge_superseded_chunks(older_than_days: int = 30) -> int:
@@ -132,23 +109,17 @@ def purge_superseded_chunks(older_than_days: int = 30) -> int:
     had every reasonable chance to matter for a compliance/history look-
     back; keeping it forever is unbounded growth, not a retention policy.
 
-    Filtered in Python, not via a Chroma `where` clause -- retriever.py's
-    own comments already found Chroma's filter grammar unreliable for
-    anything beyond exact-match/$in/$nin on a known value set, and a
-    "$lt this ISO timestamp" comparison isn't one of those. Returns the
-    number of chunks actually deleted."""
-    collection = get_collection()
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
-    corpus = collection.get(include=["metadatas"])
-    stale_ids = [
-        chunk_id
-        for chunk_id, metadata in zip(corpus["ids"], corpus["metadatas"])
-        if metadata.get("superseded_at") and metadata["superseded_at"] < cutoff
-    ]
-    if not stale_ids:
-        return 0
-    collection.delete(ids=stale_ids)
-    return len(stale_ids)
+    A plain `<` comparison against a real timestamptz column now, not a
+    Python-side filter -- Chroma's filter grammar couldn't express this
+    directly (retriever.py's own comments document why), Postgres always
+    could. Returns the number of chunks actually deleted."""
+    conn = get_connection()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+    rows = conn.execute(
+        "delete from document_chunks where superseded_at is not null and superseded_at < %s returning id",
+        (cutoff,),
+    ).fetchall()
+    return len(rows)
 
 
 def purge_orphaned_chunks() -> int:
@@ -159,17 +130,16 @@ def purge_orphaned_chunks() -> int:
     is only orphaned when its file is verifiably gone, never based on
     content or age, so this can never delete a real, currently-valid
     document's chunks. Returns the number of chunks actually deleted."""
-    collection = get_collection()
-    corpus = collection.get(include=["metadatas"])
-    orphaned_ids = [
-        chunk_id
-        for chunk_id, metadata in zip(corpus["ids"], corpus["metadatas"])
-        if metadata.get("source_document") and not Path(metadata["source_document"]).exists()
-    ]
-    if not orphaned_ids:
+    conn = get_connection()
+    rows = conn.execute("select distinct source_document from document_chunks").fetchall()
+    orphaned_documents = [r["source_document"] for r in rows if not Path(r["source_document"]).exists()]
+    if not orphaned_documents:
         return 0
-    collection.delete(ids=orphaned_ids)
-    return len(orphaned_ids)
+    deleted = conn.execute(
+        "delete from document_chunks where source_document = any(%s) returning id",
+        (orphaned_documents,),
+    ).fetchall()
+    return len(deleted)
 
 
 def extract_document_text(file_path: str) -> str:
