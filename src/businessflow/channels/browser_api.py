@@ -15,7 +15,9 @@ separate FastAPI app on port 8001 -- run both side by side, they don't
 share state or a port.
 """
 
+import calendar
 import uuid
+from datetime import date, datetime
 from pathlib import Path
 
 import groq
@@ -23,8 +25,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from businessflow.accounts import store
+from businessflow.accounts.documents import list_documents_for_account, resolve_document_path
+from businessflow.accounts.models import Account
 from businessflow.agent.loop import (
     AccessDeniedError,
     AccountLockedError,
@@ -34,6 +39,10 @@ from businessflow.agent.loop import (
     verify_and_start_conversation,
 )
 from businessflow.channels.credentials import looks_like_credentials, parse_credentials
+from businessflow.ops.flags import Flag, compute_flags
+from businessflow.tools.account_tools import flag_dispute, get_payment_status
+from businessflow.tools.escalation_tools import escalate_to_human
+from businessflow.tools.payment_tools import generate_payment_link
 
 app = FastAPI(title="BusinessFlow Chat API")
 
@@ -85,6 +94,199 @@ class SendMessageResponse(BaseModel):
     # the frontend update its own account-bound UI (the header chip)
     # without parsing the reply text to detect what just happened.
     verified_account_id: str | None = None
+
+
+class AccountSnapshotOut(BaseModel):
+    """Exactly the fields get_payment_status(account_id) returns -- see
+    tools/account_tools.py's docstring for what each one means and its
+    real caveats (outstanding_balance_approx is a simplification,
+    interest_rate_pct is None until an agreement is parsed, etc)."""
+
+    account_id: str
+    borrower_name: str
+    business_name: str
+    principal_amount: float
+    emi_amount: float
+    emi_due_date: str
+    days_past_due: int
+    tenure_months: int
+    months_remaining: int
+    outstanding_balance_approx: float
+    interest_rate_pct: float | None
+    nach_mandate_active: bool
+    late_fee_applicable: bool
+    late_fee_amount: float | None
+    dispute_open: bool
+    risk_tier: str
+    broken_promise_count: int
+
+
+class TimelineEntryOut(BaseModel):
+    date: str
+    amount: float
+    status: str  # "paid-on-time" | "paid-late" | "overdue" | "upcoming"
+    label: str
+
+
+class DashboardEscalationOut(BaseModel):
+    escalation_id: str
+    reason: str
+    status: str
+    created_at: datetime
+    resolved_at: datetime | None
+
+
+class DocumentOut(BaseModel):
+    filename: str
+    size_bytes: int
+    uploaded_at: datetime
+
+
+class DashboardResponse(BaseModel):
+    account: AccountSnapshotOut
+    timeline: list[TimelineEntryOut]
+    warnings: list[str]
+    escalations: list[DashboardEscalationOut]
+    documents: list[DocumentOut]
+
+
+class QuickActionDisputeRequest(BaseModel):
+    reason: str
+
+
+class QuickActionAgentRequest(BaseModel):
+    reason: str | None = None
+
+
+class QuickActionPaymentLinkRequest(BaseModel):
+    amount: float = Field(gt=0)
+
+
+def _require_verified_account(conversation_id: str) -> str:
+    """Shared gate for every dashboard/document/quick-action endpoint below.
+    Deliberately two different failure codes, not one: a conversation_id
+    that doesn't exist at all (typo'd, expired, made up) is a 404, same
+    convention as send_message_endpoint's own 404 above; a conversation_id
+    that IS real but hasn't verified into an account yet is a 403 -- the id
+    itself is valid, but nothing has proven the caller owns any account, so
+    there's nothing here for them to see. A borrower must never be able to
+    reach another account's data by guessing or reusing a conversation_id,
+    which is exactly what collapsing these two cases into one response
+    (or, worse, trusting an unverified session's account_id) would risk."""
+    session = _conversations.get(conversation_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"no conversation found for id={conversation_id!r}")
+    if session["account_id"] is None:
+        raise HTTPException(
+            status_code=403,
+            detail="no verified account for this conversation -- verify with your account ID and access key first",
+        )
+    return session["account_id"]
+
+
+def _log_quick_action(account_id: str, tool: str, arguments: dict, result: dict) -> None:
+    # Mirrors telegram_bot.py's _log_tool_call: a quick-action button calls
+    # these tools directly, bypassing agent.loop's LLM round trip entirely
+    # (no ambiguity to resolve for a deterministic action) -- but it's just
+    # as real a tool call as one the LLM makes, so it's logged the same way,
+    # keeping the ops dashboard's and conversation_memory's account history
+    # complete regardless of which path triggered the call.
+    store.log_event(account_id, "tool_called", {"tool": tool, "arguments": arguments, "result": result})
+
+
+def _add_one_month(d: date) -> date:
+    """Adds one calendar month, clamping the day to the target month's last
+    day if it would otherwise overflow (e.g. Jan 31 -> Feb 28). This is a
+    deliberate, small departure from ops/static/app.js's buildEmiTimeline,
+    which advances via JS's `cursor.setMonth(cursor.getMonth() + 1)` --
+    when a day overflows the target month, JS's Date silently ROLLS FORWARD
+    into the following month (e.g. Jan 31 -> Mar 3, not Feb 28) rather than
+    clamping. Every other part of this function is a faithful port; this
+    one corner case is intentionally the more predictable "clamp to month
+    end" behavior instead of replicating JS's rollover quirk, since nothing
+    about that quirk is part of the real EMI cadence being modeled."""
+    if d.month == 12:
+        year, month = d.year + 1, 1
+    else:
+        year, month = d.year, d.month + 1
+    last_day_of_month = calendar.monthrange(year, month)[1]
+    return date(year, month, min(d.day, last_day_of_month))
+
+
+def _build_emi_timeline(account: Account, days_past_due: int) -> list[dict]:
+    """Server-side port of ops/static/app.js's buildEmiTimeline (see that
+    function's own comment for the reasoning): real payment_history entries
+    first, in chronological order (already sorted that way -- store.py's
+    _load_payment_history loads "order by payment_date"), then a monthly
+    projection forward from account.emi_due_date for account.months_remaining
+    occurrences at account.emi_amount each. The first projected occurrence is
+    flagged "overdue" (instead of "upcoming") exactly when days_past_due > 0,
+    same condition the JS version checks."""
+    past = [
+        {
+            "date": r.date.isoformat(),
+            "amount": r.amount,
+            "status": "paid-on-time" if r.on_time else "paid-late",
+            "label": "Paid on time" if r.on_time else "Paid late",
+        }
+        for r in account.payment_history
+    ]
+
+    upcoming = []
+    if account.months_remaining > 0:
+        cursor = account.emi_due_date
+        for i in range(account.months_remaining):
+            is_next_due = i == 0
+            overdue = is_next_due and days_past_due > 0
+            upcoming.append(
+                {
+                    "date": cursor.isoformat(),
+                    "amount": account.emi_amount,
+                    "status": "overdue" if overdue else "upcoming",
+                    "label": f"Overdue -- {days_past_due}d past due" if overdue else "Scheduled",
+                }
+            )
+            cursor = _add_one_month(cursor)
+
+    return past + upcoming
+
+
+# DELIBERATE REFRAMING -- read before "simplifying" this back to raw flag
+# text: ops/flags.py's Flag.reason strings are written for STAFF (e.g.
+# "20 days past due (beyond the 3-day grace period)", "has an open,
+# unresolved dispute"). Those exact strings are correct and useful on the
+# ops dashboard, and wrong here -- a borrower reading their own dashboard
+# needs a plain, first-person, non-accusatory sentence, not an internal
+# policy citation. This function is the one place that translation happens;
+# it is not a duplicate of compute_flags, it is what compute_flags' output
+# has to go through before it's fit for a borrower to read. Every number in
+# the output (days overdue, late fee amount, broken-promise count) is real,
+# taken from payment_status (itself get_payment_status's own real result) or
+# the flag -- never fabricated or estimated here.
+def _build_warnings(flags: list[Flag], payment_status: dict) -> list[str]:
+    warnings = []
+    for flag in flags:
+        if flag.label == "overdue":
+            days = payment_status["days_past_due"]
+            if payment_status["late_fee_applicable"]:
+                warnings.append(
+                    f"Your EMI is {days} days overdue -- pay soon to avoid a late fee of "
+                    f"₹{payment_status['late_fee_amount']:,.2f}."
+                )
+            else:
+                warnings.append(f"Your EMI is {days} days overdue -- pay soon.")
+        elif flag.label == "disputed":
+            warnings.append("You have an open dispute -- our team is reviewing it.")
+        elif flag.label == "broken_promises":
+            warnings.append(f"You have {payment_status['broken_promise_count']} missed payment promises on record.")
+        else:
+            # Defensive only: no flag label besides the three above exists
+            # today (see ops/flags.py's compute_flags). Falling back to the
+            # raw, staff-toned reason for an unrecognized future label is a
+            # real warning a borrower should still see, wrong tone and all --
+            # strictly better than silently dropping it.
+            warnings.append(flag.reason)
+    return warnings
 
 
 @app.get("/health")
@@ -180,6 +382,89 @@ def send_message_endpoint(conversation_id: str, req: SendMessageRequest):
         reply=reply,
         tool_calls=[ToolCallInfo(tool=name, arguments=args) for name, args in tool_calls],
     )
+
+
+@app.get("/conversations/{conversation_id}/dashboard", response_model=DashboardResponse)
+def get_dashboard_endpoint(conversation_id: str):
+    """The main aggregation endpoint the borrower dashboard screen (a
+    separate frontend, landed after verification instead of going straight
+    into chat) loads on open: account snapshot, EMI timeline (real past
+    payments + computed upcoming EMIs), borrower-toned warnings, this
+    account's own escalation history, and its uploaded documents. Every
+    piece is real data for THIS conversation's verified account only --
+    _require_verified_account is what makes that a guarantee, not a
+    convention callers have to remember."""
+    account_id = _require_verified_account(conversation_id)
+
+    payment_status = get_payment_status(account_id)
+    account = store.get_account_or_raise(account_id)
+    flags = compute_flags(account)
+    escalations = store.get_escalations_for_account(account_id)
+    documents = list_documents_for_account(account_id)
+
+    return DashboardResponse(
+        account=AccountSnapshotOut(**payment_status),
+        timeline=[TimelineEntryOut(**entry) for entry in _build_emi_timeline(account, payment_status["days_past_due"])],
+        warnings=_build_warnings(flags, payment_status),
+        escalations=[
+            DashboardEscalationOut(
+                escalation_id=e.escalation_id, reason=e.reason, status=e.status,
+                created_at=e.created_at, resolved_at=e.resolved_at,
+            )
+            for e in escalations
+        ],
+        documents=[DocumentOut(**d) for d in documents],
+    )
+
+
+@app.get("/conversations/{conversation_id}/documents/{filename}")
+def download_document_endpoint(conversation_id: str, filename: str):
+    """Read-only, conversation-scoped download of one of THIS account's own
+    uploaded documents -- the borrower-facing equivalent of ops/api.py's
+    staff-only document download, backed by the same data/documents/
+    {account_id}/ files. resolve_document_path (accounts/documents.py)
+    is what actually enforces "only this account, nothing else reachable
+    via a crafted filename" -- a miss there and a genuinely nonexistent
+    filename come back as the exact same 404, so a caller can never tell
+    the difference between "wrong filename" and "that belongs to another
+    account" (guessing/probing must not leak which)."""
+    account_id = _require_verified_account(conversation_id)
+    path = resolve_document_path(account_id, filename)
+    if path is None:
+        raise HTTPException(status_code=404, detail=f"no document found for filename={filename!r}")
+    return FileResponse(path, filename=path.name)
+
+
+@app.post("/conversations/{conversation_id}/quick-actions/dispute")
+def quick_action_dispute_endpoint(conversation_id: str, req: QuickActionDisputeRequest) -> dict:
+    account_id = _require_verified_account(conversation_id)
+    if not req.reason.strip():
+        raise HTTPException(status_code=400, detail="reason must not be empty")
+    result = flag_dispute(account_id, req.reason)
+    _log_quick_action(account_id, "flag_dispute", {"account_id": account_id, "reason": req.reason}, result)
+    return result
+
+
+_DEFAULT_AGENT_REASON = "Borrower requested a human agent from the dashboard"
+
+
+@app.post("/conversations/{conversation_id}/quick-actions/agent")
+def quick_action_agent_endpoint(conversation_id: str, req: QuickActionAgentRequest) -> dict:
+    account_id = _require_verified_account(conversation_id)
+    reason = req.reason or _DEFAULT_AGENT_REASON
+    result = escalate_to_human(account_id, reason)
+    _log_quick_action(account_id, "escalate_to_human", {"account_id": account_id, "reason": reason}, result)
+    return result
+
+
+@app.post("/conversations/{conversation_id}/quick-actions/payment-link")
+def quick_action_payment_link_endpoint(conversation_id: str, req: QuickActionPaymentLinkRequest) -> dict:
+    account_id = _require_verified_account(conversation_id)
+    result = generate_payment_link(account_id, req.amount)
+    _log_quick_action(
+        account_id, "generate_payment_link", {"account_id": account_id, "amount": req.amount}, result
+    )
+    return result
 
 
 @app.get("/", include_in_schema=False)

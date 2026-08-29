@@ -251,6 +251,7 @@ def main():
                     dispute_open = excluded.dispute_open,
                     risk_tier = excluded.risk_tier,
                     access_key = excluded.access_key,
+                    telegram_chat_id = null,
                     updated_at = now()
                 """,
                 a,

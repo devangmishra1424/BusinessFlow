@@ -537,6 +537,132 @@ def test_upload_non_loan_agreement_document_never_attempts_rate_extraction(resee
 
 @_pg_skip
 @_ops_key_skip
+def test_list_documents_returns_uploaded_files_newest_first(reseed_accounts):
+    from pathlib import Path
+
+    from businessflow.rag.store import get_collection
+
+    account_dir = Path(__file__).resolve().parents[1] / "data" / "documents" / "BF-1001"
+    older_path = account_dir / "test_older.md"
+    newer_path = account_dir / "test_newer.md"
+    try:
+        older = client.post(
+            "/accounts/BF-1001/documents",
+            files={"file": ("test_older.md", b"# older doc", "text/markdown")},
+            data={"document_type": "kyc"},
+            headers=_auth(),
+        )
+        assert older.status_code == 200
+        newer = client.post(
+            "/accounts/BF-1001/documents",
+            files={"file": ("test_newer.md", b"# newer doc", "text/markdown")},
+            data={"document_type": "kyc"},
+            headers=_auth(),
+        )
+        assert newer.status_code == 200
+
+        response = client.get("/accounts/BF-1001/documents", headers=_auth())
+
+        assert response.status_code == 200
+        body = response.json()
+        names = [d["filename"] for d in body]
+        assert "test_older.md" in names and "test_newer.md" in names
+        # Newest first -- the just-uploaded newer file must sort ahead of
+        # the one uploaded just before it.
+        assert names.index("test_newer.md") < names.index("test_older.md")
+        newer_entry = next(d for d in body if d["filename"] == "test_newer.md")
+        assert newer_entry["size_bytes"] == len(b"# newer doc")
+        assert newer_entry["uploaded_at"] is not None
+    finally:
+        for path in (older_path, newer_path):
+            get_collection().delete(where={"source_document": str(path)})
+            path.unlink(missing_ok=True)
+
+
+@_pg_skip
+@_ops_key_skip
+def test_list_documents_returns_empty_list_for_account_with_no_uploads(reseed_accounts):
+    response = client.get("/accounts/BF-1004/documents", headers=_auth())
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@_ops_key_skip
+def test_list_documents_404s_for_unknown_account():
+    response = client.get("/accounts/BF-9999/documents", headers=_auth())
+    assert response.status_code == 404
+
+
+@_ops_key_skip
+def test_list_documents_rejects_a_missing_api_key():
+    response = client.get("/accounts/BF-1001/documents")
+    assert response.status_code == 401
+
+
+@_pg_skip
+@_ops_key_skip
+def test_download_document_serves_the_real_uploaded_bytes(reseed_accounts):
+    from pathlib import Path
+
+    from businessflow.rag.store import get_collection
+
+    saved_path = Path(__file__).resolve().parents[1] / "data" / "documents" / "BF-1001" / "test_download.md"
+    body = b"# a document ops uploaded and should be able to download back"
+    try:
+        upload = client.post(
+            "/accounts/BF-1001/documents",
+            files={"file": ("test_download.md", body, "text/markdown")},
+            data={"document_type": "kyc"},
+            headers=_auth(),
+        )
+        assert upload.status_code == 200
+
+        response = client.get("/accounts/BF-1001/documents/test_download.md", headers=_auth())
+
+        assert response.status_code == 200
+        assert response.content == body
+        assert "test_download.md" in response.headers.get("content-disposition", "")
+    finally:
+        get_collection().delete(where={"source_document": str(saved_path)})
+        saved_path.unlink(missing_ok=True)
+
+
+@_pg_skip
+@_ops_key_skip
+def test_download_document_404s_for_a_filename_that_was_never_uploaded(reseed_accounts):
+    response = client.get("/accounts/BF-1001/documents/never_uploaded.md", headers=_auth())
+    assert response.status_code == 404
+
+
+@_ops_key_skip
+def test_download_document_404s_for_unknown_account():
+    response = client.get("/accounts/BF-9999/documents/whatever.md", headers=_auth())
+    assert response.status_code == 404
+
+
+@_pg_skip
+@_ops_key_skip
+def test_download_document_rejects_path_traversal_outside_the_account_directory(reseed_accounts):
+    # A literal ".." survives Path(...).name (unlike "../../x", whose
+    # .name is "x") -- this is exactly the case the resolve()+
+    # is_relative_to() confinement check exists to catch, not the plain
+    # .name strip alone. %2e%2e is used (rather than a bare "..") because
+    # a bare ".." segment gets collapsed by URL normalization before the
+    # request is even sent, never reaching the route at all -- the
+    # percent-encoded form is what a real client sends and is what
+    # arrives at the handler as the literal string "..".
+    response = client.get("/accounts/BF-1001/documents/%2e%2e", headers=_auth())
+    assert response.status_code == 404
+
+
+@_ops_key_skip
+def test_download_document_rejects_a_missing_api_key():
+    response = client.get("/accounts/BF-1001/documents/whatever.md")
+    assert response.status_code == 401
+
+
+@_pg_skip
+@_ops_key_skip
 @_groq_skip
 def test_upload_loan_agreement_with_a_stated_rate_extracts_and_persists_interest_rate_pct(reseed_accounts):
     from pathlib import Path

@@ -84,6 +84,18 @@ def get_connection() -> _PooledExecutor:
         min_size=_MIN_POOL_SIZE,
         max_size=_MAX_POOL_SIZE,
         kwargs={"row_factory": dict_row, "autocommit": True},
+        # Found live: Supabase's pooler silently closes a connection that's
+        # sat idle for a while (server-side, ahead of this pool's own
+        # max_idle reaper), and without this check the next real caller to
+        # check it out got a raw "server closed the connection
+        # unexpectedly" psycopg.OperationalError -- a real 500 all the way
+        # out to the browser, on the very first request after any quiet
+        # spell. check_connection is psycopg_pool's own validator for
+        # exactly this: pings each connection before handing it out and
+        # transparently swaps in a fresh one if the ping fails, so a
+        # server-side close is invisible to every caller instead of
+        # surfacing as an unhandled error on whichever request loses that race.
+        check=ConnectionPool.check_connection,
         open=True,
     )
     # open=True returns before min_size connections are necessarily ready

@@ -178,6 +178,12 @@ class DocumentUploadOut(BaseModel):
     interest_rate_extracted: bool
 
 
+class DocumentOut(BaseModel):
+    filename: str
+    size_bytes: int
+    uploaded_at: datetime
+
+
 class ClarificationDraftIn(BaseModel):
     operator_note: str
 
@@ -478,6 +484,79 @@ async def upload_account_document(
         chunks_stored=chunks_stored,
         interest_rate_extracted=interest_rate_extracted,
     )
+
+
+@app.get(
+    "/accounts/{account_id}/documents",
+    response_model=list[DocumentOut],
+    dependencies=[Depends(require_api_key)],
+)
+def list_account_documents(account_id: str):
+    """Every document ops has uploaded for this borrower via
+    upload_account_document -- the read half of that endpoint's write,
+    newest first so the most recently handled document is what an
+    operator sees first."""
+    account = store.get_account(account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
+
+    account_dir = _DOCUMENTS_DIR / account_id
+    if not account_dir.is_dir():
+        # A real account that just hasn't had anything uploaded for it yet
+        # -- not a missing account, so an empty list rather than a 404.
+        # account_dir only ever comes into existence via upload_account_
+        # document's own mkdir(parents=True, exist_ok=True), on its first
+        # successful upload.
+        return []
+
+    documents = []
+    for path in account_dir.iterdir():
+        if not path.is_file():
+            continue
+        stat = path.stat()
+        documents.append(
+            DocumentOut(
+                filename=path.name,
+                size_bytes=stat.st_size,
+                uploaded_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+            )
+        )
+    documents.sort(key=lambda d: d.uploaded_at, reverse=True)
+    return documents
+
+
+@app.get(
+    "/accounts/{account_id}/documents/{filename}",
+    dependencies=[Depends(require_api_key)],
+)
+def download_account_document(account_id: str, filename: str):
+    """Serves one previously-uploaded document for download -- the other
+    read half of upload_account_document's write.
+
+    SECURITY: filename is untrusted client input, same as the upload
+    endpoint's own file.filename. That endpoint gets away with just
+    Path(...).name because it only ever WRITES into a directory it just
+    mkdir'd itself -- there's nothing outside account_dir for a stripped
+    name to collide with. This endpoint instead reads from a directory
+    that may already contain whatever the filesystem has in it, so
+    stripping to .name alone isn't quite enough: Path("..").name is
+    literally ".." (unlike "../../x", whose .name is "x"), so a bare ".."
+    survives that strip and would resolve to the account's *parent*
+    directory. The real guarantee here is the resolve()+is_relative_to()
+    check below -- confining the resolved path to inside account_dir
+    strictly, regardless of what .name did or didn't strip.
+    """
+    account = store.get_account(account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
+
+    account_dir = (_DOCUMENTS_DIR / account_id).resolve()
+    requested_name = Path(filename).name
+    file_path = (account_dir / requested_name).resolve()
+    if not file_path.is_relative_to(account_dir) or not file_path.is_file():
+        raise HTTPException(status_code=404, detail=f"no document found for filename={filename!r}")
+
+    return FileResponse(file_path, filename=requested_name)
 
 
 @app.post(

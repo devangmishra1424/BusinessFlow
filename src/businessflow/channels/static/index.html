@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/styles.css?v=2" />
+<link rel="stylesheet" href="/static/styles.css?v=3" />
 </head>
 <body>
 
@@ -57,11 +57,145 @@
   </div>
 </div>
 
-<div id="chat-screen" class="chat-screen" hidden>
-  <header class="chat-header">
+<div id="dashboard-screen" class="dashboard-screen" hidden>
+  <header class="dash-header">
     <div class="brand small">
       <div class="brand-mark">BF</div>
       <div class="brand-name">BusinessFlow</div>
+    </div>
+    <div class="dash-header-right">
+      <span class="account-chip" id="dash-account-chip"></span>
+      <button class="icon-btn" id="dash-refresh-btn" title="Refresh">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M3 12a9 9 0 1 1 3 6.7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M3 21v-6h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="icon-btn" id="dash-restart-btn" title="Start over">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" stroke-width="2"/><path d="M8 11V7a4 4 0 1 1 8 0v4" stroke="currentColor" stroke-width="2"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="dash-content" id="dash-content">
+    <div class="dash-loading" id="dash-loading">
+      <div class="spinner"></div>
+      <p>Loading your account…</p>
+    </div>
+
+    <div class="dash-error" id="dash-error" hidden>
+      <p id="dash-error-text"></p>
+      <button class="btn-retry" id="dash-retry-btn">Try again</button>
+    </div>
+
+    <div class="dash-body" id="dash-body" hidden>
+      <div class="dash-warnings" id="dash-warnings"></div>
+
+      <section class="dash-hero">
+        <div class="hero-identity">
+          <div class="hero-avatar" id="dash-avatar"></div>
+          <div class="hero-identity-text">
+            <h1 id="dash-borrower-name"></h1>
+            <p id="dash-business-name"></p>
+          </div>
+          <span class="risk-chip" id="dash-risk-chip"></span>
+        </div>
+
+        <div class="hero-main">
+          <div class="hero-ring-card">
+            <div class="ring-stack" id="dash-ring-stack"></div>
+            <div class="ring-caption">
+              <div class="ring-caption-value" id="dash-ring-value"></div>
+              <div class="ring-caption-label">months left of <span id="dash-tenure"></span></div>
+            </div>
+          </div>
+          <div class="hero-stats" id="dash-hero-stats"></div>
+        </div>
+      </section>
+
+      <section class="dash-section dash-actions-section">
+        <h2 class="dash-section-title">Quick actions</h2>
+        <div class="dash-actions">
+          <div class="action-card">
+            <button type="button" class="action-btn" id="action-dispute-btn">
+              <span class="action-btn-label">Raise a dispute</span>
+              <span class="action-btn-sub">Flag something wrong on your account</span>
+            </button>
+            <form class="action-form" id="dispute-form" hidden>
+              <label class="field-label" for="dispute-reason">What's the issue?</label>
+              <textarea id="dispute-reason" rows="2" placeholder="e.g. I already paid this EMI on the 3rd"></textarea>
+              <div class="action-form-row">
+                <button type="submit" class="btn-primary" id="dispute-submit-btn">Submit</button>
+                <button type="button" class="btn-cancel" id="dispute-cancel-btn">Cancel</button>
+              </div>
+            </form>
+            <div class="action-result" id="dispute-result" hidden></div>
+          </div>
+
+          <div class="action-card">
+            <button type="button" class="action-btn" id="action-agent-btn">
+              <span class="action-btn-label">Talk to a human</span>
+              <span class="action-btn-sub">Get connected with our team</span>
+            </button>
+            <form class="action-form" id="agent-form" hidden>
+              <label class="field-label" for="agent-reason">What do you need help with? (optional)</label>
+              <textarea id="agent-reason" rows="2" placeholder="Optional details for our team"></textarea>
+              <div class="action-form-row">
+                <button type="submit" class="btn-primary" id="agent-submit-btn">Request agent</button>
+                <button type="button" class="btn-cancel" id="agent-cancel-btn">Cancel</button>
+              </div>
+            </form>
+            <div class="action-result" id="agent-result" hidden></div>
+          </div>
+
+          <div class="action-card">
+            <button type="button" class="action-btn" id="action-payment-btn">
+              <span class="action-btn-label">Get a payment link</span>
+              <span class="action-btn-sub">Generate a link for any amount</span>
+            </button>
+            <form class="action-form" id="payment-form" hidden>
+              <label class="field-label" for="payment-amount">Amount (₹)</label>
+              <input id="payment-amount" type="number" min="1" step="0.01" placeholder="e.g. 5000" />
+              <div class="action-form-row">
+                <button type="submit" class="btn-primary" id="payment-submit-btn">Generate link</button>
+                <button type="button" class="btn-cancel" id="payment-cancel-btn">Cancel</button>
+              </div>
+            </form>
+            <div class="action-result" id="payment-result" hidden></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="dash-section">
+        <h2 class="dash-section-title">Payment timeline</h2>
+        <div class="dash-timeline" id="dash-timeline"></div>
+      </section>
+
+      <section class="dash-section">
+        <h2 class="dash-section-title">Your requests</h2>
+        <div class="dash-escalations" id="dash-escalations"></div>
+      </section>
+
+      <section class="dash-section">
+        <h2 class="dash-section-title">Documents</h2>
+        <div class="dash-documents" id="dash-documents"></div>
+      </section>
+    </div>
+  </main>
+
+  <button type="button" class="dash-chat-fab" id="dash-chat-btn">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    Chat with us
+  </button>
+</div>
+
+<div id="chat-screen" class="chat-screen" hidden>
+  <header class="chat-header">
+    <div class="chat-header-left">
+      <button class="icon-btn" id="chat-back-btn" title="Back to dashboard" hidden>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="brand small">
+        <div class="brand-mark">BF</div>
+        <div class="brand-name">BusinessFlow</div>
+      </div>
     </div>
     <div class="chat-header-right">
       <span class="account-chip" id="account-chip" hidden></span>
@@ -81,6 +215,6 @@
   </form>
 </div>
 
-<script src="/static/app.js?v=2"></script>
+<script src="/static/app.js?v=3"></script>
 </body>
 </html>

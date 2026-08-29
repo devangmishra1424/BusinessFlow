@@ -32,6 +32,14 @@ const TOOL_LABELS = {
   check_policy: "Checked our policy",
 };
 
+// Escalation status -> borrower-facing label (the API's own status strings
+// are fine as CSS class names but "queued_for_human" isn't fit to print).
+const STATUS_LABELS = {
+  queued_for_human: "Pending",
+  approved: "Approved",
+  rejected: "Rejected",
+};
+
 /* ============================================================
    API layer
    ============================================================ */
@@ -57,12 +65,51 @@ async function api(path, opts = {}) {
 const startConversation = (payload) => api("/conversations", { method: "POST", body: JSON.stringify(payload) });
 const sendMessageApi = (conversationId, message) =>
   api(`/conversations/${conversationId}/messages`, { method: "POST", body: JSON.stringify({ message }) });
+const getDashboard = (conversationId) => api(`/conversations/${conversationId}/dashboard`);
+const postDispute = (conversationId, reason) =>
+  api(`/conversations/${conversationId}/quick-actions/dispute`, { method: "POST", body: JSON.stringify({ reason }) });
+const postAgent = (conversationId, reason) =>
+  api(`/conversations/${conversationId}/quick-actions/agent`, { method: "POST", body: JSON.stringify({ reason: reason || null }) });
+const postPaymentLink = (conversationId, amount) =>
+  api(`/conversations/${conversationId}/quick-actions/payment-link`, { method: "POST", body: JSON.stringify({ amount }) });
+
+/* ============================================================
+   Formatting helpers
+   ============================================================ */
+function fmtInr(n) {
+  return "₹" + Number(n).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+}
+
+function fmtDate(d) {
+  return new Date(`${d}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function fmtDateTime(iso) {
+  return new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function fmtFileSize(bytes) {
+  if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  if (bytes >= 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return bytes + " B";
+}
+
+function initials(name) {
+  return (name || "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0].toUpperCase())
+    .join("");
+}
 
 /* ============================================================
    Start screen
    ============================================================ */
 const $startScreen = document.getElementById("start-screen");
 const $chatScreen = document.getElementById("chat-screen");
+const $dashboardScreen = document.getElementById("dashboard-screen");
+const $chatBackBtn = document.getElementById("chat-back-btn");
 const $startForm = document.getElementById("start-form");
 const $startError = document.getElementById("start-error");
 const $verifiedFields = document.getElementById("verified-fields");
@@ -132,7 +179,11 @@ $startForm.addEventListener("submit", async (e) => {
     const result = await startConversation(payload);
     state.conversationId = result.conversation_id;
     state.accountId = result.account_id;
-    enterChat();
+    if (state.accountId) {
+      enterDashboard();
+    } else {
+      enterChat();
+    }
   } catch (err) {
     $startError.textContent = friendlyStartError(err);
     $startError.hidden = false;
@@ -150,6 +201,7 @@ function friendlyStartError(err) {
 
 function enterChat() {
   $startScreen.hidden = true;
+  $dashboardScreen.hidden = true;
   $chatScreen.hidden = false;
   const chip = document.getElementById("account-chip");
   if (state.accountId) {
@@ -158,21 +210,44 @@ function enterChat() {
   } else {
     chip.hidden = true;
   }
-  addSystemMessage(
-    state.accountId
-      ? `Verified — you're chatting about account ${state.accountId}.`
-      : 'Chatting anonymously — to verify, send your account ID and 6-digit access key together, e.g. "BF-1001 482913".'
-  );
+  // A verified account has a dashboard to go back to; an anonymous chat
+  // never entered one, so there's nothing behind the back arrow for it.
+  $chatBackBtn.hidden = !state.accountId;
+  // Only greet once per conversation -- this is also the "Chat with us"
+  // entry point from the dashboard, which can be opened/closed repeatedly
+  // without re-adding the intro line each time.
+  if (!$messageList.children.length) {
+    addSystemMessage(
+      state.accountId
+        ? `Verified — you're chatting about account ${state.accountId}.`
+        : 'Chatting anonymously — to verify, send your account ID and 6-digit access key together, e.g. "BF-1001 482913".'
+    );
+  }
   document.getElementById("message-input").focus();
 }
 
-document.getElementById("restart-btn").addEventListener("click", () => {
+// Shared by both the chat screen's restart button and the dashboard's --
+// wherever a borrower is, "start over" means the same thing: forget this
+// conversation and go back to the start screen.
+function restartAll() {
   state.conversationId = null;
   state.accountId = null;
   document.getElementById("message-list").innerHTML = "";
   document.getElementById("start-access-key").value = "";
   $chatScreen.hidden = true;
+  $dashboardScreen.hidden = true;
   $startScreen.hidden = false;
+}
+
+document.getElementById("restart-btn").addEventListener("click", restartAll);
+
+$chatBackBtn.addEventListener("click", () => {
+  $chatScreen.hidden = true;
+  $dashboardScreen.hidden = false;
+  // Chat may have driven tool calls (a dispute flagged, an escalation
+  // raised, a payment logged) since the dashboard was last shown -- refetch
+  // rather than show stale numbers.
+  loadDashboard();
 });
 
 /* ============================================================
@@ -270,5 +345,265 @@ $messageForm.addEventListener("submit", async (e) => {
     $messageInput.disabled = false;
     $sendBtn.disabled = false;
     $messageInput.focus();
+  }
+});
+
+/* ============================================================
+   Dashboard screen
+   ============================================================ */
+const $dashLoading = document.getElementById("dash-loading");
+const $dashError = document.getElementById("dash-error");
+const $dashErrorText = document.getElementById("dash-error-text");
+const $dashBody = document.getElementById("dash-body");
+
+function enterDashboard() {
+  $startScreen.hidden = true;
+  $chatScreen.hidden = true;
+  $dashboardScreen.hidden = false;
+  document.getElementById("dash-account-chip").textContent = state.accountId || "";
+  loadDashboard();
+}
+
+function friendlyDashboardError(err) {
+  if (err.status === 403) return "Your session isn't verified anymore — please start over.";
+  if (err.status === 404) return "This conversation expired — please start over.";
+  return "Couldn't load your account right now — please try again.";
+}
+
+async function loadDashboard() {
+  if (!state.conversationId) return;
+  $dashLoading.hidden = false;
+  $dashError.hidden = true;
+  $dashBody.hidden = true;
+  try {
+    const data = await getDashboard(state.conversationId);
+    renderDashboard(data);
+    $dashLoading.hidden = true;
+    $dashBody.hidden = false;
+  } catch (err) {
+    $dashLoading.hidden = true;
+    $dashError.hidden = false;
+    $dashErrorText.textContent = friendlyDashboardError(err);
+  }
+}
+
+// Own implementation of the ops dashboard's ring-chart math (fraction of
+// the circle's circumference to hide via stroke-dashoffset) -- same idea,
+// written fresh for this app rather than imported cross-app.
+function ringChartSvg(fraction, color) {
+  const size = 96;
+  const stroke = 9;
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const clamped = Math.max(0, Math.min(1, fraction));
+  const offset = c * (1 - clamped);
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="transform:rotate(-90deg)">
+    <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--border)" stroke-width="${stroke}" />
+    <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${color}" stroke-width="${stroke}"
+      stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${offset}" />
+  </svg>`;
+}
+
+const WARNING_ICON =
+  '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const DOC_ICON =
+  '<svg class="doc-icon" width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M14 2v6h6" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>';
+
+function renderDashboard(data) {
+  const { account, timeline, warnings, escalations, documents } = data;
+
+  // Warnings -- rendered exactly as the backend wrote them, never re-worded.
+  document.getElementById("dash-warnings").innerHTML = warnings
+    .map((w) => `<div class="dash-warning">${WARNING_ICON}<span>${escapeHtml(w)}</span></div>`)
+    .join("");
+
+  // Hero identity
+  document.getElementById("dash-avatar").textContent = initials(account.borrower_name);
+  document.getElementById("dash-borrower-name").textContent = account.borrower_name;
+  document.getElementById("dash-business-name").textContent = `${account.business_name} · ${account.account_id}`;
+  const $risk = document.getElementById("dash-risk-chip");
+  $risk.textContent = `${account.risk_tier} risk`;
+  $risk.className = `risk-chip ${account.risk_tier}`;
+
+  // Progress ring -- fraction of the loan term elapsed so far.
+  const fraction = account.tenure_months > 0 ? (account.tenure_months - account.months_remaining) / account.tenure_months : 0;
+  const ringColor =
+    account.risk_tier === "high" ? "var(--danger)" : account.risk_tier === "medium" ? "var(--warning)" : "var(--success)";
+  document.getElementById("dash-ring-stack").innerHTML = ringChartSvg(fraction, ringColor);
+  document.getElementById("dash-ring-value").textContent = account.months_remaining;
+  document.getElementById("dash-tenure").textContent = account.tenure_months;
+
+  // Loan snapshot stats -- only surface the conditional fields when the
+  // backend actually sent a value for them (interest_rate_pct is null
+  // until a signed agreement is parsed; late_fee_amount is null unless
+  // late_fee_applicable is true).
+  const stats = [
+    ["Principal", fmtInr(account.principal_amount)],
+    ["EMI amount", fmtInr(account.emi_amount)],
+    ["Next due", fmtDate(account.emi_due_date)],
+    ["Outstanding", fmtInr(account.outstanding_balance_approx)],
+    ["Days past due", String(account.days_past_due), account.days_past_due > 0 ? "flagged" : "ok"],
+    ["NACH mandate", account.nach_mandate_active ? "Active" : "Inactive", account.nach_mandate_active ? "ok" : "flagged"],
+  ];
+  if (account.interest_rate_pct != null) stats.push(["Interest rate", `${account.interest_rate_pct}% p.a.`]);
+  if (account.late_fee_applicable) stats.push(["Late fee", fmtInr(account.late_fee_amount), "flagged"]);
+  document.getElementById("dash-hero-stats").innerHTML = stats
+    .map(
+      ([label, value, cls]) =>
+        `<div><div class="hero-stat-label">${escapeHtml(label)}</div><div class="hero-stat-value${cls ? " " + cls : ""}">${escapeHtml(value)}</div></div>`
+    )
+    .join("");
+
+  // Payment timeline -- real history then projected EMIs, one chronological list.
+  document.getElementById("dash-timeline").innerHTML = timeline.length
+    ? timeline
+        .map(
+          (t) =>
+            `<div class="dtl-row"><div class="dtl-dot ${t.status}"></div><div class="dtl-info"><b>${fmtInr(t.amount)}</b> — ${escapeHtml(t.label)}<div class="dtl-meta">${fmtDate(t.date)}</div></div></div>`
+        )
+        .join("")
+    : `<p class="dash-no-data">No payment history and no scheduled EMIs.</p>`;
+
+  // This account's own escalation history, newest first (server order).
+  document.getElementById("dash-escalations").innerHTML = escalations.length
+    ? escalations
+        .map(
+          (e) =>
+            `<div class="esc-card"><div><p class="esc-reason">${escapeHtml(e.reason)}</p><p class="esc-meta">Requested ${fmtDateTime(e.created_at)}${e.resolved_at ? ` · resolved ${fmtDateTime(e.resolved_at)}` : ""}</p></div><span class="esc-status ${e.status}">${escapeHtml(STATUS_LABELS[e.status] || e.status)}</span></div>`
+        )
+        .join("")
+    : `<p class="dash-no-data">No requests raised yet.</p>`;
+
+  // Documents -- real download links, scoped to this conversation's verified account.
+  document.getElementById("dash-documents").innerHTML = documents.length
+    ? documents
+        .map(
+          (d) =>
+            `<div class="doc-row">${DOC_ICON}<div class="doc-info"><div class="doc-name">${escapeHtml(d.filename)}</div><div class="doc-meta">${fmtFileSize(d.size_bytes)} · uploaded ${fmtDateTime(d.uploaded_at)}</div></div><a class="doc-download" href="/conversations/${state.conversationId}/documents/${encodeURIComponent(d.filename)}" download>Download</a></div>`
+        )
+        .join("")
+    : `<p class="dash-no-data">No documents uploaded yet.</p>`;
+}
+
+document.getElementById("dash-retry-btn").addEventListener("click", loadDashboard);
+document.getElementById("dash-refresh-btn").addEventListener("click", loadDashboard);
+document.getElementById("dash-restart-btn").addEventListener("click", restartAll);
+document.getElementById("dash-chat-btn").addEventListener("click", enterChat);
+
+/* ============================================================
+   Quick actions -- each POSTs directly (bypassing the LLM, exactly like
+   the backend's own quick-action endpoints), shows its own real result or
+   error inline, and refreshes the dashboard afterward since a dispute or
+   escalation changes data the hero/warnings/escalations sections show.
+   ============================================================ */
+function showActionResult($el, html, ok) {
+  $el.hidden = false;
+  $el.className = `action-result ${ok ? "ok" : "err"}`;
+  $el.innerHTML = html;
+}
+
+function friendlyActionError(err) {
+  if (err.status === 400) return escapeHtml(err.message || "Please fill this in and try again.");
+  if (err.status === 422) return "Enter a valid amount.";
+  if (err.status === 403) return "Your session isn't verified anymore — please start over.";
+  if (err.status === 404) return "This conversation expired — please start over.";
+  if (err instanceof ApiError) return escapeHtml(err.message);
+  return "Something went wrong — please check your connection and try again.";
+}
+
+function wireActionToggle(btnId, formId, resultId) {
+  const $btn = document.getElementById(btnId);
+  const $form = document.getElementById(formId);
+  const $result = document.getElementById(resultId);
+  $btn.addEventListener("click", () => {
+    $form.hidden = !$form.hidden;
+    if (!$form.hidden) $result.hidden = true;
+  });
+  return { $form, $result };
+}
+
+const { $form: $disputeForm, $result: $disputeResult } = wireActionToggle("action-dispute-btn", "dispute-form", "dispute-result");
+document.getElementById("dispute-cancel-btn").addEventListener("click", () => { $disputeForm.hidden = true; });
+$disputeForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const $reasonInput = document.getElementById("dispute-reason");
+  const reason = $reasonInput.value.trim();
+  if (!reason) {
+    showActionResult($disputeResult, "Enter a reason first.", false);
+    return;
+  }
+  const $btn = document.getElementById("dispute-submit-btn");
+  $btn.disabled = true;
+  try {
+    const result = await postDispute(state.conversationId, reason);
+    showActionResult(
+      $disputeResult,
+      escapeHtml(
+        result.already_open
+          ? "You already have an open dispute — our team is reviewing it."
+          : "Dispute raised — our team will review it."
+      ),
+      true
+    );
+    $disputeForm.hidden = true;
+    $reasonInput.value = "";
+    loadDashboard(); // dispute_open + warnings just changed
+  } catch (err) {
+    showActionResult($disputeResult, friendlyActionError(err), false);
+  } finally {
+    $btn.disabled = false;
+  }
+});
+
+const { $form: $agentForm, $result: $agentResult } = wireActionToggle("action-agent-btn", "agent-form", "agent-result");
+document.getElementById("agent-cancel-btn").addEventListener("click", () => { $agentForm.hidden = true; });
+$agentForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const $reasonInput = document.getElementById("agent-reason");
+  const reason = $reasonInput.value.trim();
+  const $btn = document.getElementById("agent-submit-btn");
+  $btn.disabled = true;
+  try {
+    const result = await postAgent(state.conversationId, reason);
+    showActionResult(
+      $agentResult,
+      escapeHtml(`Request sent — our team has been notified (status: ${STATUS_LABELS[result.status] || result.status}).`),
+      true
+    );
+    $agentForm.hidden = true;
+    $reasonInput.value = "";
+    loadDashboard(); // a new escalation just appeared in the list
+  } catch (err) {
+    showActionResult($agentResult, friendlyActionError(err), false);
+  } finally {
+    $btn.disabled = false;
+  }
+});
+
+const { $form: $paymentForm, $result: $paymentResult } = wireActionToggle("action-payment-btn", "payment-form", "payment-result");
+document.getElementById("payment-cancel-btn").addEventListener("click", () => { $paymentForm.hidden = true; });
+$paymentForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const $amountInput = document.getElementById("payment-amount");
+  const amount = Number($amountInput.value);
+  if (!$amountInput.value || !(amount > 0)) {
+    showActionResult($paymentResult, "Enter a valid amount.", false);
+    return;
+  }
+  const $btn = document.getElementById("payment-submit-btn");
+  $btn.disabled = true;
+  try {
+    const result = await postPaymentLink(state.conversationId, amount);
+    showActionResult(
+      $paymentResult,
+      `Payment link for ${escapeHtml(fmtInr(result.amount))}:<br><a href="${escapeHtml(result.payment_link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(result.payment_link)}</a>`,
+      true
+    );
+    // No account/escalation/document field changes as a result of this
+    // action (see browser_api.py) -- nothing on the dashboard to refresh.
+  } catch (err) {
+    showActionResult($paymentResult, friendlyActionError(err), false);
+  } finally {
+    $btn.disabled = false;
   }
 });

@@ -93,6 +93,30 @@ const uploadDocument = (accountId, file, documentType) => {
   form.append("document_type", documentType);
   return api(`/accounts/${accountId}/documents`, { method: "POST", body: form });
 };
+const getDocuments = (accountId) => api(`/accounts/${accountId}/documents`);
+
+// Not routed through api() -- that helper always calls res.json(), but a
+// document download's real body is the file's bytes. Same auth (the
+// X-API-Key header) and the same 401/error-detail handling as api()
+// itself, just returning a Blob at the end instead of parsed JSON.
+async function downloadDocument(accountId, filename) {
+  const res = await fetch(`/accounts/${accountId}/documents/${encodeURIComponent(filename)}`, {
+    headers: { "X-API-Key": state.apiKey },
+  });
+  if (res.status === 401) {
+    lock("That key was rejected by the server.");
+    throw new ApiError(401, "unauthorized");
+  }
+  if (!res.ok) {
+    let detail = `download failed (${res.status})`;
+    try {
+      const body = await res.json();
+      if (body.detail) detail = body.detail;
+    } catch (_) {}
+    throw new ApiError(res.status, detail);
+  }
+  return res.blob();
+}
 const draftClarification = (accountId, operatorNote) =>
   api(`/accounts/${accountId}/clarification-requests/draft`, {
     method: "POST",
@@ -235,6 +259,14 @@ function fmtInrShort(n) {
   if (v >= 1e5) return "₹" + (v / 1e5).toFixed(v % 1e5 === 0 ? 0 : 1) + "L";
   if (v >= 1e3) return "₹" + (v / 1e3).toFixed(v % 1e3 === 0 ? 0 : 1) + "k";
   return fmtInr(v);
+}
+
+// Human-readable file size for the documents list -- 1536 -> "1.5 KB",
+// 3145728 -> "3.0 MB", falling back to plain bytes under 1KB.
+function fmtFileSize(bytes) {
+  if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  if (bytes >= 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return bytes + " B";
 }
 
 function fmtDate(d) {
@@ -614,8 +646,8 @@ async function openDetail(accountId) {
   wireDetailClose();
 
   try {
-    const account = await getAccount(accountId);
-    renderDetail(account);
+    const [account, documents] = await Promise.all([getAccount(accountId), getDocuments(accountId)]);
+    renderDetail(account, documents);
   } catch (e) {
     $detailPanel.innerHTML = `<div class="detail-close">✕</div><div class="detail-body"><p class="no-data">Couldn't load this account: ${escapeHtml(e.message)}</p></div>`;
     wireDetailClose();
@@ -917,7 +949,61 @@ function buildAccountDigest(a) {
   return { verdict, stats, worries };
 }
 
-function renderDetail(a) {
+function documentRowHtml(d) {
+  return `<div class="document-row">
+    <div class="document-info">
+      <span class="document-name">${escapeHtml(d.filename)}</span>
+      <span class="document-meta">${fmtFileSize(d.size_bytes)} · uploaded ${fmtDate(d.uploaded_at)}</span>
+    </div>
+    <button type="button" class="btn document-download-btn" data-filename="${escapeHtml(d.filename)}">Download</button>
+  </div>`;
+}
+
+function renderDetail(a, documents) {
+  // Fetches the file itself (with the X-API-Key header, same auth as
+  // every other call in this file) rather than a plain <a href> -- the
+  // download endpoint 401s without that header, which a bare link has no
+  // way to send. The blob + temporary <a download> is what actually
+  // triggers the browser's save-file behavior once the bytes are in hand.
+  function wireDocumentDownloads(container) {
+    container.querySelectorAll(".document-download-btn").forEach((btn) =>
+      btn.addEventListener("click", async () => {
+        const filename = btn.dataset.filename;
+        const originalText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Downloading…";
+        try {
+          const blob = await downloadDocument(a.account_id, filename);
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = filename;
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          URL.revokeObjectURL(url);
+        } catch (err) {
+          toast(err.message, true);
+        } finally {
+          btn.disabled = false;
+          btn.textContent = originalText;
+        }
+      })
+    );
+  }
+
+  // A targeted re-render of just the documents section -- called on
+  // initial render and again after a successful upload, deliberately NOT
+  // via a full renderDetail() call, which would wipe out the "Ingested N
+  // chunk(s)…" result message the upload handler just showed.
+  function renderDocumentsList(list) {
+    document.getElementById("documents-count").textContent = list.length;
+    const container = document.getElementById("documents-list");
+    container.innerHTML = list.length
+      ? list.map(documentRowHtml).join("")
+      : `<p class="no-data">No documents uploaded yet.</p>`;
+    wireDocumentDownloads(container);
+  }
   const paidOffFraction = a.tenure_months > 0 ? (a.tenure_months - a.months_remaining) / a.tenure_months : 0;
   const ringColor = a.risk_tier === "high" ? "var(--danger)" : a.risk_tier === "medium" ? "var(--warning)" : "var(--success)";
   const digest = buildAccountDigest(a);
@@ -975,6 +1061,23 @@ function renderDetail(a) {
   // emi_amount for however many months_remaining says are left --
   // exactly the cadence every other EMI-due-date computation in this
   // codebase already assumes (get_payment_status, calculate_hypothetical).
+  // toISOString() always renders in UTC -- for any borrower/operator in a
+  // timezone AHEAD of UTC (IST, +5:30, being exactly this product's home
+  // market), a `cursor` built at LOCAL midnight for e.g. 26 Aug lands on
+  // 25 Aug 18:30 UTC, so slicing toISOString() silently reports 25 Aug
+  // instead of 26 -- every date in this timeline (the "next due"/overdue
+  // entry included) landing one calendar day early for exactly the
+  // audience this dashboard is built for. Formatting from cursor's own
+  // LOCAL year/month/day fields instead keeps the calendar date the
+  // account's due-date cadence actually means, regardless of the
+  // viewer's UTC offset.
+  function toLocalIsoDate(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
+
   function buildEmiTimeline(account) {
     const past = account.payment_history.map((p) => ({
       date: p.date,
@@ -989,7 +1092,7 @@ function renderDetail(a) {
       for (let i = 0; i < account.months_remaining; i++) {
         const isNextDue = i === 0;
         upcoming.push({
-          date: cursor.toISOString().slice(0, 10),
+          date: toLocalIsoDate(cursor),
           amount: account.emi_amount,
           status: isNextDue && account.days_past_due > 0 ? "overdue" : "upcoming",
           label: isNextDue && account.days_past_due > 0 ? `Overdue — ${account.days_past_due}d past due` : "Scheduled",
@@ -1180,14 +1283,21 @@ function renderDetail(a) {
             <p class="section-subtitle">Requests handed off to a human — a restructuring proposal, or anything the agent couldn't resolve on its own.</p>
             ${escalationsHtml}
           </div>
+
+          <div class="section-block">
+            <p class="section-title">Documents <span class="count" id="documents-count">${documents.length}</span></p>
+            <p class="section-subtitle">Everything uploaded for this borrower — signed agreements, KYC, and more.</p>
+            <div id="documents-list"></div>
+          </div>
         </div>
       </div>
     </div>`;
 
   wireDetailClose();
+  renderDocumentsList(documents);
   wireEscalationActions($detailPanel, async () => {
-    const fresh = await getAccount(a.account_id);
-    renderDetail(fresh);
+    const [fresh, freshDocuments] = await Promise.all([getAccount(a.account_id), getDocuments(a.account_id)]);
+    renderDetail(fresh, freshDocuments);
     // A full reload, not just the escalation queue -- approving/rejecting
     // can change the account's own fields (e.g. months_remaining, EMI on
     // an extend_tenure approval), and the portfolio grid card for this
@@ -1230,8 +1340,8 @@ function renderDetail(a) {
     try {
       const result = await sendClarificationRequest(a.account_id, message);
       toast(result.delivered_via_telegram ? "Sent — delivered over Telegram." : "Sent — logged (no linked Telegram to deliver to).");
-      const fresh = await getAccount(a.account_id);
-      renderDetail(fresh);
+      const [fresh, freshDocuments] = await Promise.all([getAccount(a.account_id), getDocuments(a.account_id)]);
+      renderDetail(fresh, freshDocuments);
     } catch (err) {
       toast(err.message, true);
       sendBtn.disabled = false;
@@ -1255,6 +1365,10 @@ function renderDetail(a) {
       resultEl.textContent = `Ingested ${result.chunks_stored} chunk(s) from ${result.filename}${result.interest_rate_extracted ? " — interest rate extracted." : "."}`;
       toast("Document uploaded and ingested.");
       fileInput.value = "";
+      // Refresh just the documents list, not the whole panel -- a full
+      // renderDetail() would wipe the "Ingested N chunk(s)…" message above
+      // before the operator has had a chance to read it.
+      renderDocumentsList(await getDocuments(a.account_id));
     } catch (err) {
       toast(err.message, true);
     } finally {
