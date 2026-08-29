@@ -7,14 +7,13 @@ that's what "contextual chunking" concretely means here.
 
 import hashlib
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from docling.chunking import HybridChunker
 from docling.document_converter import DocumentConverter
 
 from businessflow.accounts.db import get_connection
 from businessflow.rag.embeddings import embed_passages
-from businessflow.rag.store import embedding_literal
+from businessflow.rag.store import embedding_literal, normalize_source_document, resolve_source_document
 
 
 def ingest_document(file_path: str, document_type: str, account_id: str | None = None) -> int:
@@ -41,11 +40,17 @@ def ingest_document(file_path: str, document_type: str, account_id: str | None =
     chunks = list(HybridChunker().chunk(doc))
     conn = get_connection()
 
+    # Stored (and matched against, below and in _supersede_existing_chunks/
+    # purge_orphaned_chunks) as a repo-root-relative path -- see
+    # normalize_source_document's docstring for why an absolute one
+    # would be wrong now that this store is shared across machines.
+    source_document = normalize_source_document(file_path)
+
     # One timestamp for this whole call: it's both the superseded_at value
     # stamped on the old generation below, and (see the id comment in the
     # loop) folded into the new generation's ids.
     now = datetime.now(timezone.utc)
-    _supersede_existing_chunks(conn, file_path, now)
+    _supersede_existing_chunks(conn, source_document, now)
 
     if not chunks:
         return 0
@@ -54,17 +59,17 @@ def ingest_document(file_path: str, document_type: str, account_id: str | None =
     embeddings = embed_passages(texts)
 
     for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-        # Folds `now` in, not just file_path + index: the old id scheme
-        # (file_path + index alone) is what let re-ingestion overwrite the
-        # same ids in place, which was correct back when re-ingestion
-        # deleted-then-inserted. Now that the previous generation is kept
-        # around (marked superseded, not deleted), reusing those same ids
-        # here would upsert straight over the rows _supersede_existing_
-        # chunks just wrote above -- silently erasing the superseded
-        # marking this whole feature exists to preserve. Folding in `now`
-        # guarantees this generation's ids can't collide with the one it's
-        # superseding.
-        chunk_id = hashlib.sha1(f"{file_path}::{i}::{now.isoformat()}".encode()).hexdigest()
+        # Folds `now` in, not just source_document + index: the old id
+        # scheme (file_path + index alone) is what let re-ingestion
+        # overwrite the same ids in place, which was correct back when
+        # re-ingestion deleted-then-inserted. Now that the previous
+        # generation is kept around (marked superseded, not deleted),
+        # reusing those same ids here would upsert straight over the rows
+        # _supersede_existing_chunks just wrote above -- silently erasing
+        # the superseded marking this whole feature exists to preserve.
+        # Folding in `now` guarantees this generation's ids can't collide
+        # with the one it's superseding.
+        chunk_id = hashlib.sha1(f"{source_document}::{i}::{now.isoformat()}".encode()).hexdigest()
         conn.execute(
             """
             insert into document_chunks
@@ -72,17 +77,18 @@ def ingest_document(file_path: str, document_type: str, account_id: str | None =
             values (%s, %s, %s, %s, %s, %s, %s, %s::vector)
             """,
             (
-                chunk_id, file_path, document_type, account_id or "general", i,
+                chunk_id, source_document, document_type, account_id or "general", i,
                 " > ".join(chunk.meta.headings or []), chunk.text, embedding_literal(embedding),
             ),
         )
     return len(chunks)
 
 
-def _supersede_existing_chunks(conn, file_path: str, superseded_at: datetime) -> None:
-    """Marks every currently-active chunk stored for file_path as
-    superseded, in place, ahead of ingest_document() inserting a new
-    generation.
+def _supersede_existing_chunks(conn, source_document: str, superseded_at: datetime) -> None:
+    """Marks every currently-active chunk stored for source_document (an
+    already-normalized, repo-root-relative path -- see
+    normalize_source_document) as superseded, in place, ahead of
+    ingest_document() inserting a new generation.
 
     Only touches chunks that are currently active (superseded_at is null)
     -- a chunk from an even older generation that's already superseded is
@@ -90,12 +96,12 @@ def _supersede_existing_chunks(conn, file_path: str, superseded_at: datetime) ->
     it actually stopped being current) is never overwritten by a later,
     unrelated re-ingestion.
 
-    Does nothing if file_path has never been ingested before, or every
-    chunk for it is already superseded -- nothing active to mark.
+    Does nothing if source_document has never been ingested before, or
+    every chunk for it is already superseded -- nothing active to mark.
     """
     conn.execute(
         "update document_chunks set superseded_at = %s where source_document = %s and superseded_at is null",
-        (superseded_at, file_path),
+        (superseded_at, source_document),
     )
 
 
@@ -129,10 +135,18 @@ def purge_orphaned_chunks() -> int:
     after the probe file itself was deleted. Deliberately narrow: a chunk
     is only orphaned when its file is verifiably gone, never based on
     content or age, so this can never delete a real, currently-valid
-    document's chunks. Returns the number of chunks actually deleted."""
+    document's chunks. Returns the number of chunks actually deleted.
+
+    Resolves each stored (repo-root-relative) source_document against the
+    repo root before checking -- checking the raw relative string against
+    whatever the process's own cwd happens to be would work by convention
+    (every entry point here runs from the repo root) but resolving
+    explicitly doesn't depend on that convention holding everywhere."""
     conn = get_connection()
     rows = conn.execute("select distinct source_document from document_chunks").fetchall()
-    orphaned_documents = [r["source_document"] for r in rows if not Path(r["source_document"]).exists()]
+    orphaned_documents = [
+        r["source_document"] for r in rows if not resolve_source_document(r["source_document"]).exists()
+    ]
     if not orphaned_documents:
         return 0
     deleted = conn.execute(

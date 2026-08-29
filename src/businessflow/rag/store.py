@@ -24,8 +24,14 @@ change) for exactly the kind of thing a WHERE clause expresses directly.
 """
 
 from datetime import datetime
+from pathlib import Path
 
 from businessflow.accounts.db import get_connection
+
+# store.py lives at src/businessflow/rag/store.py -- three parents up is
+# the repo root, the same offset ops/api.py's own _DOCUMENTS_DIR already
+# uses from its own location one level shallower in the tree.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def embedding_literal(vector) -> str:
@@ -36,11 +42,53 @@ def embedding_literal(vector) -> str:
     return "[" + ",".join(repr(float(x)) for x in vector) + "]"
 
 
+def normalize_source_document(file_path: str) -> str:
+    """Every source_document is stored (and matched against) as a path
+    relative to the repo root, never the absolute path a caller happened
+    to pass in.
+
+    Found live: document_chunks is one shared table every machine that
+    runs this app writes into (dev laptops, CI runners, the VM) -- an
+    absolute path bakes in whichever machine ingested it, so the exact
+    same logical file (say data/kb/grace_period.md) ingested from a
+    Windows checkout and a Linux CI checkout was tracked as two entirely
+    unrelated documents, and purge_orphaned_chunks (which checks
+    resolve_source_document(...).exists() against the CALLING machine's
+    own filesystem) deleted the other machine's perfectly real chunks
+    just because that exact absolute path doesn't exist locally. A
+    repo-root-relative path is identical across every checkout, so
+    supersede-matching and the orphan check both become correct
+    regardless of which machine ingested or later re-checks a document.
+
+    Falls back to the absolute, resolved path when file_path isn't under
+    the repo at all (e.g. a test's tempfile) -- there's no portable
+    relative form for that case, and it only ever affects a single
+    machine's own temporary data, never a real committed document.
+    """
+    resolved = Path(file_path).resolve()
+    try:
+        return resolved.relative_to(_REPO_ROOT).as_posix()
+    except ValueError:
+        return str(resolved)
+
+
+def resolve_source_document(source_document: str) -> Path:
+    """The inverse of normalize_source_document -- a relative value is
+    resolved against the repo root (so it's checked the same way on every
+    machine); an absolute one (the tempfile-outside-the-repo case) is used
+    as-is."""
+    p = Path(source_document)
+    return p if p.is_absolute() else _REPO_ROOT / p
+
+
 # Everything below is test/inspection support only -- ingest.py and
 # retriever.py never call these, they speak SQL against get_connection()
 # directly for their own real read/write paths. These exist so tests can
 # inspect or manipulate raw chunk state (a superseded_at timestamp, whether
 # a chunk still exists) without every test file hand-rolling the same SQL.
+# Each takes the SAME raw path a test passed to ingest_document and
+# normalizes it the same way ingest_document itself does, so a test never
+# needs to know or care that storage keys on the normalized form.
 
 
 def get_chunk_ids_for_document(source_document: str) -> list[dict]:
@@ -48,7 +96,7 @@ def get_chunk_ids_for_document(source_document: str) -> list[dict]:
     stored for source_document."""
     return get_connection().execute(
         "select id, superseded_at from document_chunks where source_document = %s",
-        (source_document,),
+        (normalize_source_document(source_document),),
     ).fetchall()
 
 
@@ -59,7 +107,7 @@ def get_chunk_texts_for_document(source_document: str) -> list[dict]:
     DocumentRetriever's own active-only filtering."""
     return get_connection().execute(
         "select document_text, superseded_at from document_chunks where source_document = %s",
-        (source_document,),
+        (normalize_source_document(source_document),),
     ).fetchall()
 
 
@@ -76,4 +124,7 @@ def backdate_chunks(ids: list[str], superseded_at: datetime) -> None:
 def delete_chunks_for_document(source_document: str) -> None:
     """Removes every chunk (active or superseded) for source_document --
     test cleanup, the equivalent of the old collection.delete(where=...)."""
-    get_connection().execute("delete from document_chunks where source_document = %s", (source_document,))
+    get_connection().execute(
+        "delete from document_chunks where source_document = %s",
+        (normalize_source_document(source_document),),
+    )

@@ -119,7 +119,7 @@ def test_hindi_document_candidate_is_not_demoted_by_the_english_only_reranker(mo
     import tempfile
 
     from businessflow.rag.ingest import ingest_document
-    from businessflow.rag.store import delete_chunks_for_document
+    from businessflow.rag.store import delete_chunks_for_document, normalize_source_document
     from businessflow.rag.tokenize import dominant_script
 
     query = (
@@ -142,7 +142,16 @@ def test_hindi_document_candidate_is_not_demoted_by_the_english_only_reranker(mo
         assert chunks_stored > 0
 
         retriever = DocumentRetriever()
-        hindi_idx = next(i for i, m in enumerate(retriever._metadatas) if m.get("source_document") == temp_path)
+        # source_document is stored normalized (see rag/store.py's
+        # normalize_source_document) -- a tempfile lives outside the repo
+        # root, so its normalized form is its own resolved absolute path,
+        # which isn't guaranteed to be byte-identical to temp_path as
+        # tempfile.NamedTemporaryFile handed it back (case/short-path
+        # normalization on Windows, symlink resolution elsewhere).
+        normalized_temp_path = normalize_source_document(temp_path)
+        hindi_idx = next(
+            i for i, m in enumerate(retriever._metadatas) if m.get("source_document") == normalized_temp_path
+        )
         hindi_chunk_text = retriever._texts[hindi_idx]
         assert dominant_script(hindi_chunk_text) == "devanagari"  # sanity: the chunk classifies as intended
 
