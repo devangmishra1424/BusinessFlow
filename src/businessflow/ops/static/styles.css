@@ -1,12 +1,54 @@
 /* ============================================================
    BusinessFlow Ops — design tokens
 
-   Palette is the user-supplied blue scale (001D39 -> BDD8E9),
-   used for every structural/chrome color. Semantic state colors
-   (success/warning/danger) deliberately step outside that scale:
-   flags (overdue/disputed/broken_promises) and risk tiers are the
-   ops team's core at-a-glance signal, and a single-hue UI can't
-   encode "fine" vs "needs attention" without them.
+   DESIGN SPEC (v2) — restraint over spectacle.
+
+   The previous pass (v1) leaned on the same handful of moves every
+   AI-generated dashboard reaches for by default: backdrop-filter blur
+   on every card, translucent rgba surfaces, gradient-mask borders,
+   radial "glow blob" backgrounds, and micro box-shadow glows on small
+   elements (status dots, badges). Stacked together across an entire
+   screen, that combination is a recognizable tell -- it reads as a
+   generated demo, not a product a real ops team stares at for 8 hours.
+
+   Real reference points checked directly (Razorpay's marketing site,
+   Stripe's site, Paisabazaar): none of them blur or glow routine UI.
+   They use flat, mostly opaque surfaces; a restrained one-or-two-color
+   accent; confident but plain type; and shadow/elevation reserved for
+   things that are genuinely floating above the page (a modal, a
+   dropdown) -- never applied to an in-grid card just for texture.
+
+   What changed here, concretely:
+   - Card/surface backgrounds are flat and mostly opaque, not
+     translucent+blurred. Blur is kept ONLY on true overlay scrims
+     (detail-backdrop, new-account-backdrop) -- that's the one place a
+     frosted-glass effect is a real, recognized UI convention (macOS/iOS
+     do this for the same reason: a scrim, not a card).
+   - border-radius scale pulled in (10/16/22 -> 6/10/14). Full pill
+     shape is now reserved for things that are actually tags/statuses/a
+     segmented control (flag chips, status pills, the Portfolio/
+     Escalations switcher) -- a real convention (GitHub labels, Linear
+     tags, Stripe status badges are always pill-shaped) -- rather than
+     applied to buttons, the search bar, and cards as a blanket style.
+   - Box-shadow is only ever used for something actually elevated above
+     the page (the two modals, the toast). No shadow on in-grid cards,
+     no glow on status dots/badges -- a dot's color alone is the signal;
+     lighting it up like a notification badge undermines the "quiet,
+     serious ops tool" register this needs.
+   - The decorative radial-gradient background blobs are gone --
+     replaced by one flat, subtle top-to-bottom gradient. The background
+     shouldn't compete with the data sitting on top of it.
+   - --other/--other-dim replaces a one-off magenta (#d98cf0) that
+     existed for the broken_promises flag alone and didn't relate to
+     anything else in the palette -- a real tell that a color got picked
+     because it looked nice in isolation, not because it was chosen as
+     part of a system. It's now a muted blue-violet, still distinct from
+     warning/danger, but clearly a member of the same cool, desaturated
+     family as the rest of the palette.
+
+   Palette hues themselves are unchanged (the user-supplied blue scale,
+   001D39 -> BDD8E9, plus the semantic success/warning/danger set) --
+   this is an execution pass, not a rebrand.
    ============================================================ */
 :root {
   --navy-950: #00111f;
@@ -20,11 +62,11 @@
 
   --bg-0: #030d18;
   --bg-1: #051c31;
-  --surface: rgba(20, 61, 97, 0.38);
+  --surface: #0c2338;
   --surface-solid: #0d2942;
-  --surface-strong: rgba(28, 78, 122, 0.55);
-  --border: rgba(123, 189, 232, 0.14);
-  --border-strong: rgba(123, 189, 232, 0.28);
+  --surface-strong: #163a58;
+  --border: rgba(123, 189, 232, 0.12);
+  --border-strong: rgba(123, 189, 232, 0.24);
 
   --text-0: #f2f8fd;
   --text-1: #c7dcee;
@@ -41,14 +83,18 @@
   --warning-dim: rgba(240, 189, 99, 0.14);
   --danger: #f2836f;
   --danger-dim: rgba(242, 131, 111, 0.16);
+  --other: #8b93d4;
+  --other-dim: rgba(139, 147, 212, 0.14);
 
-  --radius-sm: 10px;
-  --radius-md: 16px;
-  --radius-lg: 22px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
   --radius-pill: 999px;
 
-  --shadow-lift: 0 20px 60px -20px rgba(0, 8, 20, 0.7);
-  --shadow-soft: 0 10px 30px -14px rgba(0, 8, 20, 0.55);
+  /* Reserved for things genuinely floating above the page (modals,
+     toast) -- never applied to an in-grid card. */
+  --shadow-lift: 0 16px 40px -12px rgba(0, 6, 14, 0.6);
+  --shadow-soft: 0 4px 16px -6px rgba(0, 6, 14, 0.35);
 
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --font: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -65,10 +111,7 @@ body {
   margin: 0;
   font-family: var(--font);
   color: var(--text-1);
-  background:
-    radial-gradient(1100px 700px at 82% -8%, rgba(123, 189, 232, 0.16), transparent 60%),
-    radial-gradient(900px 600px at -10% 105%, rgba(78, 142, 162, 0.14), transparent 55%),
-    linear-gradient(180deg, var(--bg-0) 0%, var(--bg-1) 55%, var(--bg-0) 100%);
+  background: linear-gradient(180deg, var(--bg-0) 0%, var(--bg-1) 55%, var(--bg-0) 100%);
   background-attachment: fixed;
   min-height: 100%;
   -webkit-font-smoothing: antialiased;
@@ -105,16 +148,12 @@ button, input, select { font-family: inherit; }
   padding: 24px; overflow: hidden;
 }
 .unlock-screen[hidden] { display: none; }
-.unlock-glow {
-  position: absolute; width: 900px; height: 900px; border-radius: 50%;
-  background: radial-gradient(circle, rgba(123, 189, 232, 0.16), transparent 60%);
-  top: -320px; right: -280px; pointer-events: none;
-}
+.unlock-glow { display: none; }
 .unlock-card {
   position: relative; width: 100%; max-width: 380px;
-  background: var(--surface); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+  background: var(--surface-solid);
   border: 1px solid var(--border-strong); border-radius: var(--radius-lg);
-  padding: 36px 32px 28px; box-shadow: var(--shadow-lift);
+  padding: 36px 32px 28px; box-shadow: var(--shadow-soft);
   animation: rise 0.6s var(--ease);
 }
 .unlock-card .brand { margin-bottom: 22px; }
@@ -128,8 +167,8 @@ button, input, select { font-family: inherit; }
 #unlock-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 #unlock-form button {
   display: flex; align-items: center; gap: 6px; border: none; cursor: pointer;
-  background: linear-gradient(135deg, var(--sky-300), var(--teal-500));
-  color: var(--navy-950); font-weight: 700; font-size: 14px; padding: 0 18px; border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--navy-950); font-weight: 700; font-size: 14px; padding: 0 18px; border-radius: var(--radius-sm);
   transition: transform 0.15s var(--ease), filter 0.15s var(--ease);
 }
 #unlock-form button:hover { filter: brightness(1.08); transform: translateY(-1px); }
@@ -157,7 +196,7 @@ button, input, select { font-family: inherit; }
   padding: 9px 16px; border-radius: var(--radius-pill); transition: all 0.2s var(--ease);
 }
 .tab:hover { color: var(--text-0); background: rgba(123, 189, 232, 0.08); }
-.tab.active { color: var(--navy-950); background: var(--accent); box-shadow: 0 8px 20px -8px rgba(123, 189, 232, 0.6); }
+.tab.active { color: var(--navy-950); background: var(--accent); }
 .tab-badge {
   background: var(--danger); color: #2b0e08; font-size: 10.5px; font-weight: 800; min-width: 18px; height: 18px;
   border-radius: var(--radius-pill); display: inline-flex; align-items: center; justify-content: center; padding: 0 5px;
@@ -187,14 +226,7 @@ button, input, select { font-family: inherit; }
 .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 22px; }
 .kpi-card {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
-  padding: 20px 22px; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
-  box-shadow: var(--shadow-soft); position: relative; overflow: hidden;
-}
-.kpi-card::after {
-  content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px;
-  background: linear-gradient(160deg, rgba(123, 189, 232, 0.35), transparent 40%);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none;
+  padding: 20px 22px; position: relative;
 }
 .kpi-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .kpi-icon {
@@ -222,13 +254,13 @@ button, input, select { font-family: inherit; }
 .pill-dot { width: 7px; height: 7px; border-radius: 50%; }
 .pill-dot.overdue { background: var(--danger); }
 .pill-dot.disputed { background: var(--warning); }
-.pill-dot.broken_promises { background: #d98cf0; }
+.pill-dot.broken_promises { background: var(--other); }
 
 .toolbar-right-group { display: flex; align-items: center; gap: 10px; }
 
 .search-wrap {
   display: flex; align-items: center; gap: 9px; background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius-pill); padding: 9px 14px; color: var(--text-3); min-width: 280px;
+  border-radius: var(--radius-md); padding: 9px 14px; color: var(--text-3); min-width: 280px;
 }
 .search-wrap:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 .search-input { flex: 1; background: transparent; border: none; color: var(--text-0); font-size: 13.5px; }
@@ -239,11 +271,11 @@ button, input, select { font-family: inherit; }
 .account-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; padding-bottom: 8px; }
 .account-card {
   text-align: left; cursor: pointer; background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius-lg); padding: 20px; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
-  box-shadow: var(--shadow-soft); transition: transform 0.22s var(--ease), border-color 0.22s var(--ease), box-shadow 0.22s var(--ease);
+  border-radius: var(--radius-lg); padding: 20px;
+  transition: transform 0.18s var(--ease), border-color 0.18s var(--ease), background 0.18s var(--ease);
   display: flex; flex-direction: column; gap: 14px;
 }
-.account-card:hover { transform: translateY(-4px); border-color: var(--border-strong); box-shadow: var(--shadow-lift); }
+.account-card:hover { transform: translateY(-2px); border-color: var(--border-strong); background: var(--surface-strong); }
 .account-top { display: flex; align-items: center; gap: 12px; }
 .avatar {
   width: 44px; height: 44px; min-width: 44px; border-radius: 13px; display: flex; align-items: center; justify-content: center;
@@ -253,9 +285,9 @@ button, input, select { font-family: inherit; }
 .account-borrower { font-family: var(--font-tight); font-weight: 700; font-size: 15px; color: var(--text-0); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .account-business { font-size: 12.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .risk-dot { margin-left: auto; width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
-.risk-dot.low { background: var(--success); box-shadow: 0 0 8px rgba(79, 216, 168, 0.6); }
-.risk-dot.medium { background: var(--warning); box-shadow: 0 0 8px rgba(240, 189, 99, 0.6); }
-.risk-dot.high { background: var(--danger); box-shadow: 0 0 8px rgba(242, 131, 111, 0.6); }
+.risk-dot.low { background: var(--success); }
+.risk-dot.medium { background: var(--warning); }
+.risk-dot.high { background: var(--danger); }
 
 .account-meta-row { display: flex; align-items: baseline; justify-content: space-between; }
 .account-loan-type { font-size: 12px; color: var(--text-2); background: rgba(123, 189, 232, 0.08); padding: 4px 10px; border-radius: var(--radius-pill); }
@@ -267,7 +299,7 @@ button, input, select { font-family: inherit; }
 .flag-chip { font-size: 11px; font-weight: 700; padding: 4px 9px; border-radius: var(--radius-pill); display: inline-flex; align-items: center; gap: 5px; }
 .flag-chip.overdue { background: var(--danger-dim); color: var(--danger); }
 .flag-chip.disputed { background: var(--warning-dim); color: var(--warning); }
-.flag-chip.broken_promises { background: rgba(217, 140, 240, 0.14); color: #d98cf0; }
+.flag-chip.broken_promises { background: var(--other-dim); color: var(--other); }
 .flag-chip.clean { background: var(--success-dim); color: var(--success); }
 
 .account-footer { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--text-3); border-top: 1px solid var(--border); padding-top: 12px; }
@@ -281,7 +313,7 @@ button, input, select { font-family: inherit; }
 .escalation-list { display: flex; flex-direction: column; gap: 12px; }
 .escalation-card {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px 20px;
-  display: flex; align-items: center; gap: 18px; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  display: flex; align-items: center; gap: 18px;
 }
 .escalation-main { flex: 1; min-width: 0; }
 .escalation-top { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
@@ -298,9 +330,9 @@ button, input, select { font-family: inherit; }
 .status-pill.approved { background: var(--success-dim); color: var(--success); }
 .status-pill.rejected { background: var(--danger-dim); color: var(--danger); }
 
-.btn { border: none; cursor: pointer; font-weight: 700; font-size: 12.5px; padding: 9px 16px; border-radius: var(--radius-pill); transition: all 0.18s var(--ease); }
-.btn-approve { background: linear-gradient(135deg, var(--success), #34b98a); color: #062318; }
-.btn-approve:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.btn { border: none; cursor: pointer; font-weight: 700; font-size: 12.5px; padding: 9px 16px; border-radius: var(--radius-sm); transition: all 0.18s var(--ease); }
+.btn-approve { background: var(--success); color: #062318; }
+.btn-approve:hover { filter: brightness(1.08); }
 .btn-reject { background: var(--surface-strong); color: var(--text-1); border: 1px solid var(--border-strong); }
 .btn-reject:hover { color: var(--danger); border-color: var(--danger); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
@@ -321,11 +353,11 @@ button, input, select { font-family: inherit; }
 .detail-panel {
   position: fixed; top: 50%; left: 50%; z-index: 41;
   width: 85vw; height: 85vh; max-width: 1180px;
-  background: linear-gradient(180deg, #071c30, #04121f 60%); border: 1px solid var(--border-strong);
-  border-radius: 28px; overflow-y: auto;
-  transform: translate(-50%, -50%) scale(0.94); opacity: 0;
+  background: var(--surface-solid); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg); overflow-y: auto;
+  transform: translate(-50%, -50%) scale(0.97); opacity: 0;
   transition: transform 0.3s var(--ease), opacity 0.24s var(--ease);
-  box-shadow: 0 40px 100px -20px rgba(0, 6, 14, 0.85);
+  box-shadow: var(--shadow-lift);
   pointer-events: none;
 }
 .detail-panel.open { transform: translate(-50%, -50%) scale(1); opacity: 1; pointer-events: auto; }
@@ -346,11 +378,11 @@ button, input, select { font-family: inherit; }
 .new-account-modal {
   position: fixed; top: 50%; left: 50%; z-index: 41;
   width: min(640px, 92vw); max-height: 88vh;
-  background: linear-gradient(180deg, #071c30, #04121f 60%); border: 1px solid var(--border-strong);
-  border-radius: 24px; overflow-y: auto;
-  transform: translate(-50%, -50%) scale(0.94); opacity: 0;
+  background: var(--surface-solid); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg); overflow-y: auto;
+  transform: translate(-50%, -50%) scale(0.97); opacity: 0;
   transition: transform 0.28s var(--ease), opacity 0.22s var(--ease);
-  box-shadow: 0 40px 100px -20px rgba(0, 6, 14, 0.85);
+  box-shadow: var(--shadow-lift);
   pointer-events: none;
 }
 .new-account-modal.open { transform: translate(-50%, -50%) scale(1); opacity: 1; pointer-events: auto; }
@@ -452,12 +484,12 @@ button, input, select { font-family: inherit; }
 .flag-detail-card { border-radius: var(--radius-md); padding: 12px 14px; margin-bottom: 8px; border: 1px solid; }
 .flag-detail-card.overdue { background: var(--danger-dim); border-color: rgba(242,131,111,0.25); }
 .flag-detail-card.disputed { background: var(--warning-dim); border-color: rgba(240,189,99,0.25); }
-.flag-detail-card.broken_promises { background: rgba(217,140,240,0.1); border-color: rgba(217,140,240,0.25); }
+.flag-detail-card.broken_promises { background: var(--other-dim); border-color: rgba(139, 147, 212, 0.3); }
 .flag-detail-card .flag-label { font-weight: 700; font-size: 12.5px; text-transform: capitalize; margin-bottom: 2px; }
 .flag-detail-card .flag-reason { font-size: 12.5px; color: var(--text-1); line-height: 1.45; }
 .flag-detail-card.overdue .flag-label { color: var(--danger); }
 .flag-detail-card.disputed .flag-label { color: var(--warning); }
-.flag-detail-card.broken_promises .flag-label { color: #d98cf0; }
+.flag-detail-card.broken_promises .flag-label { color: var(--other); }
 
 .bar-chart {
   display: flex; align-items: stretch; gap: 10px; padding: 14px 12px 10px;
@@ -502,7 +534,7 @@ button, input, select { font-family: inherit; }
 .timeline-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 .timeline-dot.paid-on-time { background: var(--success); }
 .timeline-dot.paid-late { background: var(--warning); }
-.timeline-dot.overdue { background: var(--danger); box-shadow: 0 0 8px rgba(242, 131, 111, 0.6); }
+.timeline-dot.overdue { background: var(--danger); }
 .timeline-dot.upcoming { background: var(--text-3); }
 .timeline-info { flex: 1; font-size: 12.5px; color: var(--text-1); }
 .timeline-info b { color: var(--text-0); }
