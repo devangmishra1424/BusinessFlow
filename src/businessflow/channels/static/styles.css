@@ -1,23 +1,21 @@
 /* ============================================================
-   BusinessFlow borrower chat — same design tokens as the ops
-   dashboard (brand consistency across the product), laid out as a
-   consumer messaging app rather than a data-dense control room:
-   more whitespace, larger touch targets, a calmer palette balance.
+   BusinessFlow borrower app — design tokens (v3, Stitch handover)
 
-   Same restraint pass as ops/static/styles.css, applied here for the
-   same reason (see that file's own token-block comment for the full
-   spec) -- flat opaque surfaces instead of blur+translucency, shadows
-   reserved for things genuinely floating above the page, full pill
-   shape reserved for what's actually a tag/status/segmented-control.
-   Two things are DELIBERATELY still pill/circular here where they
-   weren't reined in on ops: the message composer input and the send
-   button, and the floating "Chat with us" launcher -- a pill-shaped
-   text composer and a circular send button are the real, universal
-   convention in every chat app (iMessage, WhatsApp, Telegram), and a
-   circular/pill floating action button for a chat launcher is the
-   same real convention every chat widget (Intercom, Drift, Messenger)
-   uses -- these aren't the "pill everything" default this pass is
-   correcting, they're the actually-correct shape for what they are.
+   Same exact token set as ops/static/styles.css (see that file's
+   header for the full spec/reasoning) -- one shared system so the
+   two real product surfaces read as one brand, not two. Laid out as
+   a consumer app rather than a data-dense control room: more
+   whitespace, larger touch targets, a top header instead of a
+   sidebar (a borrower has three destinations, not an ops team's
+   worth of navigation).
+
+   Two things are DELIBERATELY still pill/circular here where ops
+   stays rectangular: the message composer input and send button, and
+   the floating "Chat with us" launcher -- a pill text composer and a
+   circular send button are the real, universal convention in every
+   chat app (iMessage, WhatsApp, Telegram), and a circular/pill
+   floating launcher is the same real convention every chat widget
+   (Intercom, Drift, Messenger) uses.
    ============================================================ */
 :root {
   --navy-950: #00111f;
@@ -29,38 +27,45 @@
   --sky-300: #7bbde8;
   --sky-100: #bdd8e9;
 
-  --bg-0: #030d18;
-  --bg-1: #051c31;
-  --surface: #0c2338;
-  --surface-solid: #0d2942;
-  --surface-strong: #163a58;
-  --border: rgba(123, 189, 232, 0.12);
-  --border-strong: rgba(123, 189, 232, 0.24);
+  --bg-0: #03080f;
+  --bg-1: #070d16;
+  --surface: #0a121e;
+  --surface-solid: #0a121e;
+  --surface-strong: #161e2b;
+  --border: #1e293b;
+  --border-strong: #2c3a52;
 
-  --text-0: #f2f8fd;
-  --text-1: #c7dcee;
-  --text-2: #8fadc7;
-  --text-3: #5f7f9c;
+  --text-0: #f8fafc;
+  --text-1: #e1e2e6;
+  --text-2: #c0c7cf;
+  --text-3: #94a3b8;
 
   --accent: #7bbde8;
   --accent-strong: #bdd8e9;
   --accent-dim: rgba(123, 189, 232, 0.16);
+  --on-accent: #03080f;
 
-  --success: #4fd8a8;
-  --success-dim: rgba(79, 216, 168, 0.14);
+  --success: #6fd9ae;
+  --success-solid-dim: #16332a;
+  --success-dim: rgba(111, 217, 174, 0.14);
   --warning: #f0bd63;
+  --warning-solid-dim: #3a2c14;
   --warning-dim: rgba(240, 189, 99, 0.14);
   --danger: #f2836f;
+  --danger-solid-dim: #3a1e18;
   --danger-dim: rgba(242, 131, 111, 0.16);
+  --other: #a3aef0;
+  --other-solid-dim: #262a4a;
+  --other-dim: rgba(163, 174, 240, 0.14);
 
   --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
   --radius-pill: 999px;
 
   /* Reserved for things genuinely floating above the page (the chat
      panel, its FAB launcher) -- never applied to an in-page card. */
-  --shadow-lift: 0 16px 40px -12px rgba(0, 6, 14, 0.6);
+  --shadow-lift: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -2px rgba(0, 0, 0, 0.25);
   --shadow-soft: 0 4px 16px -6px rgba(0, 6, 14, 0.35);
 
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
@@ -72,10 +77,13 @@
 html, body { height: 100%; }
 body {
   margin: 0; font-family: var(--font); color: var(--text-1);
-  background: linear-gradient(180deg, var(--bg-0) 0%, var(--bg-1) 55%, var(--bg-0) 100%);
-  background-attachment: fixed; min-height: 100%; -webkit-font-smoothing: antialiased;
+  background: var(--bg-0);
+  min-height: 100%; -webkit-font-smoothing: antialiased;
   overflow: hidden;
 }
+/* Tabular numerals on every real financial figure -- keeps columns of
+   ₹ amounts aligned instead of each digit claiming its own width. */
+.pay-amount, .hero-stat-value, .ring-caption-value, .dtl-info b { font-variant-numeric: tabular-nums; }
 button, input { font-family: inherit; }
 ::selection { background: var(--accent-dim); color: var(--text-0); }
 ::-webkit-scrollbar { width: 8px; }
@@ -110,30 +118,30 @@ button, input { font-family: inherit; }
 .start-card .brand { margin-bottom: 16px; }
 .start-tagline { margin: 0 0 22px; font-size: 14px; color: var(--text-1); line-height: 1.5; }
 
-.start-tabs { display: flex; gap: 6px; background: rgba(3, 13, 24, 0.4); border-radius: var(--radius-pill); padding: 4px; margin-bottom: 20px; }
+.start-tabs { display: flex; gap: 6px; background: var(--bg-0); border-radius: var(--radius-pill); padding: 4px; margin-bottom: 20px; }
 .start-tab {
   flex: 1; border: none; background: transparent; color: var(--text-2); font-size: 13px; font-weight: 600;
   padding: 9px 0; border-radius: var(--radius-pill); cursor: pointer; transition: all 0.2s var(--ease);
 }
-.start-tab.active { background: var(--accent); color: var(--navy-950); }
+.start-tab.active { background: var(--accent); color: var(--on-accent); }
 
 .field-label { display: block; font-size: 11px; font-weight: 700; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 6px; }
 #start-form input {
-  width: 100%; background: rgba(3, 13, 24, 0.55); border: 1px solid var(--border); border-radius: var(--radius-md);
+  width: 100%; background: var(--bg-0); border: 1px solid var(--border); border-radius: var(--radius-md);
   padding: 11px 14px; color: var(--text-0); font-size: 14px; margin-bottom: 14px;
 }
 #start-form input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 
 .lang-toggle { display: flex; gap: 8px; margin-bottom: 20px; }
 .lang-btn {
-  flex: 1; border: 1px solid var(--border); background: rgba(3, 13, 24, 0.4); color: var(--text-2);
+  flex: 1; border: 1px solid var(--border); background: var(--bg-0); color: var(--text-2);
   font-size: 13px; font-weight: 600; padding: 9px 0; border-radius: var(--radius-md); cursor: pointer; transition: all 0.2s var(--ease);
 }
 .lang-btn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--text-0); }
 
 .start-submit {
   width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; border: none; cursor: pointer;
-  background: var(--accent); color: var(--navy-950); font-weight: 700;
+  background: var(--accent); color: var(--on-accent); font-weight: 700;
   font-size: 14.5px; padding: 13px 0; border-radius: var(--radius-sm); transition: all 0.15s var(--ease);
 }
 .start-submit:hover { filter: brightness(1.08); }
@@ -168,7 +176,7 @@ button, input { font-family: inherit; }
 
 .dash-header {
   display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 20px;
-  background: rgba(3, 13, 24, 0.72); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  background: var(--bg-1);
   border-bottom: 1px solid var(--border); flex-shrink: 0;
 }
 .dash-header-right { display: flex; align-items: center; gap: 10px; }
@@ -229,6 +237,7 @@ button, input { font-family: inherit; }
   width: 48px; height: 48px; border-radius: 14px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
   font-family: var(--font-tight); font-weight: 800; font-size: 16px; color: var(--navy-950);
   background: linear-gradient(150deg, var(--sky-100), var(--sky-300) 55%, var(--teal-500));
+  box-shadow: 0 6px 18px -6px rgba(123, 189, 232, 0.55);
 }
 .hero-identity-text { flex: 1; min-width: 0; }
 .hero-identity-text h1 {
@@ -240,9 +249,9 @@ button, input { font-family: inherit; }
   flex-shrink: 0; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
   padding: 5px 12px; border-radius: var(--radius-pill); border: 1px solid transparent;
 }
-.risk-chip.low { color: var(--success); background: var(--success-dim); border-color: rgba(79, 216, 168, 0.3); }
-.risk-chip.medium { color: var(--warning); background: var(--warning-dim); border-color: rgba(240, 189, 99, 0.3); }
-.risk-chip.high { color: var(--danger); background: var(--danger-dim); border-color: rgba(242, 131, 111, 0.3); }
+.risk-chip.low { color: var(--success); background: var(--success-solid-dim); border-color: transparent; }
+.risk-chip.medium { color: var(--warning); background: var(--warning-solid-dim); border-color: transparent; }
+.risk-chip.high { color: var(--danger); background: var(--danger-solid-dim); border-color: transparent; }
 
 .hero-main { display: flex; gap: 24px; align-items: center; flex-wrap: wrap; }
 .hero-ring-card { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
@@ -276,18 +285,22 @@ button, input { font-family: inherit; }
   display: flex; flex-direction: column; align-items: flex-start; gap: 3px; text-align: left; width: 100%;
   border: none; background: transparent; color: var(--text-0); cursor: pointer; padding: 0; font-family: inherit;
 }
+.action-btn-icon {
+  width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
+  background: var(--accent-dim); color: var(--sky-300); margin-bottom: 2px;
+}
 .action-btn-label { font-size: 14px; font-weight: 700; }
 .action-btn-sub { font-size: 11.5px; color: var(--text-3); }
 .action-form { display: flex; flex-direction: column; gap: 8px; }
 .action-form[hidden] { display: none; }
 .action-form textarea, .action-form input {
-  width: 100%; background: rgba(3, 13, 24, 0.55); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  width: 100%; background: var(--bg-0); border: 1px solid var(--border); border-radius: var(--radius-sm);
   padding: 9px 11px; color: var(--text-0); font-size: 13px; font-family: inherit; resize: vertical;
 }
 .action-form textarea:focus, .action-form input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 .action-form-row { display: flex; gap: 8px; }
 .btn-primary {
-  border: none; cursor: pointer; background: var(--accent); color: var(--navy-950);
+  border: none; cursor: pointer; background: var(--accent); color: var(--on-accent);
   font-weight: 700; font-size: 12.5px; padding: 8px 16px; border-radius: var(--radius-sm); transition: all 0.15s var(--ease);
 }
 .btn-primary:hover { filter: brightness(1.08); }
@@ -330,9 +343,9 @@ button, input { font-family: inherit; }
   flex-shrink: 0; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
   padding: 4px 10px; border-radius: var(--radius-pill); white-space: nowrap;
 }
-.esc-status.queued_for_human { color: var(--warning); background: var(--warning-dim); }
-.esc-status.approved { color: var(--success); background: var(--success-dim); }
-.esc-status.rejected { color: var(--danger); background: var(--danger-dim); }
+.esc-status.queued_for_human { color: var(--warning); background: var(--warning-solid-dim); }
+.esc-status.approved { color: var(--success); background: var(--success-solid-dim); }
+.esc-status.rejected { color: var(--danger); background: var(--danger-solid-dim); }
 
 /* Documents */
 .dash-documents { display: flex; flex-direction: column; gap: 8px; }
@@ -345,7 +358,7 @@ button, input { font-family: inherit; }
 .doc-name { font-size: 13px; color: var(--text-0); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .doc-meta { font-size: 11.5px; color: var(--text-3); margin-top: 1px; }
 .doc-download {
-  flex-shrink: 0; font-size: 12px; font-weight: 700; color: var(--navy-950); text-decoration: none;
+  flex-shrink: 0; font-size: 12px; font-weight: 700; color: var(--on-accent); text-decoration: none;
   background: var(--accent); padding: 7px 14px; border-radius: var(--radius-sm); transition: all 0.15s var(--ease);
 }
 .doc-download:hover { filter: brightness(1.08); }
@@ -363,14 +376,14 @@ button, input { font-family: inherit; }
   flex-shrink: 0; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
   padding: 4px 10px; border-radius: var(--radius-pill); white-space: nowrap;
 }
-.dash-msg-badge.yes { color: var(--success); background: var(--success-dim); }
-.dash-msg-badge.no { color: var(--text-3); background: var(--border); }
+.dash-msg-badge.yes { color: var(--success); background: var(--success-solid-dim); }
+.dash-msg-badge.no { color: var(--text-3); background: var(--surface-strong); }
 
 /* Floating chat entry point */
 .dash-chat-fab {
   position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 5;
   display: flex; align-items: center; gap: 8px; border: none; cursor: pointer;
-  background: var(--accent); color: var(--navy-950);
+  background: var(--accent); color: var(--on-accent);
   font-weight: 700; font-size: 14px; padding: 13px 24px; border-radius: var(--radius-pill);
   box-shadow: var(--shadow-lift); transition: all 0.15s var(--ease);
 }
@@ -405,7 +418,7 @@ button, input { font-family: inherit; }
 
 .chat-header {
   display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 20px;
-  background: rgba(3, 13, 24, 0.72); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  background: var(--bg-1);
   border-bottom: 1px solid var(--border); flex-shrink: 0;
 }
 .chat-header-left { display: flex; align-items: center; gap: 12px; }
@@ -430,14 +443,14 @@ button, input { font-family: inherit; }
 .msg-row.system { align-self: center; max-width: 90%; align-items: center; }
 
 .msg-bubble { padding: 11px 15px; border-radius: 18px; font-size: 14px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
-.msg-row.user .msg-bubble { background: var(--accent); color: var(--navy-950); border-bottom-right-radius: 5px; font-weight: 500; }
+.msg-row.user .msg-bubble { background: var(--accent); color: var(--on-accent); border-bottom-right-radius: 5px; font-weight: 500; }
 .msg-row.assistant .msg-bubble { background: var(--surface); border: 1px solid var(--border); color: var(--text-0); border-bottom-left-radius: 5px; }
 .msg-row.assistant.error .msg-bubble { background: var(--danger-dim); border-color: rgba(242, 131, 111, 0.3); color: var(--text-0); }
 .msg-row.system .msg-bubble { background: transparent; border: none; color: var(--text-3); font-size: 12px; text-align: center; padding: 4px 10px; }
 
 .tool-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .tool-chip {
-  font-size: 10.5px; font-weight: 600; color: var(--success); background: var(--success-dim);
+  font-size: 10.5px; font-weight: 600; color: var(--success); background: var(--success-solid-dim);
   border: 1px solid rgba(79, 216, 168, 0.25); border-radius: var(--radius-pill); padding: 3px 10px;
   display: inline-flex; align-items: center; gap: 4px;
 }
@@ -454,17 +467,17 @@ button, input { font-family: inherit; }
 
 .message-form {
   display: flex; gap: 10px; padding: 16px 20px; max-width: 720px; width: 100%; margin: 0 auto;
-  border-top: 1px solid var(--border); flex-shrink: 0; background: rgba(3, 13, 24, 0.4);
+  border-top: 1px solid var(--border); flex-shrink: 0; background: var(--bg-1);
 }
 #message-input {
-  flex: 1; min-width: 0; background: rgba(3, 13, 24, 0.55); border: 1px solid var(--border); border-radius: var(--radius-pill);
+  flex: 1; min-width: 0; background: var(--bg-0); border: 1px solid var(--border); border-radius: var(--radius-pill);
   padding: 13px 18px; color: var(--text-0); font-size: 14.5px;
 }
 #message-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 #message-input:disabled { opacity: 0.6; }
 .send-btn {
   width: 46px; height: 46px; flex-shrink: 0; border: none; cursor: pointer; border-radius: 50%;
-  background: var(--accent); color: var(--navy-950);
+  background: var(--accent); color: var(--on-accent);
   display: flex; align-items: center; justify-content: center; transition: all 0.15s var(--ease);
 }
 .send-btn:hover { filter: brightness(1.08); }
