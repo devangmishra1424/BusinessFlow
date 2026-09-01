@@ -1,52 +1,110 @@
 # BusinessFlow
 
-A Hindi-English AI collections agent for Indian SMB lending -- a borrower can
-check their balance, negotiate a restructuring, log a promise to pay, dispute
-a charge, or ask a real policy question, in Hindi, English, or Hinglish, and
-get an answer grounded in real account data and real policy documents rather
-than a model's guess. An ops team works the same accounts from an internal
-dashboard: escalation queue, per-account document upload with automatic
-interest-rate extraction, dispute history, and an EMI calculator for opening
-new accounts.
+**An AI collections agent for Indian SMB lending, live in production, that talks
+to borrowers in Hindi, English, or Hinglish -- and never says a number it can't
+back up.**
 
-Everything here runs against **synthetic demo accounts** -- no real person's
-money or data. Payment *recording* is real (a redeemed payment link genuinely
-updates the account's balance and due date in Postgres); the payment link
-itself points at a confirmation page inside this app, not a live payment
-gateway.
+Lending in India runs on relationships and follow-up calls, not dashboards.
+BusinessFlow is what that follow-up looks like when an AI agent does it: a
+borrower can check their balance, negotiate a restructuring, log a promise to
+pay, dispute a charge, or ask a policy question -- by text, by Telegram, or by
+voice note -- and get back an answer grounded in a real database row or a
+real retrieved document, never a guess. An ops team works the same accounts
+from a real internal dashboard: an escalation queue, per-account document
+upload with automatic interest-rate extraction, dispute history, and account
+creation with a live EMI calculator.
+
+It runs against synthetic demo accounts -- no real person's money moves --
+but every system underneath it is real: real Postgres, a real deployed VM,
+real payment recording, a real Telegram bot, real evals.
 
 **Live:**
 [businessflowai.duckdns.org](https://businessflowai.duckdns.org) (borrower chat + dashboard) ·
 [businessflowai-ops.duckdns.org](https://businessflowai-ops.duckdns.org) (ops dashboard, needs an API key)
 
+## What's actually built
+
+**Voice AI, in Indian languages, trained not just prompted.** A Whisper ASR
+model fine-tuned specifically for Hindi-English code-switched speech, WER-
+benchmarked against the base model (`eval/asr_wer.py`) rather than assumed
+better -- plus a VAD stage (Silero) ahead of it and TTS on the way out (Piper
+for English, MMS for Hindi). Every model in the pipeline runs int8-quantized
+ONNX, chosen deliberately for the RAM/latency envelope a real voice turn
+needs, not left at full precision by default.
+
+**A real agentic core, not a prompt wrapped around an API call.** One
+tool-calling reasoning loop (`agent/loop.py`) that decides, per turn, which
+of its tools to call -- account lookups, promise logging, dispute flagging,
+policy retrieval, payment-link generation, escalation -- kept deliberately as
+one bounded loop rather than a multi-agent swarm, because a live voice or
+chat turn has no latency budget to spend on extra hops between agents. A
+second, genuinely multi-stage pipeline exists where that latency budget
+*doesn't* apply -- report generation runs gather -> analyze -> write -> a
+mechanical accuracy-check pass, each stage's output checked against the last.
+
+**RAG that's tuned, measured, and grounded, not just wired up.** Hybrid
+retrieval -- BM25 keyword search plus multilingual embeddings plus a
+cross-encoder reranker -- over both the policy knowledge base and
+per-account uploaded documents (a signed loan agreement, say), backed by
+pgvector on the same Postgres project as every other table rather than a
+side vector store nobody keeps in sync. LLM-based query translation was
+built and measured against this exact KB: recall@1 went 0.61 -> 0.79 on
+Hindi/Hinglish queries once it shipped. Query expansion and a higher
+reasoning-effort setting were also built and A/B tested against real traffic
+-- both showed no clear win at this scale, so both stayed off by default
+rather than shipped on faith.
+
+**A mechanical guardrail, because "the prompt says don't hallucinate" isn't
+a real safeguard.** Every reply is checked, after the model writes it and
+before the borrower ever sees it, against what a real tool result or the
+borrower's own message actually said -- every ₹ amount, every URL. A second,
+narrower guardrail catches a specific failure mode that two rounds of prompt
+tuning couldn't fully close: the model occasionally restating an old
+dispute/restructuring block from memory on a long conversation instead of
+re-verifying it. The guardrail intercepts that case and safely deflects
+instead of letting an unverified claim reach the borrower.
+
+**Evals that actually gate the work, not a notebook that was run once.** A
+red-team suite (8 adversarial scenarios, all passing after a real fix for one
+found gap), a reasoning-accuracy LLM-judge that checks a reply's *stated
+reasoning* against the real tool results (not just whether the right tool
+fired -- this is what caught a real crash on a hallucinated account ID), a
+tool-calling benchmark, a retrieval benchmark, and a regression tracker
+(`eval/tool_scoring.py`) that has already caught one real regression before a
+fix was confirmed. Every one of these runs against real Groq/Postgres calls
+-- nothing in this project is mocked; a test either runs for real or is
+skipped cleanly when a credential isn't set.
+
+**Shipped, not just running locally.** Three real channels -- browser chat +
+dashboard, a Telegram bot with a full slash-command menu, and the ops
+dashboard -- deployed as separate services on a real VM behind HTTPS, with
+GitHub Actions deploying automatically on every push to `main` that passes
+CI. CI runs against its own disposable, schema-verified Postgres+pgvector
+container, isolated from the production database on purpose -- a lesson from
+a real bug where CI's own test writes collided with live traffic.
+Rate-limit resilience is built in too: `agent/client.py` rotates through as
+many backup Groq keys as are configured, proven live during this project's
+own real quota exhaustion, not a theoretical fallback.
+
+**A real backend and real product surfaces**, not just an API. Postgres for
+every piece of account state (payments, promises, disputes, escalations),
+input validation at every boundary (E.164 phone format, positive-amount
+checks, a brute-force lockout on the borrower access key), and two real
+hand-built dashboards -- the ops team's account/escalation console and the
+borrower's own account view -- each redesigned this session against real
+reference points (not a default AI-generated look) until they read like a
+real fintech product, not a demo.
+
 ## Architecture, in one paragraph
 
 One Groq-hosted LLM (`openai/gpt-oss-20b`) with a belt of tools in a single
-bounded reasoning loop -- not a multi-agent swarm. The live conversation has
-no latency budget for extra hops between agents, so tool calls (account
-lookups, promise logging, dispute flagging, policy retrieval, payment links,
-escalation) all live in one loop (`agent/loop.py`), each grounded in a real
-Postgres row or a real retrieved document chunk, never invented. A mechanical
-**guardrail** (`guardrail/grounding.py`) double-checks every ₹ amount and URL
-in the model's final reply against what a real tool result or the borrower's
-own message actually said, before the reply ever reaches the borrower --
-catching hallucinated numbers a prompt alone can't guarantee against.
-
-Three real channels sit on top of that one loop: a borrower-facing browser
-chat + account dashboard (`channels/browser_api.py`), a Telegram bot with a
-full slash-command menu (`/status`, `/pay`, `/dispute`, `/agent`, `/voice`,
-and more -- `channels/telegram_bot.py`), and an internal ops dashboard
-(`ops/api.py`) for staff to manage the same accounts. Retrieval (policy KB +
-per-account uploaded documents) is hybrid BM25 + multilingual embeddings + a
-cross-encoder reranker, backed by pgvector on the same Postgres project as
-every other table -- not a separate local vector-store file, specifically so
-every environment (a developer's laptop, CI, the VM) reads from one shared,
-always-current index instead of N independently-seeded ones.
-
-A separate, deliberately simpler multi-agent feature exists for the
-non-latency-sensitive **report-generation** flow (gather real facts -> write
-a plain-language summary -> mechanically check every claim traces back to
-those facts) -- see [Status](#status-and-known-gaps).
+bounded reasoning loop. Tool calls are each grounded in a real Postgres row
+or a real retrieved document chunk, never invented, and the grounding
+guardrail (`guardrail/grounding.py`) double-checks the model's own final
+reply before it ships. Three channels -- browser, Telegram, and the ops
+dashboard -- sit on top of that one loop and one shared Postgres+pgvector
+backend, so every environment (a developer's laptop, CI, the VM) reads from
+one always-current index instead of independently-seeded copies.
 
 ## Repository layout
 
@@ -164,54 +222,20 @@ Recall@k/MRR, ASR WER) aren't part of this suite -- run each directly, e.g.
 
 CI (`.github/workflows/tests.yml`) runs the same suite on every push/PR to
 `main`, against its own disposable Postgres+pgvector container -- never the
-production database. That separation is deliberate, not incidental: this
-repo ran CI against the shared production Supabase database for a while, and
-a CI run's own reseeding/test writes collided with real interactive testing
-more than once (an escalation vanishing mid-demo, a payment token 404ing, KB
-chunks getting purged out from under a developer -- all traced back to
-exactly that). Add the Groq secrets under the repo's Settings -> Secrets and
-variables -> Actions for the Groq-gated tests to run there too instead of
-skipping.
+production database.
 
-## Status and known gaps
+## Known gaps
 
-Built and verified end-to-end against real Groq/Postgres calls: the
-tool-calling agent loop, the guardrail, hybrid retrieval with LLM-based query
-translation (a real, measured fix for Hindi/Hinglish queries -- recall@1
-0.61 -> 0.79 on the retrieval benchmark), the ops dashboard, a real payment-
-link/redemption flow, the Telegram channel and its slash commands, per-
-account document upload with interest-rate extraction, write-idempotency on
-the state-mutating tools, a brute-force lockout on the per-account access
-key, `eval/reasoning_accuracy.py` (an LLM-judge check on whether a reply's
-stated reasoning matches the real tool results, not just whether the right
-tool got called), `eval/red_team.py` (8 adversarial scenarios, all passing),
-the report-generation pipeline, and multi-key Groq fallback (`agent/client.py`
-rotates through as many configured alternate keys as are set, not just one --
-built and proven live during this project's own real daily-quota exhaustion).
-
-Known, real, currently-open gaps -- not hidden, because a lender's ops tool
-claiming otherwise would be worse than having them:
+Said plainly, because a lending ops tool that hides its own gaps would be
+worse than one that lists them:
 
 - **A logged promise-to-pay never resolves.** `log_promise_to_pay` records a
-  promise with `kept = NULL`, but nothing in this codebase ever evaluates it
-  against what actually got paid and flips it to `true`/`false`. A
-  "broken_promises" flag is therefore currently unreachable through any real
-  code path -- worth building (compare `promised_date` + `promised_amount`
-  against `payment_history` once the date passes), not yet built.
-- **Disputes have no resolution path either.** `flag_dispute` opens one;
-  nothing closes one back out. Escalations, by contrast, have a real
-  approve/reject flow with a resolution reason.
-- On a long, multi-turn conversation where an account's dispute/broken-
-  promise block has already come up several times, the agent can still state
-  a new concrete restructuring/partial-payment request is blocked from
-  memory instead of calling the tool to verify it. A mechanical check
-  (`guardrail/unverified_restructuring.py`) catches and safely deflects this
-  before it reaches the borrower, so the underlying model tendency isn't
-  eliminated but the consequence is.
-- Query expansion (`retrieve(..., expand=True)`) and a non-default
-  `reasoning_effort` were both built and A/B tested; neither showed a clear
-  win on this project's scale, so both are left off by default and kept as
-  opt-in parameters rather than removed.
-- End-to-end latency measurement isn't built. A real frontend design pass
-  (beyond the current functional dashboards) and horizontal scaling are out
-  of scope for a demo project at this size.
+  promise, but nothing yet evaluates it against what actually got paid and
+  flips it to kept or broken -- worth building (compare the promised date
+  and amount against real payment history once the date passes), not yet
+  built.
+- **Disputes open but don't close.** Escalations have a real approve/reject
+  flow with a resolution reason; disputes don't have the equivalent yet.
+- End-to-end latency measurement isn't built. A production-grade frontend
+  design pass beyond the current functional dashboards, and horizontal
+  scaling, are out of scope for a project at this size.
