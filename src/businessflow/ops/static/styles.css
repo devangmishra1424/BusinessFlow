@@ -1,75 +1,62 @@
 /* ============================================================
    BusinessFlow Ops — design tokens
 
-   DESIGN SPEC (v3) — Stitch handover, "Linear x Stripe" for a
-   high-stakes fintech ops tool.
+   DESIGN SPEC (v4) — Stitch handover, light mode.
 
-   v2 (still true, see git history for the full reasoning) established
-   restraint: flat opaque surfaces over blur+translucency, shadow
-   reserved for things genuinely floating above the page, full pill
-   shape reserved for tags/statuses/a segmented control rather than
-   applied everywhere. v3 replaces the approximate rgba-based values
-   that pass used with a precise, exact token set (design brief:
-   authoritative/calm/hyper-efficient, information density over
-   decoration, "Flat-Corporate" -- crisp borders, a 4px spacing base,
-   tonal-layering elevation instead of shadows except at the modal/
-   toast level) and adds the one real structural change that comes with
-   it: navigation moves from a top tab bar to a left sidebar, the
-   standard shape for a data-dense internal tool (Linear, Stripe's own
-   dashboard, Notion all do this) rather than a top bar borrowed from a
-   marketing site.
-
-   Palette accent (#7bbde8) and the overall cool navy family are
-   unchanged from v2 -- this keeps brand-mark, favicon-adjacent, and the
-   borrower app in the same family. What's new: exact hex values for
-   every surface tier instead of a hand-picked approximation, a tighter
-   6/8/12 radius scale, tabular numerals on every financial figure (a
-   real detail that keeps columns of ₹ amounts aligned), and desaturated
-   *solid* backgrounds on status badges (e.g. a real dark teal-green for
-   "success") instead of a translucent alpha wash.
+   v3 (see git history) locked in an exact dark token set + a left
+   sidebar nav. v4 is the light-mode counterpart of the same system --
+   same shape scale (6/8/12/pill radius, unchanged), same tabular-nums
+   discipline, same "solid desaturated fill" badge convention -- with
+   every surface/text/status tone flipped to the light Stitch handover
+   (businessflow/DESIGN.md, light batch): a cool off-white canvas, white
+   opaque cards, a deeper accent blue (#005da8, not the pale #7bbde8
+   that only worked as a dark-mode accent -- it fails contrast as a
+   solid button fill on white), and soft low-opacity shadows instead of
+   the near-black ones a dark canvas could hide. Dark mode is a later,
+   separate pass -- this file is light-only for now.
    ============================================================ */
 :root {
-  --navy-950: #00111f;
-  --navy-900: #001d39;
-  --navy-800: #0a4174;
-  --blue-600: #49769f;
-  --teal-500: #4e8ea2;
-  --teal-400: #6ea2b3;
-  --sky-300: #7bbde8;
-  --sky-100: #bdd8e9;
+  --navy-950: #0c1c32;
+  --navy-900: #14294a;
+  --navy-800: #1d3a63;
+  --blue-600: #2f6fae;
+  --teal-500: #3a8fae;
+  --teal-400: #6bb0c9;
+  --sky-300: #8fc4ee;
+  --sky-100: #d7ecfc;
 
   /* Tonal layering (Stitch DESIGN.md "Elevation & Depth"): each level a
      small, deliberate step up from the one below, never transparency. */
-  --bg-0: #03080f;
-  --bg-1: #070d16;
-  --surface: #0a121e;
-  --surface-solid: #0a121e;
-  --surface-strong: #161e2b;
-  --border: #1e293b;
-  --border-strong: #2c3a52;
+  --bg-0: #f7f8fc;
+  --bg-1: #eef1f8;
+  --surface: #ffffff;
+  --surface-solid: #ffffff;
+  --surface-strong: #eef1f8;
+  --border: #e1e5ee;
+  --border-strong: #c7cfdc;
 
-  --text-0: #f8fafc;
-  --text-1: #e1e2e6;
-  --text-2: #c0c7cf;
-  --text-3: #94a3b8;
+  --text-0: #0c1c32;
+  --text-1: #26324a;
+  --text-2: #52607a;
+  --text-3: #838fa3;
 
-  --accent: #7bbde8;
-  --accent-strong: #bdd8e9;
-  --accent-dim: rgba(123, 189, 232, 0.16);
-  --on-accent: #03080f;
+  --accent: #005da8;
+  --accent-strong: #004884;
+  --accent-dim: rgba(0, 93, 168, 0.1);
+  --on-accent: #ffffff;
 
-  --success: #6fd9ae;
-  --success-solid-dim: #16332a;
-  --success-dim: rgba(111, 217, 174, 0.14);
-  --warning: #f0bd63;
-  --warning-solid-dim: #3a2c14;
-  --warning-dim: rgba(240, 189, 99, 0.14);
-  --danger: #f2836f;
-  --danger-solid-dim: #3a1e18;
-  --danger-dim: rgba(242, 131, 111, 0.16);
-  --other: #a3aef0;
-  --other-solid-dim: #262a4a;
-  --other-dim: rgba(163, 174, 240, 0.14);
+  --success: #147a52;
+  --success-solid-dim: #e2f6ec;
+  --success-dim: rgba(20, 122, 82, 0.12);
+  --warning: #9a5b00;
+  --warning-solid-dim: #fdefdc;
+  --warning-dim: rgba(154, 91, 0, 0.12);
+  --danger: #c22b1c;
+  --danger-solid-dim: #fbe4e1;
+  --danger-dim: rgba(194, 43, 28, 0.1);
+  --other: #4b3fa8;
+  --other-solid-dim: #ece9fb;
+  --other-dim: rgba(75, 63, 168, 0.1);
 
   --radius-sm: 6px;
   --radius-md: 8px;
@@ -77,10 +64,12 @@
   --radius-pill: 999px;
 
   /* Reserved for things genuinely floating above the page (modals,
-     toast) -- never applied to an in-grid card. Exact Stitch Level-2
-     formula: a sharp, high-diffusion shadow. */
-  --shadow-lift: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -2px rgba(0, 0, 0, 0.25);
-  --shadow-soft: 0 4px 16px -6px rgba(0, 6, 14, 0.35);
+     toast) -- never applied to an in-grid card. Soft/low-opacity per
+     Stitch's light-mode elevation formula, not the near-black dark-mode
+     shadow, which would just look like a smudge on a white canvas. */
+  --shadow-lift: 0 10px 15px -3px rgba(15, 23, 42, 0.12), 0 4px 6px -2px rgba(15, 23, 42, 0.08);
+  --shadow-soft: 0 4px 16px -6px rgba(15, 23, 42, 0.1);
+  --scrim: rgba(15, 23, 42, 0.4);
 
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --font: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -124,7 +113,7 @@ button, input, select { font-family: inherit; }
   font-family: var(--font-tight); font-weight: 800; font-size: 14px; letter-spacing: 0.02em;
   color: var(--navy-950);
   background: linear-gradient(150deg, var(--sky-100), var(--sky-300) 55%, var(--teal-500));
-  box-shadow: 0 6px 18px -6px rgba(123, 189, 232, 0.55);
+  box-shadow: 0 6px 18px -6px rgba(0, 93, 168, 0.35);
 }
 .brand-name { font-family: var(--font-tight); font-weight: 700; font-size: 16px; color: var(--text-0); line-height: 1.1; }
 .brand-name span { display: block; font-family: var(--font); font-weight: 500; font-size: 12px; color: var(--text-3); letter-spacing: 0.08em; text-transform: uppercase; margin-top: 1px; }
@@ -166,7 +155,7 @@ button, input, select { font-family: inherit; }
 #unlock-form button:active { transform: translateY(0); }
 .unlock-error { color: var(--danger); font-size: 13px; margin: 14px 0 0; }
 .unlock-hint { margin: 18px 0 0; font-size: 12px; color: var(--text-3); line-height: 1.5; }
-.unlock-hint code { background: rgba(123, 189, 232, 0.12); padding: 1px 6px; border-radius: 5px; color: var(--sky-300); }
+.unlock-hint code { background: var(--accent-dim); padding: 1px 6px; border-radius: 5px; color: var(--accent); }
 
 @keyframes rise { from { opacity: 0; transform: translateY(14px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
 
@@ -200,7 +189,7 @@ button, input, select { font-family: inherit; }
   min-width: 18px; height: 18px; border-radius: var(--radius-pill); display: inline-flex; align-items: center;
   justify-content: center; padding: 0 5px;
 }
-.tab.active .tab-badge { background: rgba(3, 8, 15, 0.35); color: var(--on-accent); }
+.tab.active .tab-badge { background: rgba(0, 0, 0, 0.18); color: var(--on-accent); }
 .tab-badge[hidden] { display: none; }
 
 .sidebar-footer { margin-top: auto; display: flex; align-items: center; gap: 8px; padding-top: 14px; border-top: 1px solid var(--border); }
@@ -227,13 +216,19 @@ button, input, select { font-family: inherit; }
 .portfolio-summary { margin: 0 0 16px; font-size: 14px; color: var(--text-1); font-weight: 500; }
 .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 22px; }
 .kpi-card {
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--surface); border: 1px solid var(--border); border-left-width: 1px; border-radius: var(--radius-lg);
   padding: 20px 22px; position: relative;
 }
+/* A KPI genuinely worth a glance on the way past gets a colored left
+   edge -- the same severity the icon already carries, just visible
+   from across the room. A KPI that's currently fine (count at zero)
+   stays plain; the accent is a flag, not decoration. */
+.kpi-card.danger { border-left-width: 3px; border-left-color: var(--danger); padding-left: 20px; }
+.kpi-card.warn { border-left-width: 3px; border-left-color: var(--warning); padding-left: 20px; }
 .kpi-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .kpi-icon {
   width: 30px; height: 30px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
-  background: var(--accent-dim); color: var(--sky-300);
+  background: var(--accent-dim); color: var(--accent);
 }
 .kpi-icon.warn { background: var(--warning-dim); color: var(--warning); }
 .kpi-icon.danger { background: var(--danger-dim); color: var(--danger); }
@@ -319,7 +314,7 @@ button, input, select { font-family: inherit; }
 }
 .escalation-main { flex: 1; min-width: 0; }
 .escalation-top { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
-.escalation-account { font-family: var(--font-tight); font-weight: 700; font-size: 14px; color: var(--sky-300); cursor: pointer; }
+.escalation-account { font-family: var(--font-tight); font-weight: 700; font-size: 14px; color: var(--accent); cursor: pointer; }
 .escalation-account:hover { text-decoration: underline; }
 .escalation-time { font-size: 11.5px; color: var(--text-3); }
 .escalation-reason { font-size: 13px; color: var(--text-1); line-height: 1.5; }
@@ -333,7 +328,7 @@ button, input, select { font-family: inherit; }
 .status-pill.rejected { background: var(--danger-solid-dim); color: var(--danger); }
 
 .btn { border: none; cursor: pointer; font-weight: 700; font-size: 12.5px; padding: 9px 16px; border-radius: var(--radius-sm); transition: all 0.18s var(--ease); }
-.btn-approve { background: var(--success); color: #062318; }
+.btn-approve { background: var(--success); color: #ffffff; }
 .btn-approve:hover { filter: brightness(1.08); }
 .btn-reject { background: var(--surface-strong); color: var(--text-1); border: 1px solid var(--border-strong); }
 .btn-reject:hover { color: var(--danger); border-color: var(--danger); }
@@ -347,7 +342,7 @@ button, input, select { font-family: inherit; }
    dimmed, through the backdrop).
    ============================================================ */
 .detail-backdrop {
-  position: fixed; inset: 0; background: rgba(1, 6, 12, 0.65); backdrop-filter: blur(4px); z-index: 40;
+  position: fixed; inset: 0; background: var(--scrim); backdrop-filter: blur(4px); z-index: 40;
   opacity: 0; transition: opacity 0.28s var(--ease);
 }
 .detail-backdrop.open { opacity: 1; }
@@ -411,7 +406,7 @@ button, input, select { font-family: inherit; }
 }
 .na-popover-title { margin: 0 0 6px; font-family: var(--font-tight); font-size: 14.5px; font-weight: 700; color: var(--text-0); }
 .na-calc-result { font-size: 13px; color: var(--text-1); font-weight: 600; }
-.na-calc-result b { color: var(--sky-300); font-family: var(--font-tight); }
+.na-calc-result b { color: var(--accent); font-family: var(--font-tight); }
 
 .na-review-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: 10px 20px; margin-bottom: 18px;
@@ -424,7 +419,7 @@ button, input, select { font-family: inherit; }
 .na-success { text-align: center; padding: 20px 10px; }
 .na-success-title { font-size: 16px; font-weight: 700; color: var(--success); margin: 0 0 10px; }
 .na-success-key { font-size: 20px; margin: 0 0 10px; }
-.na-success-key b { font-family: var(--font-tight); letter-spacing: 0.08em; color: var(--sky-300); }
+.na-success-key b { font-family: var(--font-tight); letter-spacing: 0.08em; color: var(--accent); }
 .na-success .clarify-hint { display: block; margin-bottom: 18px; }
 
 .detail-header { display: flex; align-items: center; gap: 16px; margin-bottom: 6px; }
@@ -433,15 +428,17 @@ button, input, select { font-family: inherit; }
 .detail-header .biz { font-size: 13px; color: var(--text-3); margin-top: 2px; }
 .detail-badges { display: flex; gap: 8px; margin: 14px 0 16px; flex-wrap: wrap; }
 .badge { font-size: 11.5px; font-weight: 600; padding: 5px 11px; border-radius: var(--radius-pill); background: var(--surface); border: 1px solid var(--border); color: var(--text-2); }
-.badge.risk-low { color: var(--success); border-color: rgba(79,216,168,0.3); }
-.badge.risk-medium { color: var(--warning); border-color: rgba(240,189,99,0.3); }
-.badge.risk-high { color: var(--danger); border-color: rgba(242,131,111,0.3); }
+.badge.risk-low { color: var(--success); border-color: rgba(20,122,82,0.3); }
+.badge.risk-medium { color: var(--warning); border-color: rgba(154,91,0,0.3); }
+.badge.risk-high { color: var(--danger); border-color: rgba(194,43,28,0.3); }
 
 .account-verdict {
   font-size: 14.5px; font-weight: 600; line-height: 1.5; color: var(--text-0); background: var(--accent-dim);
-  border: 1px solid rgba(123, 189, 232, 0.25); border-radius: var(--radius-md); padding: 12px 16px;
+  border: 1px solid rgba(0, 93, 168, 0.25); border-radius: var(--radius-md); padding: 12px 16px;
   margin: 0 0 14px;
 }
+.account-verdict.clean { background: var(--success-dim); border-color: rgba(20,122,82,0.25); }
+.account-verdict.attention { background: var(--danger-dim); border-color: rgba(194,43,28,0.3); color: var(--danger); }
 
 .stats-worries-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 20px; }
 .sw-block { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 14px 16px; }
@@ -475,7 +472,7 @@ button, input, select { font-family: inherit; }
 
 .detail-sectors { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; align-items: start; }
 .sector-heading {
-  margin: 0 0 16px; font-family: var(--font-tight); font-size: 15px; font-weight: 700; color: var(--sky-300);
+  margin: 0 0 16px; font-family: var(--font-tight); font-size: 15px; font-weight: 700; color: var(--accent);
   padding-bottom: 10px; border-bottom: 1px solid var(--border-strong);
 }
 .section-block { margin-bottom: 22px; }
@@ -484,9 +481,9 @@ button, input, select { font-family: inherit; }
 .section-subtitle { margin: -8px 0 12px; font-size: 12px; color: var(--text-3); line-height: 1.4; }
 
 .flag-detail-card { border-radius: var(--radius-md); padding: 12px 14px; margin-bottom: 8px; border: 1px solid; }
-.flag-detail-card.overdue { background: var(--danger-dim); border-color: rgba(242,131,111,0.25); }
-.flag-detail-card.disputed { background: var(--warning-dim); border-color: rgba(240,189,99,0.25); }
-.flag-detail-card.broken_promises { background: var(--other-dim); border-color: rgba(139, 147, 212, 0.3); }
+.flag-detail-card.overdue { background: var(--danger-dim); border-color: rgba(194,43,28,0.25); }
+.flag-detail-card.disputed { background: var(--warning-dim); border-color: rgba(154,91,0,0.25); }
+.flag-detail-card.broken_promises { background: var(--other-dim); border-color: rgba(75,63,168,0.3); }
 .flag-detail-card .flag-label { font-weight: 700; font-size: 12.5px; text-transform: capitalize; margin-bottom: 2px; }
 .flag-detail-card .flag-reason { font-size: 12.5px; color: var(--text-1); line-height: 1.45; }
 .flag-detail-card.overdue .flag-label { color: var(--danger); }
@@ -609,7 +606,7 @@ button, input, select { font-family: inherit; }
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .toast[hidden] { display: none; }
-.toast.error { border-color: rgba(242,131,111,0.4); }
+.toast.error { border-color: rgba(194,43,28,0.4); }
 .toast .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); }
 .toast.error .dot { background: var(--danger); }
 

@@ -384,7 +384,7 @@ function renderKpis() {
   document.getElementById("kpi-row").innerHTML = cards
     .map(
       (c) => `
-    <div class="kpi-card">
+    <div class="kpi-card ${c.cls === "danger" || c.cls === "warn" ? c.cls : ""}">
       <div class="kpi-top">
         <span class="kpi-label">${escapeHtml(c.label)}</span>
         <span class="kpi-icon ${c.cls}">${c.icon}</span>
@@ -917,13 +917,16 @@ document.getElementById("na-review-confirm-btn").addEventListener("click", async
 function buildAccountDigest(a) {
   const isOverdueFlagged = a.flags.some((f) => f.label === "overdue");
 
-  let verdict;
+  let verdict, severity;
   if (a.flags.length === 0 && a.days_past_due === 0) {
     verdict = "Clean account, fully current — no action needed.";
+    severity = "clean";
   } else if (a.flags.length === 0) {
     verdict = `${a.days_past_due} day${a.days_past_due === 1 ? "" : "s"} past due but still within the grace period — no action needed yet.`;
+    severity = "grace";
   } else {
     verdict = `${a.risk_tier[0].toUpperCase()}${a.risk_tier.slice(1)} risk — ${a.flags.length} active flag${a.flags.length === 1 ? "" : "s"}, needs attention.`;
+    severity = "attention";
   }
 
   const stats = [
@@ -946,7 +949,7 @@ function buildAccountDigest(a) {
   // would just repeat the same fact with less context.
   a.flags.filter((f) => f.label !== "overdue").forEach((f) => worries.push(`${FLAG_LABELS[f.label] || f.label}: ${f.reason}`));
 
-  return { verdict, stats, worries };
+  return { verdict, severity, stats, worries };
 }
 
 function documentRowHtml(d) {
@@ -1182,7 +1185,7 @@ function renderDetail(a, documents) {
         <span class="badge">${escapeHtml(a.phone_number)}</span>
       </div>
 
-      <p class="account-verdict">${escapeHtml(digest.verdict)}</p>
+      <p class="account-verdict ${digest.severity}">${escapeHtml(digest.verdict)}</p>
 
       <div class="stats-worries-row">
         <div class="sw-block">

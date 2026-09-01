@@ -12,6 +12,7 @@ const state = {
   conversationId: null,
   accountId: null,
   sending: false,
+  dashboardStale: false, // set when a tool call this chat could have changed dashboard data
 };
 
 // Real tool names the agent can call (see src/businessflow/tools/*.py) --
@@ -108,7 +109,6 @@ function initials(name) {
    ============================================================ */
 const $startScreen = document.getElementById("start-screen");
 const $chatScreen = document.getElementById("chat-screen");
-const $chatBackdrop = document.getElementById("chat-backdrop");
 const $dashboardScreen = document.getElementById("dashboard-screen");
 const $chatBackBtn = document.getElementById("chat-back-btn");
 const $startForm = document.getElementById("start-form");
@@ -234,36 +234,41 @@ function enterChat() {
   _prepareChatContent();
 }
 
-// The dashboard's "Chat with us" entry point -- opens as a real slide-in
-// panel OVER the dashboard, which is deliberately never hidden
-// underneath (unlike enterChat's anonymous case above). Closing this is
-// just removing these two classes; there's no "screen" to navigate back
-// from, so it can never get a borrower stuck the way a full-screen swap
-// with a broken/missing back button could.
+// The dashboard's "Chat with us" entry point -- docks as a real side panel
+// next to the dashboard (Edge Copilot's split-view convention), not an
+// overlay dimming it: the dashboard reflows to fill the remaining width
+// and stays fully interactive the whole time, so there's nothing to
+// "step out of" to keep using the page. Closing this is just removing
+// the two classes below (panel slides out, dashboard reflows back); there
+// was never a screen swap to get a borrower stuck behind.
 function openChatPanel() {
   $chatBackBtn.hidden = false;
   $chatScreen.classList.add("as-panel");
   $chatScreen.hidden = false;
-  $chatBackdrop.hidden = false;
-  setTimeout(() => {
+  requestAnimationFrame(() => {
     $chatScreen.classList.add("open");
-    $chatBackdrop.classList.add("open");
-  }, 10);
+    $dashboardScreen.classList.add("chat-open");
+  });
   _prepareChatContent();
 }
 
 function closeChatPanel() {
   $chatScreen.classList.remove("open");
-  $chatBackdrop.classList.remove("open");
+  $dashboardScreen.classList.remove("chat-open");
   setTimeout(() => {
     $chatScreen.hidden = true;
-    $chatBackdrop.hidden = true;
     $chatScreen.classList.remove("as-panel");
   }, 300);
   // Chat may have driven tool calls (a dispute flagged, an escalation
   // raised, a payment logged) since the dashboard was last shown -- the
-  // dashboard was never hidden, but its numbers could be stale now.
-  loadDashboard();
+  // dashboard was never hidden, but its numbers could be stale now. Only
+  // refresh if something could actually have changed, and do it silently
+  // (no loading-spinner swap) so closing the panel never flashes the
+  // whole dashboard away mid-transition.
+  if (state.dashboardStale) {
+    state.dashboardStale = false;
+    refreshDashboardSilently();
+  }
 }
 
 // Shared by both the chat screen's restart button and the dashboard's --
@@ -276,8 +281,7 @@ function restartAll() {
   document.getElementById("start-access-key").value = "";
   $chatScreen.hidden = true;
   $chatScreen.classList.remove("as-panel", "open");
-  $chatBackdrop.hidden = true;
-  $chatBackdrop.classList.remove("open");
+  $dashboardScreen.classList.remove("chat-open");
   $dashboardScreen.hidden = true;
   $startScreen.hidden = false;
 }
@@ -289,7 +293,6 @@ document.getElementById("restart-btn").addEventListener("click", restartAll);
 // start screen instead), so this only ever needs to close the panel; the
 // button itself stays hidden the whole time for anonymous (see enterChat).
 $chatBackBtn.addEventListener("click", closeChatPanel);
-$chatBackdrop.addEventListener("click", closeChatPanel);
 
 /* ============================================================
    Chat screen
@@ -372,6 +375,7 @@ $messageForm.addEventListener("submit", async (e) => {
     const result = await sendMessageApi(state.conversationId, text);
     hideTyping();
     addAssistantMessage(result.reply, result.tool_calls);
+    if (result.tool_calls && result.tool_calls.length) state.dashboardStale = true;
     if (result.verified_account_id) {
       state.accountId = result.verified_account_id;
       const chip = document.getElementById("account-chip");
@@ -425,6 +429,23 @@ async function loadDashboard() {
     $dashLoading.hidden = true;
     $dashError.hidden = false;
     $dashErrorText.textContent = friendlyDashboardError(err);
+  }
+}
+
+// Re-fetch and re-render in place, without ever hiding the currently
+// visible dashboard behind a loading spinner -- used when closing the
+// chat panel, where the dashboard was never hidden and a spinner-swap
+// would just be a jarring flash. A failure here is silently ignored:
+// the borrower still has whatever the dashboard last showed, and the
+// next real loadDashboard() (a manual refresh, a fresh page load) will
+// surface the error properly if it persists.
+async function refreshDashboardSilently() {
+  if (!state.conversationId || $dashBody.hidden) return;
+  try {
+    const data = await getDashboard(state.conversationId);
+    renderDashboard(data);
+  } catch {
+    // deliberately silent -- see comment above
   }
 }
 
@@ -646,6 +667,17 @@ document.getElementById("dash-warnings").addEventListener("click", async (e) => 
 document.getElementById("dash-retry-btn").addEventListener("click", loadDashboard);
 document.getElementById("dash-refresh-btn").addEventListener("click", loadDashboard);
 document.getElementById("dash-restart-btn").addEventListener("click", restartAll);
+
+// Payment timeline can run to dozens of scheduled EMIs on a long tenure --
+// collapsible so it doesn't dominate the dashboard by default weight, but
+// starts open since it's real, relevant data, not something to hide.
+const $timelineToggleBtn = document.getElementById("timeline-toggle-btn");
+const $dashTimeline = document.getElementById("dash-timeline");
+$timelineToggleBtn.addEventListener("click", () => {
+  const expanded = $timelineToggleBtn.getAttribute("aria-expanded") === "true";
+  $timelineToggleBtn.setAttribute("aria-expanded", String(!expanded));
+  $dashTimeline.hidden = expanded;
+});
 document.getElementById("dash-chat-btn").addEventListener("click", openChatPanel);
 
 /* ============================================================

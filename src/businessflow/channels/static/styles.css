@@ -1,10 +1,12 @@
 /* ============================================================
-   BusinessFlow borrower app — design tokens (v3, Stitch handover)
+   BusinessFlow borrower app — design tokens (v4, Stitch handover,
+   light mode)
 
    Same exact token set as ops/static/styles.css (see that file's
    header for the full spec/reasoning) -- one shared system so the
-   two real product surfaces read as one brand, not two. Laid out as
-   a consumer app rather than a data-dense control room: more
+   two real product surfaces read as one brand, not two. Light-only
+   for now; dark mode is a later, separate pass. Laid out as a
+   consumer app rather than a data-dense control room: more
    whitespace, larger touch targets, a top header instead of a
    sidebar (a borrower has three destinations, not an ops team's
    worth of navigation).
@@ -18,45 +20,45 @@
    (Intercom, Drift, Messenger) uses.
    ============================================================ */
 :root {
-  --navy-950: #00111f;
-  --navy-900: #001d39;
-  --navy-800: #0a4174;
-  --blue-600: #49769f;
-  --teal-500: #4e8ea2;
-  --teal-400: #6ea2b3;
-  --sky-300: #7bbde8;
-  --sky-100: #bdd8e9;
+  --navy-950: #0c1c32;
+  --navy-900: #14294a;
+  --navy-800: #1d3a63;
+  --blue-600: #2f6fae;
+  --teal-500: #3a8fae;
+  --teal-400: #6bb0c9;
+  --sky-300: #8fc4ee;
+  --sky-100: #d7ecfc;
 
-  --bg-0: #03080f;
-  --bg-1: #070d16;
-  --surface: #0a121e;
-  --surface-solid: #0a121e;
-  --surface-strong: #161e2b;
-  --border: #1e293b;
-  --border-strong: #2c3a52;
+  --bg-0: #f7f8fc;
+  --bg-1: #eef1f8;
+  --surface: #ffffff;
+  --surface-solid: #ffffff;
+  --surface-strong: #eef1f8;
+  --border: #e1e5ee;
+  --border-strong: #c7cfdc;
 
-  --text-0: #f8fafc;
-  --text-1: #e1e2e6;
-  --text-2: #c0c7cf;
-  --text-3: #94a3b8;
+  --text-0: #0c1c32;
+  --text-1: #26324a;
+  --text-2: #52607a;
+  --text-3: #838fa3;
 
-  --accent: #7bbde8;
-  --accent-strong: #bdd8e9;
-  --accent-dim: rgba(123, 189, 232, 0.16);
-  --on-accent: #03080f;
+  --accent: #005da8;
+  --accent-strong: #004884;
+  --accent-dim: rgba(0, 93, 168, 0.1);
+  --on-accent: #ffffff;
 
-  --success: #6fd9ae;
-  --success-solid-dim: #16332a;
-  --success-dim: rgba(111, 217, 174, 0.14);
-  --warning: #f0bd63;
-  --warning-solid-dim: #3a2c14;
-  --warning-dim: rgba(240, 189, 99, 0.14);
-  --danger: #f2836f;
-  --danger-solid-dim: #3a1e18;
-  --danger-dim: rgba(242, 131, 111, 0.16);
-  --other: #a3aef0;
-  --other-solid-dim: #262a4a;
-  --other-dim: rgba(163, 174, 240, 0.14);
+  --success: #147a52;
+  --success-solid-dim: #e2f6ec;
+  --success-dim: rgba(20, 122, 82, 0.12);
+  --warning: #9a5b00;
+  --warning-solid-dim: #fdefdc;
+  --warning-dim: rgba(154, 91, 0, 0.12);
+  --danger: #c22b1c;
+  --danger-solid-dim: #fbe4e1;
+  --danger-dim: rgba(194, 43, 28, 0.1);
+  --other: #4b3fa8;
+  --other-solid-dim: #ece9fb;
+  --other-dim: rgba(75, 63, 168, 0.1);
 
   --radius-sm: 6px;
   --radius-md: 8px;
@@ -65,8 +67,8 @@
 
   /* Reserved for things genuinely floating above the page (the chat
      panel, its FAB launcher) -- never applied to an in-page card. */
-  --shadow-lift: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -2px rgba(0, 0, 0, 0.25);
-  --shadow-soft: 0 4px 16px -6px rgba(0, 6, 14, 0.35);
+  --shadow-lift: 0 10px 15px -3px rgba(15, 23, 42, 0.12), 0 4px 6px -2px rgba(15, 23, 42, 0.08);
+  --shadow-soft: 0 4px 16px -6px rgba(15, 23, 42, 0.1);
 
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --font: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -95,7 +97,7 @@ button, input { font-family: inherit; }
   width: 38px; height: 38px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
   font-family: var(--font-tight); font-weight: 800; font-size: 14px;
   color: var(--navy-950); background: linear-gradient(150deg, var(--sky-100), var(--sky-300) 55%, var(--teal-500));
-  box-shadow: 0 6px 18px -6px rgba(123, 189, 232, 0.55); flex-shrink: 0;
+  box-shadow: 0 6px 18px -6px rgba(0, 93, 168, 0.35); flex-shrink: 0;
 }
 .brand-name { font-family: var(--font-tight); font-weight: 700; font-size: 16px; color: var(--text-0); }
 .brand.small .brand-mark { width: 32px; height: 32px; border-radius: 10px; font-size: 12px; }
@@ -171,8 +173,16 @@ button, input { font-family: inherit; }
 /* ============================================================
    Dashboard screen
    ============================================================ */
-.dashboard-screen { position: fixed; inset: 0; display: flex; flex-direction: column; }
+.dashboard-screen {
+  position: fixed; inset: 0; display: flex; flex-direction: column;
+  transition: padding-right 0.3s var(--ease);
+}
 .dashboard-screen[hidden] { display: none; }
+/* Copilot-style split view: the chat panel docks on the right and the
+   dashboard reflows to fill what's left, in sync with the panel's own
+   slide-in transition below -- never an overlay dimming the page. */
+.dashboard-screen.chat-open { padding-right: min(440px, 100vw); }
+.dashboard-screen.chat-open .dash-chat-fab { display: none; }
 
 .dash-header {
   display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 20px;
@@ -211,7 +221,7 @@ button, input { font-family: inherit; }
    claim under review. */
 .dash-warnings { display: flex; flex-direction: column; gap: 8px; }
 .dash-warning {
-  background: var(--danger-dim); border: 1px solid rgba(242, 131, 111, 0.3); border-radius: var(--radius-md);
+  background: var(--danger-dim); border: 1px solid rgba(194, 43, 28, 0.3); border-radius: var(--radius-md);
   color: var(--text-0); font-size: 13.5px; line-height: 1.5; animation: rise 0.4s var(--ease); overflow: hidden;
 }
 .dash-warning-head {
@@ -227,6 +237,13 @@ button, input { font-family: inherit; }
 .dash-warning-note { font-size: 12.5px; color: var(--text-2); margin: 0; }
 .dash-warning-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
+/* Hero + quick actions sit side by side -- the hero card takes the
+   bulk of the width, quick actions form a narrower rail next to it
+   (collapses to a stacked single column on narrow viewports, same
+   breakpoint as the rest of this dashboard). */
+.hero-actions-row { display: grid; grid-template-columns: 1fr 320px; gap: 20px; align-items: start; }
+.hero-actions-row .dash-actions-section { margin: 0; }
+
 /* Hero */
 .dash-hero {
   background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-lg);
@@ -237,7 +254,7 @@ button, input { font-family: inherit; }
   width: 48px; height: 48px; border-radius: 14px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
   font-family: var(--font-tight); font-weight: 800; font-size: 16px; color: var(--navy-950);
   background: linear-gradient(150deg, var(--sky-100), var(--sky-300) 55%, var(--teal-500));
-  box-shadow: 0 6px 18px -6px rgba(123, 189, 232, 0.55);
+  box-shadow: 0 6px 18px -6px rgba(0, 93, 168, 0.35);
 }
 .hero-identity-text { flex: 1; min-width: 0; }
 .hero-identity-text h1 {
@@ -273,6 +290,12 @@ button, input { font-family: inherit; }
   font-family: var(--font-tight); font-size: 13px; font-weight: 700; color: var(--text-1);
   text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 12px;
 }
+.dash-section-title.collapsible {
+  display: flex; align-items: center; justify-content: space-between; width: 100%;
+  border: none; background: transparent; cursor: pointer; padding: 0; font: inherit;
+}
+.collapse-chevron { color: var(--text-3); flex-shrink: 0; transition: transform 0.2s var(--ease); }
+.dash-section-title.collapsible[aria-expanded="false"] .collapse-chevron { transform: rotate(-90deg); }
 .dash-no-data { font-size: 13px; color: var(--text-3); font-style: italic; margin: 0; }
 
 /* Quick actions */
@@ -312,8 +335,8 @@ button, input { font-family: inherit; }
 .btn-cancel:hover { color: var(--text-0); border-color: var(--border-strong); }
 .action-result { font-size: 12.5px; line-height: 1.5; border-radius: var(--radius-sm); padding: 9px 11px; }
 .action-result[hidden] { display: none; }
-.action-result.ok { background: var(--success-dim); color: var(--text-0); border: 1px solid rgba(79, 216, 168, 0.3); }
-.action-result.err { background: var(--danger-dim); color: var(--text-0); border: 1px solid rgba(242, 131, 111, 0.3); }
+.action-result.ok { background: var(--success-dim); color: var(--text-0); border: 1px solid rgba(20, 122, 82, 0.3); }
+.action-result.err { background: var(--danger-dim); color: var(--text-0); border: 1px solid rgba(194, 43, 28, 0.3); }
 .action-result a { color: var(--accent-strong); word-break: break-all; }
 
 /* Timeline */
@@ -395,25 +418,22 @@ button, input { font-family: inherit; }
 .chat-screen { position: fixed; inset: 0; display: flex; flex-direction: column; }
 .chat-screen[hidden] { display: none; }
 
-/* Panel mode -- opened via the dashboard's "Chat with us" button. The
-   dashboard is never hidden underneath (unlike the anonymous/no-.as-panel
-   case above, which really is the whole screen) -- closing this is just
-   removing these two classes, nothing to "navigate back" from. */
-.chat-backdrop {
-  position: fixed; inset: 0; background: rgba(3, 8, 15, 0.55); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
-  opacity: 0; transition: opacity 0.25s var(--ease); z-index: 40;
-}
-.chat-backdrop[hidden] { display: none; }
-.chat-backdrop.open { opacity: 1; }
-
+/* Panel mode -- opened via the dashboard's "Chat with us" button. Docks
+   as a real split-view panel (Edge Copilot's convention): the dashboard
+   is never hidden or dimmed underneath, stays fully interactive, and
+   reflows to fill the remaining width in sync with this panel's own
+   slide (see .dashboard-screen.chat-open above) -- no backdrop, no
+   overlay, nothing to click through. Closing this is just removing the
+   two classes; there's no "screen" to navigate back from. */
 .chat-screen.as-panel {
   inset: 0 0 0 auto; width: min(440px, 100vw); border-left: 1px solid var(--border-strong);
   box-shadow: var(--shadow-lift); background: var(--bg-0);
-  transform: translateX(100%); transition: transform 0.3s var(--ease); z-index: 41;
+  transform: translateX(100%); transition: transform 0.3s var(--ease); z-index: 30;
 }
 .chat-screen.as-panel.open { transform: translateX(0); }
 @media (max-width: 560px) {
   .chat-screen.as-panel { width: 100vw; }
+  .dashboard-screen.chat-open { padding-right: 0; }
 }
 
 .chat-header {
@@ -445,13 +465,13 @@ button, input { font-family: inherit; }
 .msg-bubble { padding: 11px 15px; border-radius: 18px; font-size: 14px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
 .msg-row.user .msg-bubble { background: var(--accent); color: var(--on-accent); border-bottom-right-radius: 5px; font-weight: 500; }
 .msg-row.assistant .msg-bubble { background: var(--surface); border: 1px solid var(--border); color: var(--text-0); border-bottom-left-radius: 5px; }
-.msg-row.assistant.error .msg-bubble { background: var(--danger-dim); border-color: rgba(242, 131, 111, 0.3); color: var(--text-0); }
+.msg-row.assistant.error .msg-bubble { background: var(--danger-dim); border-color: rgba(194, 43, 28, 0.3); color: var(--text-0); }
 .msg-row.system .msg-bubble { background: transparent; border: none; color: var(--text-3); font-size: 12px; text-align: center; padding: 4px 10px; }
 
 .tool-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .tool-chip {
   font-size: 10.5px; font-weight: 600; color: var(--success); background: var(--success-solid-dim);
-  border: 1px solid rgba(79, 216, 168, 0.25); border-radius: var(--radius-pill); padding: 3px 10px;
+  border: 1px solid rgba(20, 122, 82, 0.25); border-radius: var(--radius-pill); padding: 3px 10px;
   display: inline-flex; align-items: center; gap: 4px;
 }
 
@@ -483,6 +503,9 @@ button, input { font-family: inherit; }
 .send-btn:hover { filter: brightness(1.08); }
 .send-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
+@media (max-width: 760px) {
+  .hero-actions-row { grid-template-columns: 1fr; }
+}
 @media (max-width: 520px) {
   .start-card { padding: 26px 20px 20px; }
   .message-list, .message-form { padding-left: 14px; padding-right: 14px; }

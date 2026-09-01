@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/styles.css?v=7" />
+<link rel="stylesheet" href="/static/styles.css?v=8" />
 </head>
 <body>
 
@@ -89,6 +89,7 @@
       <div class="dash-warnings" id="dash-warnings"></div>
       <div class="action-result" id="warnings-action-result" hidden></div>
 
+      <div class="hero-actions-row">
       <section class="dash-hero">
         <div class="hero-identity">
           <div class="hero-avatar" id="dash-avatar"></div>
@@ -166,9 +167,13 @@
           </div>
         </div>
       </section>
+      </div>
 
       <section class="dash-section">
-        <h2 class="dash-section-title">Payment timeline</h2>
+        <button type="button" class="dash-section-title collapsible" id="timeline-toggle-btn" aria-expanded="true">
+          Payment timeline
+          <svg class="collapse-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
         <div class="dash-timeline" id="dash-timeline"></div>
       </section>
 
@@ -196,7 +201,6 @@
   </button>
 </div>
 
-<div id="chat-backdrop" class="chat-backdrop" hidden></div>
 <div id="chat-screen" class="chat-screen" hidden>
   <header class="chat-header">
     <div class="chat-header-left">
@@ -226,6 +230,6 @@
   </form>
 </div>
 
-<script src="/static/app.js?v=4"></script>
+<script src="/static/app.js?v=5"></script>
 </body>
 </html>
