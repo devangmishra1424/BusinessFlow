@@ -8,20 +8,49 @@ name: tests
 jobs:
   pytest:
     runs-on: ubuntu-latest
-    # Real Groq/Postgres/ASR calls, no mocking -- this is genuinely slow
-    # (observed ~2 hours locally with a warm model cache). Give it real
-    # headroom rather than hitting GitHub's default 6h/job cap partway
-    # through a run and losing the whole thing.
+    # Real Groq/ASR calls, no mocking -- this is genuinely slow (observed
+    # ~2 hours locally with a warm model cache). Give it real headroom
+    # rather than hitting GitHub's default 6h/job cap partway through a
+    # run and losing the whole thing.
     timeout-minutes: 240
+    # A fresh, disposable Postgres for every run -- NOT the shared
+    # production Supabase database this project's VM and every
+    # developer's own local testing also point at. Found live: this repo
+    # ran CI against that one shared database for a while, and a CI run's
+    # own reseed/test writes collided with real interactive testing more
+    # than once (an escalation vanishing mid-demo, a payment token
+    # 404ing, KB chunks getting purged out from under a developer -- all
+    # traced back to this exact thing). Isolating CI's database is the
+    # actual fix; retrying flaky-looking tests would only have treated
+    # the symptom. pgvector/pgvector:pg16 (not plain postgres:16) because
+    # schema.sql's document_chunks table needs the vector extension
+    # available to install.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: businessflow_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       # Every one of these is optional: tests that need it are gated by
       # their own pytest.mark.skipif and simply skip if it's unset,
       # exactly like running locally without a filled-in .env. Add the
       # real secrets under Settings -> Secrets and variables -> Actions
-      # to actually exercise the Groq/Postgres/auth-gated tests in CI.
+      # for the Groq-gated tests to actually run here instead of skipping.
+      # DATABASE_URL is NOT a secret -- it's this job's own disposable
+      # postgres service above, same on every run, nothing production
+      # ever touches.
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       ALTERNATE_GROQ_KEY: ${{ secrets.ALTERNATE_GROQ_KEY }}
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/businessflow_ci
       OPS_API_KEY: ${{ secrets.OPS_API_KEY }}
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +64,12 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install -e .
+
+      - name: Apply schema.sql to the CI postgres
+        # schema.sql is this project's own tracked reference schema (see
+        # its own header comment) -- applying it here is what makes it a
+        # real, tested contract instead of a snapshot nobody re-checks.
+        run: psql "$DATABASE_URL" -f schema.sql
 
       - name: Download the Piper English TTS voice model
         # en_US-lessac-medium.onnx (63MB) is deliberately not committed to
@@ -50,7 +85,8 @@ jobs:
       - name: Seed the policy knowledge base
         # The retriever tests assume this has already been run (same
         # requirement as running locally) -- data/kb/*.md is real,
-        # tracked content, but the Chroma index built from it is not.
+        # tracked content, but the pgvector index built from it is not,
+        # and this job's postgres above starts genuinely empty every run.
         run: python -m scripts.seed_kb
 
       - name: Run tests
