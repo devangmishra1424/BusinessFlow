@@ -849,7 +849,7 @@ def test_speech_endpoint_returns_real_playable_audio_in_the_conversations_langua
     fake_speech = Speech(audio=torch.zeros(1600), sample_rate=16000)
     monkeypatch.setattr(browser_api, "speak_english", lambda text: calls.append(("en", text)) or fake_speech)
     monkeypatch.setattr(browser_api, "speak_hindi", lambda text: calls.append(("hi", text)) or fake_speech)
-    monkeypatch.setattr(browser_api, "verbalize", lambda text: text)
+    monkeypatch.setattr(browser_api, "verbalize", lambda text, language: text)
 
     start = client.post("/conversations", json={"account_id": "BF-1001", "access_key": "482913", "language": "hi"})
     conversation_id = start.json()["conversation_id"]
