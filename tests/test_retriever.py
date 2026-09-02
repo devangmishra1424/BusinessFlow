@@ -4,9 +4,16 @@ Assumes scripts/seed_kb.py has already been run against the persistent
 store this test session points at.
 """
 
+import os
+
 import pytest
 
 from businessflow.rag.retriever import DocumentRetriever
+
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("DATABASE_URL"),
+    reason="DATABASE_URL not set -- these tests hit real Postgres/pgvector",
+)
 
 
 @pytest.fixture(scope="module")

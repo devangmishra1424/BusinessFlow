@@ -354,6 +354,7 @@ def test_draft_clarification_endpoint_grounds_in_real_flags(reseed_accounts):
 
 
 @_ops_key_skip
+@_pg_skip
 def test_draft_clarification_endpoint_404s_for_unknown_account():
     response = client.post(
         "/accounts/BF-9999/clarification-requests/draft",
@@ -393,6 +394,7 @@ def test_send_clarification_request_endpoint_logs_and_reports_delivery(reseed_ac
 
 
 @_ops_key_skip
+@_pg_skip
 def test_send_clarification_request_endpoint_404s_for_unknown_account():
     response = client.post(
         "/accounts/BF-9999/clarification-requests",
@@ -624,6 +626,7 @@ def test_list_documents_returns_empty_list_for_account_with_no_uploads(reseed_ac
 
 
 @_ops_key_skip
+@_pg_skip
 def test_list_documents_404s_for_unknown_account():
     response = client.get("/accounts/BF-9999/documents", headers=_auth())
     assert response.status_code == 404
@@ -671,6 +674,7 @@ def test_download_document_404s_for_a_filename_that_was_never_uploaded(reseed_ac
 
 
 @_ops_key_skip
+@_pg_skip
 def test_download_document_404s_for_unknown_account():
     response = client.get("/accounts/BF-9999/documents/whatever.md", headers=_auth())
     assert response.status_code == 404

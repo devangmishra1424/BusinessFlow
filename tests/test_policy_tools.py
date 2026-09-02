@@ -5,12 +5,21 @@ Assumes scripts/seed_kb.py has already been run against the persistent
 store this test session points at (same assumption as test_retriever.py).
 """
 
+import os
 import time
+
+import pytest
 
 import businessflow.tools.policy_tools as policy_tools
 from businessflow.tools.policy_tools import check_policy
 
+_pg_skip = pytest.mark.skipif(
+    not os.environ.get("DATABASE_URL"),
+    reason="DATABASE_URL not set -- these tests hit real Postgres/pgvector via check_policy",
+)
 
+
+@_pg_skip
 def test_check_policy_returns_query_and_grounded_results():
     result = check_policy(query="can I get a few more days to pay")
 
@@ -19,6 +28,7 @@ def test_check_policy_returns_query_and_grounded_results():
     assert all("text" in r and "source_document" in r for r in result["results"])
 
 
+@_pg_skip
 def test_check_policy_with_no_matching_account_scoped_docs_still_returns_general_results():
     # account_id given but this borrower has no documents of their own
     # uploaded -- general policy docs must still come back, not an empty

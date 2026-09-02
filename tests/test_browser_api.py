@@ -498,6 +498,7 @@ def test_payment_info_endpoint_returns_pending_for_a_fresh_token(throwaway_accou
     }
 
 
+@_pg_skip
 def test_payment_info_endpoint_404s_for_an_unknown_token():
     response = client.get("/pay/totally-made-up-token/info")
 
@@ -545,6 +546,7 @@ def test_payment_confirm_endpoint_rejects_a_double_confirm(throwaway_account):
     assert len(updated.payment_history) == 1
 
 
+@_pg_skip
 def test_payment_confirm_endpoint_404s_for_an_unknown_token():
     response = client.post("/pay/totally-made-up-token/confirm")
 

@@ -11,8 +11,15 @@ import os
 import tempfile
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from businessflow.rag.ingest import ingest_document, purge_orphaned_chunks, purge_superseded_chunks
 from businessflow.rag.store import backdate_chunks, delete_chunks_for_document, get_chunk_ids_for_document
+
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("DATABASE_URL"),
+    reason="DATABASE_URL not set -- these tests hit real Postgres/pgvector",
+)
 
 
 def _write_temp_doc(text: str) -> str:

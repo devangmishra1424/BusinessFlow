@@ -9,10 +9,16 @@ import pytest
 
 from businessflow.agent.loop import run_turn, start_conversation
 
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("GROQ_API_KEY"),
-    reason="GROQ_API_KEY not set -- copy .env.example to .env and fill it in to run this",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        not os.environ.get("GROQ_API_KEY"),
+        reason="GROQ_API_KEY not set -- copy .env.example to .env and fill it in to run this",
+    ),
+    pytest.mark.skipif(
+        not os.environ.get("DATABASE_URL"),
+        reason="DATABASE_URL not set -- these tests hit a real account (BF-1001)",
+    ),
+]
 
 
 def test_agent_grounds_its_answer_in_a_real_tool_call():

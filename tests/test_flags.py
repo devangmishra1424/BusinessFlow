@@ -19,6 +19,16 @@ from businessflow.ops.flags import compute_flags, is_clean
 
 _TODAY = date(2026, 8, 21)
 
+# compute_flags looks up the real dispute reason text via a real Postgres
+# call (store.get_latest_open_dispute_reason) even for a hand-built
+# Account with dispute_open=True set directly -- not actually pure,
+# despite this file's own module docstring calling every test here "no DB
+# needed"; only true for the tests that never hit a dispute-open account.
+_pg_skip = pytest.mark.skipif(
+    not os.environ.get("DATABASE_URL"),
+    reason="DATABASE_URL not set -- compute_flags looks up the real dispute reason via Postgres",
+)
+
 
 def _account(**overrides) -> Account:
     defaults = dict(
@@ -70,6 +80,7 @@ def test_not_yet_due_is_never_flagged_overdue():
     assert not any(f.label == "overdue" for f in flags)
 
 
+@_pg_skip
 def test_open_dispute_is_flagged():
     account = _account(dispute_open=True)
 
@@ -131,6 +142,7 @@ def test_clean_account_has_no_flags():
     assert is_clean(account, as_of=_TODAY)
 
 
+@_pg_skip
 def test_an_account_can_carry_multiple_flags_at_once():
     account = _account(
         emi_due_date=date(2026, 8, 1),  # 20 days past due

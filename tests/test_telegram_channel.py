@@ -106,6 +106,7 @@ def test_looks_like_credentials_false_for_five_digit_key():
 
 
 @_groq_skip
+@_pg_skip
 def test_anonymous_message_starts_general_chat_with_real_reply():
     chat_id = 900001
     reply = handle_incoming_message(chat_id, "What documents do I need to close out my loan early?")
@@ -392,6 +393,7 @@ def test_two_voice_turns_for_the_same_chat_never_run_concurrently(monkeypatch):
 
 
 @_groq_skip
+@_pg_skip
 def test_handle_incoming_voice_reaches_the_real_agent_loop_without_the_nested_event_loop_bug(monkeypatch):
     # Regression test for a real bug found live (not in any test): every
     # other handle_incoming_voice test monkeypatches handle_incoming_message
