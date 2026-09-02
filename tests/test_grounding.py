@@ -146,6 +146,41 @@ def test_devanagari_amount_with_a_stray_internal_space_is_not_split():
     assert not failure
 
 
+def test_rounding_a_grounded_amount_to_the_nearest_rupee_is_not_flagged():
+    # Real bug, found live on a real Telegram conversation: the model
+    # correctly stated a real, grounded outstanding balance
+    # (₹1,084,741.92, straight from get_payment_status), and a moment
+    # later restated it rounded to the nearest rupee for readability --
+    # "about ₹1,084,742", exactly how a person reads a balance aloud --
+    # and got blocked, because the tolerance was 0.01 (one paisa) and
+    # 1084742 - 1084741.92 = 0.08. The borrower got a vague non-answer
+    # instead of the real number they asked for, twice in the same
+    # conversation.
+    conversation = [
+        {"role": "user", "content": "mera outstanding kitna hai"},
+        {"role": "tool", "content": '{"outstanding_balance_approx": 1084741.92}'},
+    ]
+    reply = "Your loan balance is about ₹1,084,742 (rounded)."
+
+    failure = check_grounding(reply, conversation)
+
+    assert not failure
+
+
+def test_an_amount_genuinely_unrelated_to_any_grounded_figure_is_still_flagged():
+    # The tolerance fix above must not turn into "anything in the same
+    # ballpark passes" -- a real invention nowhere near a grounded figure
+    # still needs to be caught.
+    conversation = [
+        {"role": "tool", "content": '{"outstanding_balance_approx": 1084741.92}'},
+    ]
+    reply = "Your loan balance is about ₹1,200,000."
+
+    failure = check_grounding(reply, conversation)
+
+    assert failure.ungrounded_amounts == {1200000.0}
+
+
 def test_shorthand_k_amount_from_the_user_grounds_the_agents_formal_restatement():
     # Real bug, found live: user says "maybe 15k", the model correctly
     # asks a confirming question restating it as "₹15,000" (exactly the

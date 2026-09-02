@@ -225,6 +225,14 @@ def check_grounding(reply_text: str, conversation: list[dict]) -> GroundingFailu
     reply_amounts = extract_rupee_amounts(reply_text)
 
     ungrounded_urls = {u for u in reply_urls if u not in grounded_urls}
-    ungrounded_amounts = {a for a in reply_amounts if not any(abs(a - g) < 0.01 for g in grounded_amounts)}
+    # Tolerance was 0.01 (one paisa) -- too tight for how people actually
+    # talk about money. Found live: the model correctly restated a real,
+    # grounded ₹1,084,741.92 balance as "about ₹1,084,742" (rounding to
+    # the nearest rupee, exactly how a person reads a balance aloud) and
+    # got blocked anyway, since 1084742 - 1084741.92 = 0.08 > 0.01. One
+    # rupee of tolerance still makes it essentially impossible for a truly
+    # invented amount to slip through by coincidence, while allowing the
+    # ordinary rounding real replies actually do.
+    ungrounded_amounts = {a for a in reply_amounts if not any(abs(a - g) < 1.0 for g in grounded_amounts)}
 
     return GroundingFailure(ungrounded_urls, ungrounded_amounts)
