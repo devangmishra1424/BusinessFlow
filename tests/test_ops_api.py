@@ -400,6 +400,23 @@ def test_resolve_dispute_endpoint_closes_a_real_open_dispute(reseed_accounts):
 
 @_pg_skip
 @_ops_key_skip
+def test_resolve_dispute_endpoint_captures_a_real_resolution_note(reseed_accounts):
+    response = client.post(
+        "/accounts/BF-1003/disputes/resolve",
+        json={"resolution_note": "Confirmed with borrower -- fee was applied in error, waived."},
+        headers=_auth(),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["resolution_note"] == "Confirmed with borrower -- fee was applied in error, waived."
+
+    after = client.get("/accounts/BF-1003", headers=_auth()).json()
+    resolved = next(d for d in after["disputes"] if d["status"] == "resolved")
+    assert resolved["resolution_note"] == "Confirmed with borrower -- fee was applied in error, waived."
+
+
+@_pg_skip
+@_ops_key_skip
 def test_resolve_dispute_endpoint_409s_when_nothing_is_open(reseed_accounts):
     # BF-1001 has no dispute at all in the seed data.
     response = client.post("/accounts/BF-1001/disputes/resolve", headers=_auth())
@@ -754,6 +771,74 @@ def test_account_detail_includes_clarification_request_history(reseed_accounts):
     assert len(detail["clarification_requests"]) == 1
     assert detail["clarification_requests"][0]["message"] == "Your last two EMIs were late -- please reach out."
     assert detail["clarification_requests"][0]["delivered_via_telegram"] is False
+
+
+# --- POST /accounts/{id}/clarification-requests/mark-resolved --------------
+
+
+@_pg_skip
+@_ops_key_skip
+def test_mark_clarifications_resolved_flips_existing_requests_to_resolved(reseed_accounts):
+    client.post("/accounts/BF-1001/clarification-requests", json={"message": "first"}, headers=_auth())
+    before = client.get("/accounts/BF-1001", headers=_auth()).json()
+    assert before["clarification_requests"][0]["resolved"] is False
+
+    response = client.post("/accounts/BF-1001/clarification-requests/mark-resolved", headers=_auth())
+
+    assert response.status_code == 200
+    assert all(c["resolved"] for c in response.json())
+    after = client.get("/accounts/BF-1001", headers=_auth()).json()
+    assert after["clarification_requests"][0]["resolved"] is True
+
+
+@_pg_skip
+@_ops_key_skip
+def test_mark_clarifications_resolved_does_not_retroactively_resolve_a_later_one(reseed_accounts):
+    client.post("/accounts/BF-1001/clarification-requests", json={"message": "old one"}, headers=_auth())
+    client.post("/accounts/BF-1001/clarification-requests/mark-resolved", headers=_auth())
+    client.post("/accounts/BF-1001/clarification-requests", json={"message": "new one, after the checkpoint"}, headers=_auth())
+
+    detail = client.get("/accounts/BF-1001", headers=_auth()).json()
+    by_message = {c["message"]: c["resolved"] for c in detail["clarification_requests"]}
+
+    assert by_message["old one"] is True
+    assert by_message["new one, after the checkpoint"] is False
+
+
+@_pg_skip
+@_ops_key_skip
+def test_mark_clarifications_resolved_404s_for_unknown_account():
+    response = client.post("/accounts/BF-9999/clarification-requests/mark-resolved", headers=_auth())
+
+    assert response.status_code == 404
+
+
+# --- POST /accounts/{id}/escalate -------------------------------------------
+
+
+@_pg_skip
+@_ops_key_skip
+def test_escalate_account_endpoint_opens_a_real_escalation(reseed_accounts):
+    response = client.post(
+        "/accounts/BF-1001/escalate", json={"reason": "Three failed call attempts this week"}, headers=_auth()
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account_id"] == "BF-1001"
+    assert body["reason"] == "Three failed call attempts this week"
+    assert body["status"] == "queued_for_human"
+
+    queue = client.get("/escalations", headers=_auth()).json()
+    assert any(e["escalation_id"] == body["escalation_id"] for e in queue)
+
+
+@_pg_skip
+@_ops_key_skip
+def test_escalate_account_endpoint_404s_for_unknown_account():
+    response = client.post("/accounts/BF-9999/escalate", json={"reason": "test"}, headers=_auth())
+
+    assert response.status_code == 404
 
 
 @_pg_skip

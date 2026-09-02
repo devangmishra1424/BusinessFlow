@@ -149,7 +149,12 @@ const recordPayment = (accountId, payload) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-const resolveDispute = (accountId) => api(`/accounts/${accountId}/disputes/resolve`, { method: "POST" });
+const resolveDispute = (accountId, resolutionNote) =>
+  api(`/accounts/${accountId}/disputes/resolve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ resolution_note: resolutionNote || null }),
+  });
 const logPromise = (accountId, payload) =>
   api(`/accounts/${accountId}/promises`, {
     method: "POST",
@@ -175,6 +180,14 @@ const triggerOutboundRun = (accountIds) =>
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ account_ids: accountIds }),
+  });
+const markClarificationsResolved = (accountId) =>
+  api(`/accounts/${accountId}/clarification-requests/mark-resolved`, { method: "POST" });
+const escalateAccount = (accountId, reason) =>
+  api(`/accounts/${accountId}/escalate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
   });
 
 /* ============================================================
@@ -1235,6 +1248,7 @@ function renderDetail(a, documents, conversation = []) {
         .join("")
     : `<p class="no-data">No active flags — this account is clean.</p>`;
 
+  const hasUnresolvedClarifications = a.clarification_requests.some((c) => !c.resolved);
   const clarificationHistoryHtml = a.clarification_requests.length
     ? a.clarification_requests
         .map(
@@ -1243,6 +1257,7 @@ function renderDetail(a, documents, conversation = []) {
               <span class="delivery-badge ${c.delivered_via_telegram ? "delivered" : "not-delivered"}">
                 ${c.delivered_via_telegram ? "Delivered via Telegram" : "Not delivered — no linked Telegram"}
               </span>
+              <span class="delivery-badge ${c.resolved ? "delivered" : "not-delivered"}">${c.resolved ? "Resolved" : "Pending"}</span>
               <span class="escalation-time">${relativeTime(c.created_at)}</span>
             </div>
             <div class="clarification-entry-message">${escapeHtml(c.message)}</div>
@@ -1369,13 +1384,24 @@ function renderDetail(a, documents, conversation = []) {
   const disputesHtml = a.disputes.length
     ? a.disputes
         .map(
-          (d) => `<div class="promise-row">
-            <div class="promise-dot ${d.status === "open" ? "broken" : "kept"}">${d.status === "open" ? "!" : "✓"}</div>
-            <div class="promise-info">
-              ${escapeHtml(d.reason)}
-              <div class="promise-meta">opened ${fmtDate(d.opened_at.slice(0, 10))} · ${d.status}${d.resolved_at ? ` ${fmtDate(d.resolved_at.slice(0, 10))}` : ""}</div>
+          (d) => `<div class="dispute-entry">
+            <div class="promise-row">
+              <div class="promise-dot ${d.status === "open" ? "broken" : "kept"}">${d.status === "open" ? "!" : "✓"}</div>
+              <div class="promise-info">
+                ${escapeHtml(d.reason)}
+                <div class="promise-meta">opened ${fmtDate(d.opened_at.slice(0, 10))} · ${d.status}${d.resolved_at ? ` ${fmtDate(d.resolved_at.slice(0, 10))}` : ""}</div>
+                ${d.resolution_note ? `<div class="promise-meta">Resolution: ${escapeHtml(d.resolution_note)}</div>` : ""}
+              </div>
+              ${d.status === "open" ? `<button type="button" class="btn resolve-dispute-btn">Resolve</button>` : ""}
             </div>
-            ${d.status === "open" ? `<button type="button" class="btn resolve-dispute-btn">Resolve</button>` : ""}
+            ${
+              d.status === "open"
+                ? `<div class="reject-reason-row" id="resolve-dispute-row">
+                    <input type="text" placeholder="Optional note on how this was resolved" id="resolve-dispute-note" />
+                    <button class="btn btn-approve confirm-resolve-dispute">Confirm resolve</button>
+                  </div>`
+                : ""
+            }
           </div>`
         )
         .join("")
@@ -1530,6 +1556,11 @@ function renderDetail(a, documents, conversation = []) {
               </div>
               <p class="clarify-result" id="clarify-result" hidden></p>
             </form>
+            ${
+              hasUnresolvedClarifications
+                ? `<button type="button" class="btn btn-approve" id="mark-clarifications-resolved-btn" style="margin-bottom: 10px;">✓ Mark all as resolved</button>`
+                : ""
+            }
             <div class="clarification-history">${clarificationHistoryHtml}</div>
           </div>
 
@@ -1617,6 +1648,13 @@ function renderDetail(a, documents, conversation = []) {
               </div>
               <button type="submit" class="btn upload-btn" id="call-log-btn">Log this call</button>
             </form>
+            <div class="call-log-nudge" id="call-log-nudge" hidden>
+              <p class="clarify-hint">Didn't reach them — escalate to a human instead of leaving it here?</p>
+              <div class="clarify-actions-row">
+                <button type="button" class="btn btn-approve" id="call-log-escalate-btn">Escalate to a human</button>
+                <button type="button" class="btn btn-reject" id="call-log-dismiss-btn">No, that's fine</button>
+              </div>
+            </div>
           </div>
 
           <div class="section-block">
@@ -1721,6 +1759,21 @@ function renderDetail(a, documents, conversation = []) {
       toast(err.message, true);
       sendBtn.disabled = false;
       sendBtn.textContent = "Send to borrower";
+    }
+  });
+
+  const markResolvedBtn = document.getElementById("mark-clarifications-resolved-btn");
+  markResolvedBtn?.addEventListener("click", async () => {
+    markResolvedBtn.disabled = true;
+    markResolvedBtn.textContent = "Marking…";
+    try {
+      await markClarificationsResolved(a.account_id);
+      toast("Clarification thread marked resolved.");
+      await refreshAfterAction();
+    } catch (err) {
+      toast(err.message, true);
+      markResolvedBtn.disabled = false;
+      markResolvedBtn.textContent = "✓ Mark all as resolved";
     }
   });
 
@@ -1851,7 +1904,17 @@ function renderDetail(a, documents, conversation = []) {
     try {
       await logCall(a.account_id, { outcome, note });
       toast("Call logged.");
-      await refreshAfterAction();
+      // A failed contact attempt is a dead end otherwise -- found live,
+      // logging "no answer" had no next step at all. Not "reached" holds
+      // off the usual full refresh (which would instantly wipe this
+      // nudge, same reasoning as the upload-result message elsewhere in
+      // this file) until the operator either escalates or dismisses it.
+      if (outcome === "reached") {
+        await refreshAfterAction();
+      } else {
+        callLogForm.hidden = true;
+        document.getElementById("call-log-nudge").hidden = false;
+      }
     } catch (err) {
       toast(err.message, true);
       btn.disabled = false;
@@ -1859,18 +1922,41 @@ function renderDetail(a, documents, conversation = []) {
     }
   });
 
+  document.getElementById("call-log-escalate-btn").addEventListener("click", async () => {
+    const escalateBtn = document.getElementById("call-log-escalate-btn");
+    escalateBtn.disabled = true;
+    escalateBtn.textContent = "Escalating…";
+    try {
+      await escalateAccount(a.account_id, "Repeated failed contact attempt over the phone");
+      toast("Escalated to a human.");
+      await refreshAfterAction();
+    } catch (err) {
+      toast(err.message, true);
+      escalateBtn.disabled = false;
+      escalateBtn.textContent = "Escalate to a human";
+    }
+  });
+
+  document.getElementById("call-log-dismiss-btn").addEventListener("click", refreshAfterAction);
+
   $detailPanel.querySelectorAll(".resolve-dispute-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.getElementById("resolve-dispute-row").classList.add("open");
+    });
+  });
+  $detailPanel.querySelectorAll(".confirm-resolve-dispute").forEach((btn) => {
     btn.addEventListener("click", async () => {
+      const note = document.getElementById("resolve-dispute-note").value.trim() || null;
       btn.disabled = true;
       btn.textContent = "Resolving…";
       try {
-        await resolveDispute(a.account_id);
+        await resolveDispute(a.account_id, note);
         toast("Dispute resolved.");
         await refreshAfterAction();
       } catch (err) {
         toast(err.message, true);
         btn.disabled = false;
-        btn.textContent = "Resolve";
+        btn.textContent = "Confirm resolve";
       }
     });
   });

@@ -281,7 +281,8 @@ def get_disputes_for_account(account_id: str) -> list[dict]:
     generic string, not this). Ops has had no way to see WHY an account
     is disputed without a direct database query until this existed."""
     rows = get_connection().execute(
-        "select reason, status, opened_at, resolved_at from disputes where account_id = %s order by opened_at desc",
+        "select reason, status, opened_at, resolved_at, resolution_note from disputes "
+        "where account_id = %s order by opened_at desc",
         (account_id,),
     ).fetchall()
     return [dict(r) for r in rows]
@@ -303,7 +304,7 @@ class NoOpenDisputeError(ValueError):
     pass
 
 
-def resolve_dispute(account_id: str) -> dict:
+def resolve_dispute(account_id: str, resolution_note: str | None = None) -> dict:
     """Closes this account's currently open dispute -- open_dispute's own
     docstring guarantees there's ever at most one open at a time (a second
     open_dispute call while one's already open is a no-op), so this
@@ -316,6 +317,10 @@ def resolve_dispute(account_id: str) -> dict:
     anywhere in this codebase at all -- once opened, a dispute (and the
     flag it drives) could never be turned off again by any code path,
     ops included, regardless of what an operator actually did about it.
+    resolution_note closes a second gap found right after: resolving one
+    only ever recorded THAT it happened, never the operator's own
+    reasoning (confirmed with the borrower, late fee waived, etc.) -- so a
+    later reader could see a dispute was closed but never why.
 
     Raises rather than silently no-op'ing when there's nothing open to
     resolve -- an operator clicking "Resolve" on an account that's
@@ -328,9 +333,12 @@ def resolve_dispute(account_id: str) -> dict:
     if row is None:
         raise NoOpenDisputeError(f"account_id={account_id!r} has no open dispute to resolve")
 
-    conn.execute("update disputes set status = 'resolved', resolved_at = now() where id = %s", (row["id"],))
+    conn.execute(
+        "update disputes set status = 'resolved', resolved_at = now(), resolution_note = %s where id = %s",
+        (resolution_note, row["id"]),
+    )
     conn.execute("update accounts set dispute_open = false, updated_at = now() where account_id = %s", (account_id,))
-    return {"account_id": account_id, "dispute_id": row["id"]}
+    return {"account_id": account_id, "dispute_id": row["id"], "resolution_note": resolution_note}
 
 
 _CALL_LOG_OUTCOMES = ("reached", "no_answer", "voicemail", "wrong_number")
@@ -834,19 +842,42 @@ def get_clarification_requests(account_id: str) -> list[dict]:
     most recent first -- the ops dashboard's communication-history
     thread for that borrower (see outbound/send.py's
     notify_clarification_request, which is what actually writes these
-    events)."""
-    rows = get_connection().execute(
+    events). resolved is True for anything sent before the account's most
+    recent mark_clarifications_resolved() checkpoint (see that function's
+    own docstring for why this is a watermark, not per-message state) --
+    False, including when nothing has ever been marked resolved at all."""
+    conn = get_connection()
+    rows = conn.execute(
         "select details, created_at from events where account_id = %s and event_type = %s order by created_at desc",
         (account_id, "clarification_request_sent"),
     ).fetchall()
+    watermark_row = conn.execute(
+        "select created_at from events where account_id = %s and event_type = %s order by created_at desc limit 1",
+        (account_id, "clarification_thread_resolved"),
+    ).fetchone()
+    watermark = watermark_row["created_at"] if watermark_row else None
     return [
         {
             "message": r["details"]["message"],
             "delivered_via_telegram": r["details"]["delivered_via_telegram"],
             "created_at": r["created_at"],
+            "resolved": watermark is not None and r["created_at"] <= watermark,
         }
         for r in rows
     ]
+
+
+def mark_clarifications_resolved(account_id: str) -> None:
+    """Marks every clarification request sent to this account SO FAR as
+    resolved -- a checkpoint, not per-message state: clarification_request_
+    sent events (see notify_clarification_request) have no id exposed
+    anywhere in this app to attach per-row status to, and in practice a
+    whole thread of flags tends to get addressed together on one call, not
+    message by message. Logging a fresh event here (rather than mutating
+    past ones) matches this project's existing append-only convention for
+    the events table -- a corrected/resolved state is a new fact, not an
+    edit to history."""
+    log_event(account_id, "clarification_thread_resolved", {})
 
 
 def verify_account_key(account_id: str, access_key: str) -> bool:

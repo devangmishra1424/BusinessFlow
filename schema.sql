@@ -87,12 +87,18 @@ create table promises (
 );
 
 create table disputes (
-    id           bigint primary key generated always as identity,
-    account_id   text not null references accounts(account_id),
-    reason       text not null,
-    status       text not null default 'open',
-    opened_at    timestamptz not null default now(),
-    resolved_at  timestamptz
+    id               bigint primary key generated always as identity,
+    account_id       text not null references accounts(account_id),
+    reason           text not null,
+    status           text not null default 'open',
+    opened_at        timestamptz not null default now(),
+    resolved_at      timestamptz,
+    -- Ops-entered free text on HOW/WHY a dispute was resolved -- found
+    -- live: resolving one only ever recorded THAT it happened, never the
+    -- reasoning, so a later reader had no way to see what was actually
+    -- decided. Null for every dispute still open, and for any resolved
+    -- before this column existed.
+    resolution_note  text
 );
 
 -- escalation_id (not a bigint id) is the primary key -- store.create_escalation

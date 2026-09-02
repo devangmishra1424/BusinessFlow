@@ -40,6 +40,7 @@ from businessflow.outbound.compose import draft_clarification_message
 from businessflow.outbound.run import run_daily_pass
 from businessflow.rag.extraction import extract_loan_terms
 from businessflow.rag.ingest import extract_document_text, ingest_document
+from businessflow.tools.escalation_tools import escalate_to_human
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +175,7 @@ class DisputeOut(BaseModel):
     status: str  # 'open' | 'resolved'
     opened_at: datetime
     resolved_at: datetime | None
+    resolution_note: str | None = None
 
 
 class MetricsOut(BaseModel):
@@ -231,9 +233,16 @@ class RecordPaymentOut(BaseModel):
     pending_emi_credit: float
 
 
+class ResolveDisputeIn(BaseModel):
+    # Ops-entered free text on how/why this was resolved -- optional,
+    # since not every resolution needs one, but never lost when given.
+    resolution_note: str | None = None
+
+
 class ResolveDisputeOut(BaseModel):
     account_id: str
     dispute_id: int
+    resolution_note: str | None = None
 
 
 class LogPromiseIn(BaseModel):
@@ -306,6 +315,14 @@ class ClarificationRequestOut(BaseModel):
     message: str
     delivered_via_telegram: bool
     created_at: datetime
+    # True if sent before this account's most recent "mark all resolved"
+    # checkpoint -- see store.get_clarification_requests's own docstring
+    # for why this is a watermark, not per-message state.
+    resolved: bool
+
+
+class EscalateToHumanIn(BaseModel):
+    reason: str
 
 
 class AccountCreateIn(BaseModel):
@@ -843,6 +860,40 @@ async def send_clarification_request(account_id: str, body: ClarificationRequest
 
 
 @app.post(
+    "/accounts/{account_id}/clarification-requests/mark-resolved",
+    response_model=list[ClarificationRequestOut],
+    dependencies=[Depends(require_api_key)],
+)
+def mark_clarifications_resolved(account_id: str):
+    """Closes the loop on a thread of clarification requests -- found
+    live: sending one had no way to ever come back as "handled." A
+    borrower's reply is visible in the Conversation tab, but there was no
+    way for ops to say "I've seen it, this is dealt with" and have that
+    stick anywhere. See store.mark_clarifications_resolved's own docstring
+    for why this is a whole-thread checkpoint, not per-message state."""
+    if store.get_account(account_id) is None:
+        raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
+    store.mark_clarifications_resolved(account_id)
+    return [ClarificationRequestOut(**c) for c in store.get_clarification_requests(account_id)]
+
+
+@app.post("/accounts/{account_id}/escalate", response_model=EscalationOut, dependencies=[Depends(require_api_key)])
+def escalate_account(account_id: str, body: EscalateToHumanIn):
+    """Ops-side hand-off to a human -- found live: this action existed
+    for a BORROWER (browser_api.py's own quick-actions/agent endpoint) but
+    nowhere for staff themselves. An operator noticing a worrying pattern
+    (repeated failed call attempts, something that doesn't fit any
+    existing flag) previously had no way to open a real escalation
+    without asking the borrower to request one first."""
+    if store.get_account(account_id) is None:
+        raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
+    result = escalate_to_human(account_id, body.reason)
+    store.log_event(account_id, "tool_called", {"tool": "escalate_to_human", "arguments": {"account_id": account_id, "reason": body.reason}, "result": result})
+    escalation = store.get_escalation(result["escalation_id"])
+    return _escalation_out(escalation)
+
+
+@app.post(
     "/accounts/{account_id}/payments", response_model=RecordPaymentOut, dependencies=[Depends(require_api_key)]
 )
 def record_account_payment(account_id: str, body: RecordPaymentIn):
@@ -871,19 +922,23 @@ def record_account_payment(account_id: str, body: RecordPaymentIn):
     response_model=ResolveDisputeOut,
     dependencies=[Depends(require_api_key)],
 )
-def resolve_account_dispute(account_id: str):
+def resolve_account_dispute(account_id: str, body: ResolveDisputeIn | None = None):
     """Closes this account's currently open dispute. Found live: there was
     no way, anywhere in this codebase (ops UI or store layer), to ever
     turn a dispute back off -- once flagged, an account stayed permanently
     'disputed' (and kept showing up in the Disputed filter/portfolio
-    count) even after an operator actually resolved the underlying issue."""
+    count) even after an operator actually resolved the underlying issue.
+    body is optional so a plain POST with no reasoning still works --
+    resolution_note is worth capturing when an operator has one, never
+    required."""
     if store.get_account(account_id) is None:
         raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
+    resolution_note = body.resolution_note if body is not None else None
     try:
-        result = store.resolve_dispute(account_id)
+        result = store.resolve_dispute(account_id, resolution_note=resolution_note)
     except store.NoOpenDisputeError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
-    store.log_event(account_id, "tool_called", {"tool": "resolve_dispute", "arguments": {"account_id": account_id}, "result": result})
+    store.log_event(account_id, "tool_called", {"tool": "resolve_dispute", "arguments": {"account_id": account_id, "resolution_note": resolution_note}, "result": result})
     return ResolveDisputeOut(**result)
 
 

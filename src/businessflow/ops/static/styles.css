@@ -542,6 +542,7 @@ a.btn { display: inline-block; text-decoration: none; text-align: center; }
 
 .promise-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
 .promise-row:last-child { border-bottom: none; }
+.dispute-entry:last-child .promise-row { border-bottom: none; }
 .promise-dot { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 12px; }
 .promise-dot.kept { background: var(--success-dim); color: var(--success); }
 .promise-dot.broken { background: var(--danger-dim); color: var(--danger); }
@@ -581,6 +582,7 @@ a.btn { display: inline-block; text-decoration: none; text-align: center; }
 .document-download-btn:hover { color: var(--accent-strong); border-color: var(--accent); }
 
 .upload-form { display: flex; flex-direction: column; gap: 10px; background: var(--surface); border: 1px dashed var(--border-strong); border-radius: var(--radius-md); padding: 16px; }
+.upload-form[hidden] { display: none; }
 .upload-row { display: flex; gap: 8px; }
 .upload-row select {
   background: var(--bg-0); border: 1px solid var(--border); color: var(--text-1); font-size: 12.5px;
@@ -594,7 +596,13 @@ a.btn { display: inline-block; text-decoration: none; text-align: center; }
 .upload-row input[type="number"]:focus, .upload-row input[type="date"]:focus, .upload-row input[type="text"]:focus {
   outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim);
 }
+.call-log-nudge {
+  display: flex; flex-direction: column; gap: 10px; background: var(--warning-dim); border: 1px solid rgba(154,91,0,0.3);
+  border-radius: var(--radius-md); padding: 14px 16px; margin-top: 12px;
+}
+.call-log-nudge[hidden] { display: none; }
 .mini-form-radio-row { display: flex; align-items: center; gap: 16px; font-size: 12.5px; color: var(--text-1); }
+.mini-form-radio-row[hidden] { display: none; }
 .mini-form-radio-row label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
 .mini-form-error { font-size: 12px; color: var(--danger); margin: 0; }
 .resolve-dispute-btn { flex-shrink: 0; background: var(--surface-strong); color: var(--text-1); border: 1px solid var(--border); }
