@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/styles.css?v=9" />
+<link rel="stylesheet" href="/static/styles.css?v=13" />
 </head>
 <body>
 
@@ -68,10 +68,16 @@
     <section class="toolbar">
       <div class="filter-pills" id="filter-pills"></div>
       <div class="toolbar-right-group">
+        <select id="sort-select" class="sort-select" title="Sort the account list">
+          <option value="urgency">Most overdue first</option>
+          <option value="risk">Highest risk first</option>
+          <option value="id">Account ID</option>
+        </select>
         <div class="search-wrap">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2.2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
           <input id="search-input" class="search-input" placeholder="Search borrower, business, or account ID" />
         </div>
+        <button class="btn" id="send-reminders-btn">Send reminders now</button>
         <button class="btn btn-approve" id="new-account-btn">+ New account</button>
       </div>
     </section>
@@ -85,6 +91,7 @@
       <h1>Escalation queue</h1>
       <p>Every request still waiting on a human, oldest first.</p>
     </div>
+    <div class="sla-buckets" id="sla-buckets"></div>
     <section class="escalation-list" id="escalation-list"></section>
     <p class="empty-state" id="escalation-empty" hidden>The queue is empty — nothing waiting on a human right now.</p>
   </main>
@@ -188,6 +195,6 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="/static/app.js?v=10"></script>
+<script src="/static/app.js?v=14"></script>
 </body>
 </html>

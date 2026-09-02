@@ -22,7 +22,7 @@ import psycopg
 
 from businessflow.accounts.db import get_connection
 from businessflow.accounts.models import Account, Escalation, PaymentRecord, PromiseToPay
-from businessflow.accounts.policy import PAYMENT_TOKEN_TTL_HOURS
+from businessflow.accounts.policy import PAYMENT_TOKEN_TTL_HOURS, PROMISE_TOLERANCE_DAYS
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +153,27 @@ def create_account(
     return get_account_or_raise(account_id), access_key
 
 
+def reset_access_key(account_id: str) -> str:
+    """Mints a fresh 6-digit access key for an EXISTING account, replacing
+    whatever it had -- the old key stops working the instant this commits.
+    Same generation as create_account's own access_key (secrets.randbelow,
+    zero-padded to 6 digits), just against a row that already exists.
+
+    Real gap this closes: create_account only ever hands the key back
+    ONCE, at creation (see its own docstring) -- there was previously no
+    way to recover a lost key, or to get a fresh Telegram deep-link
+    (build_telegram_start_payload) for an account opened before that
+    feature existed, without a direct database query."""
+    if get_account(account_id) is None:
+        raise ValueError(f"No account found for account_id={account_id!r}")
+    access_key = f"{secrets.randbelow(1_000_000):06d}"
+    get_connection().execute(
+        "update accounts set access_key = %s, updated_at = now() where account_id = %s",
+        (access_key, account_id),
+    )
+    return access_key
+
+
 def current_date() -> date:
     """The single seam tools call through for 'today' -- the real
     calendar date, in UTC specifically, not date.today()'s local
@@ -196,6 +217,49 @@ def add_promise(account_id: str, made_on: date, promised_date: date, promised_am
     return True
 
 
+def resolve_matured_promises() -> list[dict]:
+    """Evaluates every promise-to-pay whose evaluation window has passed
+    (promised_date + PROMISE_TOLERANCE_DAYS is before today) and still has
+    kept=null, against real payment_history, and writes the real verdict.
+
+    Found live (this codebase's own README names it explicitly, under
+    "Known gaps"): promises.kept was only ever written once, by
+    scripts/seed_accounts.py at seed time -- no code path anywhere in this
+    app ever evaluated a promise made after that and flipped it true/false.
+    That silently froze Account.broken_promise_count() (used by ops/
+    flags.py's broken_promises flag and the mandatory-restructuring-
+    escalation policy) at whatever the seed data happened to show,
+    regardless of what actually happened afterward. Called from outbound/
+    run.py's daily pass -- this is now a real, live evaluation, not a
+    one-time seed artifact.
+
+    A promise counts as kept if a real payment for at least the promised
+    amount landed on or after it was made and on or before the tolerance
+    deadline -- a single matching payment_history row, not a sum across
+    several partial payments (this project's existing "simple, explainable
+    rule over black-box scoring" style -- see SETTLEMENT_DISCOUNT_PCT's own
+    comment in policy.py for the same tradeoff made elsewhere). Returns
+    every {id, account_id, kept} row this call just resolved, so callers
+    (run.py) can react to newly-broken promises without a second query."""
+    rows = get_connection().execute(
+        """
+        update promises p
+        set kept = exists (
+            select 1 from payment_history ph
+            where ph.account_id = p.account_id
+              and ph.payment_date >= p.made_on
+              and ph.payment_date <= p.promised_date + %(tolerance)s
+              and ph.amount >= p.promised_amount
+        )
+        where p.kept is null
+          and p.promised_date + %(tolerance)s < %(today)s
+        returning p.id, p.account_id, p.kept
+        """,
+        {"tolerance": PROMISE_TOLERANCE_DAYS, "today": current_date()},
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def open_dispute(account_id: str, reason: str) -> bool:
     """Returns True if this call actually opened a new dispute, False if
     the account already had one open -- flagging an already-disputed
@@ -233,6 +297,121 @@ def get_latest_open_dispute_reason(account_id: str) -> str | None:
         (account_id,),
     ).fetchone()
     return row["reason"] if row else None
+
+
+class NoOpenDisputeError(ValueError):
+    pass
+
+
+def resolve_dispute(account_id: str) -> dict:
+    """Closes this account's currently open dispute -- open_dispute's own
+    docstring guarantees there's ever at most one open at a time (a second
+    open_dispute call while one's already open is a no-op), so this
+    resolves that single row: disputes.status='resolved'/resolved_at=now(),
+    and accounts.dispute_open=false so ops/flags.py's compute_flags stops
+    firing the 'disputed' flag and the borrower's own dashboard stops
+    showing it as an active claim.
+
+    Found live: there was no resolve/close counterpart to open_dispute
+    anywhere in this codebase at all -- once opened, a dispute (and the
+    flag it drives) could never be turned off again by any code path,
+    ops included, regardless of what an operator actually did about it.
+
+    Raises rather than silently no-op'ing when there's nothing open to
+    resolve -- an operator clicking "Resolve" on an account that's
+    already clean almost certainly means they're looking at stale data."""
+    conn = get_connection()
+    row = conn.execute(
+        "select id from disputes where account_id = %s and status = 'open' order by opened_at desc limit 1",
+        (account_id,),
+    ).fetchone()
+    if row is None:
+        raise NoOpenDisputeError(f"account_id={account_id!r} has no open dispute to resolve")
+
+    conn.execute("update disputes set status = 'resolved', resolved_at = now() where id = %s", (row["id"],))
+    conn.execute("update accounts set dispute_open = false, updated_at = now() where account_id = %s", (account_id,))
+    return {"account_id": account_id, "dispute_id": row["id"]}
+
+
+_CALL_LOG_OUTCOMES = ("reached", "no_answer", "voicemail", "wrong_number")
+
+
+def log_call(account_id: str, outcome: str, note: str | None) -> None:
+    """Records that ops actually attempted to reach this borrower by
+    phone, and what happened -- reuses log_event (the same generic
+    audit-log primitive every other real activity in this project already
+    goes through, e.g. clarification requests, quick actions) rather than
+    a new table. Found live: the phone number shown on every account's
+    detail panel was plain, inert text -- nothing on the account ever
+    recorded that a call was attempted, so a second operator opening the
+    same profile the same day had no way to know a colleague had already
+    called, risking duplicate or conflicting outreach on exactly the
+    flagged accounts where coordination matters most."""
+    if outcome not in _CALL_LOG_OUTCOMES:
+        raise ValueError(f"outcome must be one of {_CALL_LOG_OUTCOMES}, got {outcome!r}")
+    log_event(account_id, "manual_call_logged", {"outcome": outcome, "note": note})
+
+
+def get_call_log(account_id: str) -> list[dict]:
+    """Every logged call attempt for this account, most recent first --
+    the read half of log_call, same pattern as get_clarification_requests."""
+    rows = get_connection().execute(
+        "select details, created_at from events where account_id = %s and event_type = %s order by created_at desc",
+        (account_id, "manual_call_logged"),
+    ).fetchall()
+    return [
+        {"outcome": r["details"]["outcome"], "note": r["details"].get("note"), "created_at": r["created_at"]}
+        for r in rows
+    ]
+
+
+def update_account_fields(account_id: str, **fields) -> None:
+    """Partial update -- only the given fields are touched; anything
+    omitted keeps its current value. Callers control the keyword names
+    (this is never handed raw user input as field names, only from
+    ops/api.py's own fixed, Pydantic-validated AccountUpdateIn), so the
+    generated SET clause is never attacker-controlled -- values are still
+    always bound as real query parameters, never string-interpolated.
+
+    Found live: there was no way to fix a typo'd phone number or
+    reclassify risk tier once an account existed -- create_account but no
+    update counterpart, no PATCH route anywhere in ops/api.py."""
+    if not fields:
+        return
+    if get_account(account_id) is None:
+        raise ValueError(f"No account found for account_id={account_id!r}")
+    set_clause = ", ".join(f"{key} = %({key})s" for key in fields)
+    get_connection().execute(
+        f"update accounts set {set_clause}, updated_at = now() where account_id = %(account_id)s",
+        {**fields, "account_id": account_id},
+    )
+
+
+_TRANSCRIPT_EVENT_TYPES = ("user_message", "assistant_message", "tool_called")
+_MAX_TRANSCRIPT_EVENTS = 200  # an explicit bound on an unbounded query, not a UI nicety
+
+
+def get_conversation_transcript(account_id: str) -> list[dict]:
+    """Every real user/assistant turn and tool call this account's AI
+    conversations have ever produced, oldest first -- the full picture
+    behind memory/conversation_memory.py's own short recap, which reads
+    this exact same events data but only the last few, for seeding a new
+    conversation rather than for a human to read.
+
+    Found live: ops previously had zero visibility into what the AI agent
+    actually SAID to a borrower -- staff could see payment history and
+    flags but not the conversation that produced them, only messages ops
+    itself sent via clarification requests."""
+    rows = get_connection().execute(
+        "select event_type, details, created_at from events "
+        "where account_id = %s and event_type = any(%s) "
+        "order by created_at desc limit %s",
+        (account_id, list(_TRANSCRIPT_EVENT_TYPES), _MAX_TRANSCRIPT_EVENTS),
+    ).fetchall()
+    return [
+        {"event_type": r["event_type"], "details": r["details"], "created_at": r["created_at"]}
+        for r in reversed(rows)  # oldest first -- matches how it actually happened
+    ]
 
 
 def set_interest_rate_pct(account_id: str, interest_rate_pct: float) -> None:

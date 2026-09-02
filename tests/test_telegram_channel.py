@@ -32,6 +32,7 @@ from businessflow.channels import telegram_bot
 from businessflow.channels.credentials import looks_like_credentials
 from businessflow.channels.telegram_bot import (
     _decode_and_transcribe_voice_note,
+    _handle_start_payload,
     _sessions,
     _transcript_echo,
     handle_incoming_message,
@@ -267,6 +268,45 @@ def test_transcript_echo_passes_through_a_normal_transcript():
     echo = _transcript_echo("what is my current EMI amount")
 
     assert echo == "You said: what is my current EMI amount"
+
+
+# --- _handle_start_payload (Telegram deep-link onboarding) -----------------
+
+
+def test_handle_start_payload_returns_none_for_a_malformed_payload():
+    # on_start's own contract: None means "not a real deep-link payload,
+    # fall back to the generic help text" -- must never reach verification
+    # (and never mutate any session) for garbage input.
+    result = asyncio.run(_handle_start_payload(900030, "not-a-real-payload"))
+
+    assert result is None
+    assert 900030 not in _sessions
+
+
+@_pg_skip
+def test_handle_start_payload_verifies_a_real_deep_link_tap(reseed_accounts):
+    from businessflow.channels.credentials import build_telegram_start_payload
+
+    chat_id = 900031
+    payload = build_telegram_start_payload("BF-1001", "482913")
+
+    result = asyncio.run(_handle_start_payload(chat_id, payload))
+
+    assert "Verified" in result
+    assert _sessions[chat_id]["account_id"] == "BF-1001"
+
+
+@_pg_skip
+def test_handle_start_payload_denies_a_wrong_key_the_same_way_typed_credentials_would(reseed_accounts):
+    from businessflow.channels.credentials import build_telegram_start_payload
+
+    chat_id = 900032
+    payload = build_telegram_start_payload("BF-1001", "000000")
+
+    result = asyncio.run(_handle_start_payload(chat_id, payload))
+
+    assert "doesn't match" in result
+    assert chat_id not in _sessions
 
 
 # --- handle_incoming_voice ----------------------------------------------------

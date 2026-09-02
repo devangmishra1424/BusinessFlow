@@ -116,6 +116,172 @@ def test_create_account_endpoint_opens_a_real_new_account(reseed_accounts):
             store.get_connection().execute("delete from accounts where account_id = %s", (account_id,))
 
 
+@_pg_skip
+@_ops_key_skip
+def test_create_account_endpoint_reports_telegram_reachability(reseed_accounts):
+    # Not gated on TELEGRAM_BOT_USERNAME being set -- exercises the real
+    # code path either way: None (not configured) or a well-formed
+    # t.me/... link embedding the real access key, never a broken one.
+    from businessflow.accounts import store
+
+    payload = {
+        "borrower_name": "Test Borrower Two", "business_name": "Test Business Two",
+        "phone_number": "+919800011133", "language_preference": "en", "loan_type": "Working Capital Loan",
+        "principal_amount": 100_000, "emi_amount": 8_500, "tenure_months": 12,
+        "emi_due_date": "2026-09-15", "nach_mandate_active": True, "risk_tier": "low",
+    }
+    response = client.post("/accounts", json=payload, headers=_auth())
+    account_id = response.json()["account"]["account_id"] if response.status_code == 201 else None
+    try:
+        assert response.status_code == 201
+        body = response.json()
+        link = body["telegram_invite_link"]
+        assert link is None or link.startswith("https://t.me/")
+        if link is not None:
+            assert body["access_key"] in link
+        # Nobody has actually verified over Telegram yet -- a fresh account
+        # must never claim to be reachable before anyone taps the link.
+        assert body["account"]["telegram_linked"] is False
+    finally:
+        if account_id:
+            store.get_connection().execute("delete from accounts where account_id = %s", (account_id,))
+
+
+@_pg_skip
+@_ops_key_skip
+def test_reset_access_key_endpoint_mints_a_real_new_key(reseed_accounts):
+    response = client.post("/accounts/BF-1001/reset-access-key", headers=_auth())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account_id"] == "BF-1001"
+    assert len(body["access_key"]) == 6 and body["access_key"].isdigit()
+    assert body["access_key"] != "482913"  # BF-1001's real seeded key -- must actually change
+
+    # The old key must actually stop working -- reset is a real
+    # replacement, not just a display refresh.
+    from businessflow.accounts import store
+    assert store.verify_account_key("BF-1001", "482913") is False
+    assert store.verify_account_key("BF-1001", body["access_key"]) is True
+
+
+@_pg_skip
+@_ops_key_skip
+def test_reset_access_key_endpoint_404s_for_unknown_account():
+    response = client.post("/accounts/BF-9999/reset-access-key", headers=_auth())
+
+    assert response.status_code == 404
+
+
+# --- PATCH /accounts/{id} -------------------------------------------------
+
+
+@_pg_skip
+@_ops_key_skip
+def test_update_account_endpoint_changes_only_the_given_fields(reseed_accounts):
+    before = client.get("/accounts/BF-1002", headers=_auth()).json()
+
+    response = client.patch("/accounts/BF-1002", json={"risk_tier": "high"}, headers=_auth())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["risk_tier"] == "high"
+
+    after = client.get("/accounts/BF-1002", headers=_auth()).json()
+    assert after["language_preference"] == before["language_preference"]  # untouched
+
+
+@_pg_skip
+@_ops_key_skip
+def test_update_account_endpoint_rejects_an_invalid_phone_number(reseed_accounts):
+    response = client.patch("/accounts/BF-1002", json={"phone_number": "not-a-phone-number"}, headers=_auth())
+
+    assert response.status_code == 422
+
+
+@_pg_skip
+@_ops_key_skip
+def test_update_account_endpoint_400s_for_an_empty_body(reseed_accounts):
+    response = client.patch("/accounts/BF-1002", json={}, headers=_auth())
+
+    assert response.status_code == 400
+
+
+@_pg_skip
+@_ops_key_skip
+def test_update_account_endpoint_404s_for_unknown_account():
+    response = client.patch("/accounts/BF-9999", json={"risk_tier": "high"}, headers=_auth())
+
+    assert response.status_code == 404
+
+
+# --- GET /accounts/{id}/conversation ---------------------------------------
+
+
+@_pg_skip
+@_ops_key_skip
+def test_conversation_endpoint_returns_real_logged_turns(reseed_accounts):
+    from businessflow.accounts import store
+
+    store.log_event("BF-1001", "user_message", {"content": "what is my EMI"})
+    store.log_event("BF-1001", "assistant_message", {"content": "Your EMI is 12500"})
+    store.log_event("BF-1001", "tool_called", {"tool": "get_payment_status", "arguments": {"account_id": "BF-1001"}, "result": {}})
+
+    response = client.get("/accounts/BF-1001/conversation", headers=_auth())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) >= 3
+    kinds = [e["event_type"] for e in body[-3:]]
+    assert kinds == ["user_message", "assistant_message", "tool_called"]
+    assert body[-3]["content"] == "what is my EMI"
+    assert body[-1]["tool"] == "get_payment_status"
+
+
+@_pg_skip
+@_ops_key_skip
+def test_conversation_endpoint_404s_for_unknown_account():
+    response = client.get("/accounts/BF-9999/conversation", headers=_auth())
+
+    assert response.status_code == 404
+
+
+# --- POST /outbound/run ----------------------------------------------------
+
+
+@_pg_skip
+@_ops_key_skip
+@_groq_skip
+def test_trigger_outbound_run_endpoint_sends_a_real_due_reminder(reseed_accounts):
+    # BF-1002/BF-1004 are real, overdue-only seeded accounts -- confirm at
+    # least one genuinely qualifies today before relying on it, same
+    # pattern test_outbound.py's own idempotency test already uses.
+    from businessflow.outbound.decide import decide_reminders
+
+    due_today = {r.account_id for r in decide_reminders(["BF-1002", "BF-1004"])}
+    assert due_today, "expected at least one of BF-1002/BF-1004 to have a real reminder due today"
+    target = next(iter(due_today))
+
+    response = client.post("/outbound/run", json={"account_ids": [target]}, headers=_auth())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["reminders_sent"]) == 1
+    assert body["reminders_sent"][0]["account_id"] == target
+
+
+@_pg_skip
+@_ops_key_skip
+def test_trigger_outbound_run_endpoint_accepts_an_empty_scope(reseed_accounts):
+    # An account_ids list with nothing overdue -- must return real, empty
+    # results, not error.
+    response = client.post("/outbound/run", json={"account_ids": []}, headers=_auth())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["reminders_sent"] == []
+
+
 @_ops_key_skip
 def test_create_account_endpoint_rejects_an_invalid_phone_number():
     payload = {
@@ -162,6 +328,169 @@ def test_get_account_detail_404s_for_unknown_account():
     response = client.get("/accounts/BF-9999", headers=_auth())
 
     assert response.status_code == 404
+
+
+# --- POST /accounts/{id}/payments ---------------------------------------
+#
+# Regression coverage for a real gap: store.record_payment (correct
+# reducing-balance/overpayment/partial-payment logic, already fully
+# implemented) was only ever reachable through a borrower's own single-use
+# payment link -- an operator taking a payment by phone, UPI, or cash had
+# no door into the system at all.
+
+
+@_pg_skip
+@_ops_key_skip
+def test_record_payment_endpoint_retires_a_cycle_for_a_full_payment(reseed_accounts):
+    account_before = client.get("/accounts/BF-1004", headers=_auth()).json()
+
+    response = client.post(
+        "/accounts/BF-1004/payments", json={"amount": account_before["emi_amount"]}, headers=_auth()
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account_id"] == "BF-1004"
+    assert body["kind"] == "regular"
+    assert body["months_remaining"] == account_before["months_remaining"] - 1
+
+
+@_pg_skip
+@_ops_key_skip
+def test_record_payment_endpoint_422s_for_a_short_payment_with_no_decision(reseed_accounts):
+    response = client.post("/accounts/BF-1004/payments", json={"amount": 1}, headers=_auth())
+
+    assert response.status_code == 422
+
+
+@_pg_skip
+@_ops_key_skip
+def test_record_payment_endpoint_404s_for_unknown_account():
+    response = client.post("/accounts/BF-9999/payments", json={"amount": 100}, headers=_auth())
+
+    assert response.status_code == 404
+
+
+@_ops_key_skip
+def test_record_payment_endpoint_rejects_a_non_positive_amount():
+    response = client.post("/accounts/BF-1004/payments", json={"amount": 0}, headers=_auth())
+
+    assert response.status_code == 422
+
+
+# --- POST /accounts/{id}/disputes/resolve --------------------------------
+
+
+@_pg_skip
+@_ops_key_skip
+def test_resolve_dispute_endpoint_closes_a_real_open_dispute(reseed_accounts):
+    # BF-1003 is the one seeded account with a real open dispute (see
+    # scripts/seed_accounts.py).
+    before = client.get("/accounts/BF-1003", headers=_auth()).json()
+    assert before["dispute_open"] is True
+
+    response = client.post("/accounts/BF-1003/disputes/resolve", headers=_auth())
+
+    assert response.status_code == 200
+    after = client.get("/accounts/BF-1003", headers=_auth()).json()
+    assert after["dispute_open"] is False
+    assert not any(f["label"] == "disputed" for f in after["flags"])
+    assert all(d["status"] == "resolved" for d in after["disputes"] if d["reason"] == before["disputes"][0]["reason"])
+
+
+@_pg_skip
+@_ops_key_skip
+def test_resolve_dispute_endpoint_409s_when_nothing_is_open(reseed_accounts):
+    # BF-1001 has no dispute at all in the seed data.
+    response = client.post("/accounts/BF-1001/disputes/resolve", headers=_auth())
+
+    assert response.status_code == 409
+
+
+@_pg_skip
+@_ops_key_skip
+def test_resolve_dispute_endpoint_404s_for_unknown_account():
+    response = client.post("/accounts/BF-9999/disputes/resolve", headers=_auth())
+
+    assert response.status_code == 404
+
+
+# --- POST /accounts/{id}/promises ----------------------------------------
+
+
+@_pg_skip
+@_ops_key_skip
+def test_log_promise_endpoint_adds_a_real_promise(reseed_accounts):
+    from datetime import date, timedelta
+
+    before = client.get("/accounts/BF-1001", headers=_auth()).json()
+    promised_date = (date.today() + timedelta(days=7)).isoformat()
+
+    response = client.post(
+        "/accounts/BF-1001/promises", json={"promised_date": promised_date, "promised_amount": 8000}, headers=_auth()
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["created"] is True
+    assert body["promised_amount"] == 8000
+
+    after = client.get("/accounts/BF-1001", headers=_auth()).json()
+    assert len(after["promises"]) == len(before["promises"]) + 1
+
+
+@_pg_skip
+@_ops_key_skip
+def test_log_promise_endpoint_404s_for_unknown_account():
+    response = client.post(
+        "/accounts/BF-9999/promises", json={"promised_date": "2026-12-01", "promised_amount": 1000}, headers=_auth()
+    )
+
+    assert response.status_code == 404
+
+
+@_ops_key_skip
+def test_log_promise_endpoint_rejects_a_non_positive_amount():
+    response = client.post(
+        "/accounts/BF-1001/promises", json={"promised_date": "2026-12-01", "promised_amount": 0}, headers=_auth()
+    )
+
+    assert response.status_code == 422
+
+
+# --- POST /accounts/{id}/call-log -----------------------------------------
+
+
+@_pg_skip
+@_ops_key_skip
+def test_call_log_endpoint_records_and_lists_a_call(reseed_accounts):
+    response = client.post(
+        "/accounts/BF-1001/call-log", json={"outcome": "no_answer", "note": "tried twice, no pickup"}, headers=_auth()
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["outcome"] == "no_answer"
+    assert body["note"] == "tried twice, no pickup"
+
+    after = client.get("/accounts/BF-1001", headers=_auth()).json()
+    assert len(after["call_log"]) == 1
+    assert after["call_log"][0]["outcome"] == "no_answer"
+
+
+@_pg_skip
+@_ops_key_skip
+def test_call_log_endpoint_404s_for_unknown_account():
+    response = client.post("/accounts/BF-9999/call-log", json={"outcome": "reached"}, headers=_auth())
+
+    assert response.status_code == 404
+
+
+@_ops_key_skip
+def test_call_log_endpoint_rejects_an_invalid_outcome():
+    response = client.post("/accounts/BF-1001/call-log", json={"outcome": "not_a_real_outcome"}, headers=_auth())
+
+    assert response.status_code == 422
 
 
 @_pg_skip

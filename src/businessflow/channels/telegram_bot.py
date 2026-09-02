@@ -68,7 +68,7 @@ from businessflow.audio.asr import transcribe
 from businessflow.audio.tts import encode_ogg_opus, speak_english, speak_hindi
 from businessflow.audio.vad import trim_to_speech
 from businessflow.audio.verbalizer import verbalize
-from businessflow.channels.credentials import looks_like_credentials, parse_credentials
+from businessflow.channels.credentials import looks_like_credentials, parse_credentials, parse_telegram_start_payload
 from businessflow.tools.account_tools import flag_dispute, get_payment_history, get_payment_status
 from businessflow.tools.escalation_tools import escalate_to_human, request_closure_certificate
 from businessflow.tools.payment_tools import generate_payment_link
@@ -282,7 +282,35 @@ async def handle_incoming_voice(
     return transcript, reply
 
 
+async def _handle_start_payload(chat_id: int, payload: str) -> str | None:
+    """Verifies a real t.me/<bot>?start=<payload> deep-link tap (ops/api.py's
+    telegram_invite_link, generated at account creation or a key reset) --
+    reuses handle_incoming_message's own verification path wholesale (no
+    separate logic to keep in sync), so a wrong/expired key fails exactly
+    the same way typed credentials would, and its "Verified..." reply never
+    echoes the key back into the chat either way.
+
+    Returns the reply text once verification was actually attempted; None
+    if payload isn't shaped like one this app itself produced, so on_start
+    falls back to its generic help text instead of silently eating a plain
+    /start with an unrelated argument. Factored out from on_start so this
+    is directly testable without a fake Update/Context, same reasoning as
+    _transcript_echo/_decode_and_transcribe_voice_note above."""
+    parsed = parse_telegram_start_payload(payload)
+    if parsed is None:
+        return None
+    account_id, access_key = parsed
+    async with _get_session_lock(chat_id):
+        return await asyncio.to_thread(handle_incoming_message, chat_id, f"{account_id} {access_key}")
+
+
 async def on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if context.args:
+        reply = await _handle_start_payload(update.effective_chat.id, context.args[0])
+        if reply is not None:
+            await update.message.reply_text(reply)
+            return
+
     await update.message.reply_text(
         'Send your account ID and 6-digit access key together as TEXT (e.g. "BF-1001 482913") '
         "to discuss your loan, or just start talking -- text or voice -- for a general question. "

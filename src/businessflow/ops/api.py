@@ -32,10 +32,12 @@ from pydantic import BaseModel, field_validator
 
 from businessflow.accounts import store
 from businessflow.accounts.models import Account
+from businessflow.channels.credentials import build_telegram_start_payload
 from businessflow.observability import metrics
 from businessflow.ops.flags import Flag, compute_flags
 from businessflow.outbound import send as notify
 from businessflow.outbound.compose import draft_clarification_message
+from businessflow.outbound.run import run_daily_pass
 from businessflow.rag.extraction import extract_loan_terms
 from businessflow.rag.ingest import extract_document_text, ingest_document
 
@@ -84,6 +86,22 @@ app.add_middleware(
 _api_key_header = APIKeyHeader(name="X-API-Key")
 
 
+def _telegram_invite_link(account_id: str, access_key: str) -> str | None:
+    """A real, tappable t.me/<bot>?start=<payload> link that auto-verifies
+    the instant a borrower taps it (see telegram_bot.py's on_start /
+    _handle_start_payload) -- closes a real gap: the account-creation
+    success screen used to just tell the OPERATOR to manually relay the
+    key "over chat/Telegram," with no automated send and no deep link at
+    all, so a borrower had to find the bot cold and type the key in by
+    hand. None (not a broken link) when TELEGRAM_BOT_USERNAME isn't
+    configured -- there's no sensible default bot to point at."""
+    username = os.environ.get("TELEGRAM_BOT_USERNAME")
+    if not username:
+        return None
+    payload = build_telegram_start_payload(account_id, access_key)
+    return f"https://t.me/{username}?start={payload}"
+
+
 def _cleanup_rejected_upload(saved_path: Path, account_dir: Path) -> None:
     """Removes a partially-saved upload and, if now empty, the account
     directory that was created to hold it -- the shared cleanup for every
@@ -128,6 +146,13 @@ class AccountSummaryOut(BaseModel):
     days_past_due: int
     risk_tier: str
     flags: list[FlagOut]
+    # False means every automated reminder for this account has been
+    # silently logged-but-undelivered (see outbound/send.py's
+    # _deliver_and_log) since it verified nowhere -- surfaced here so ops
+    # can see and re-target a borrower who was onboarded but never
+    # actually connected, instead of it being invisible until someone
+    # notices a due date came and went with no response.
+    telegram_linked: bool
 
 
 class PaymentRecordOut(BaseModel):
@@ -173,6 +198,76 @@ class EscalationOut(BaseModel):
 class EscalationRejectIn(BaseModel):
     # Optional, ops-entered explanation shown back to the borrower.
     reason: str | None = None
+
+
+class RecordPaymentIn(BaseModel):
+    amount: float
+    # Defaults to today (store.record_payment's own default) if omitted --
+    # only given explicitly for a payment ops is entering after the fact
+    # (e.g. an NEFT credit confirmed a day later than it actually landed).
+    payment_date: date | None = None
+    # Only meaningful when amount is less than what's actually due this
+    # cycle -- see store.record_payment's own docstring for the full
+    # decision table. Left None for a normal/full payment, which never
+    # needs it.
+    apply_extra_to_next: bool | None = None
+
+    @field_validator("amount")
+    @classmethod
+    def _validate_positive_amount(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("amount must be a positive amount")
+        return v
+
+
+class RecordPaymentOut(BaseModel):
+    account_id: str
+    amount: float
+    payment_date: date
+    on_time: bool
+    kind: str  # "regular" | "extra_unapplied" | "extra_applied" | "overpayment_applied"
+    months_remaining: int
+    next_emi_due_date: date
+    pending_emi_credit: float
+
+
+class ResolveDisputeOut(BaseModel):
+    account_id: str
+    dispute_id: int
+
+
+class LogPromiseIn(BaseModel):
+    promised_date: date
+    promised_amount: float
+    # Defaults to today if omitted -- an operator logging a promise made
+    # during a call happening right now, the common case.
+    made_on: date | None = None
+
+    @field_validator("promised_amount")
+    @classmethod
+    def _validate_positive_amount(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("promised_amount must be a positive amount")
+        return v
+
+
+class LogPromiseOut(BaseModel):
+    account_id: str
+    made_on: date
+    promised_date: date
+    promised_amount: float
+    created: bool  # False if this exact promise was already logged (see store.add_promise)
+
+
+class CallLogIn(BaseModel):
+    outcome: Literal["reached", "no_answer", "voicemail", "wrong_number"]
+    note: str | None = None
+
+
+class CallLogEntryOut(BaseModel):
+    outcome: str
+    note: str | None
+    created_at: datetime
 
 
 class DocumentUploadOut(BaseModel):
@@ -258,6 +353,50 @@ class AccountCreateOut(BaseModel):
     # Handed back exactly once, at creation -- see accounts.store.create_
     # account's docstring for why this isn't recoverable any other way.
     access_key: str
+    # None if TELEGRAM_BOT_USERNAME isn't configured -- see
+    # _telegram_invite_link's own docstring.
+    telegram_invite_link: str | None = None
+
+
+class ResetAccessKeyOut(BaseModel):
+    account_id: str
+    access_key: str
+    telegram_invite_link: str | None = None
+
+
+class AccountUpdateIn(BaseModel):
+    # Fields legitimately correctable after an account already exists --
+    # not principal/EMI/tenure, which real payment/restructuring flows own.
+    phone_number: str | None = None
+    language_preference: Literal["hi", "en", "hinglish"] | None = None
+    risk_tier: Literal["low", "medium", "high"] | None = None
+
+    @field_validator("phone_number")
+    @classmethod
+    def _validate_e164(cls, v: str | None) -> str | None:
+        if v is not None and not _E164_PATTERN.match(v):
+            raise ValueError(f"phone_number must be E.164 (e.g. +919812345001), got {v!r}")
+        return v
+
+
+class TranscriptEntryOut(BaseModel):
+    event_type: str  # "user_message" | "assistant_message" | "tool_called"
+    content: str | None = None  # user_message / assistant_message
+    tool: str | None = None  # tool_called
+    arguments: dict | None = None  # tool_called
+    created_at: datetime
+
+
+class RunOutboundIn(BaseModel):
+    # None = every account currently due -- matches
+    # outbound.run.run_daily_pass's own account_ids contract.
+    account_ids: list[str] | None = None
+
+
+class RunOutboundOut(BaseModel):
+    promises_resolved: int
+    escalated_for_broken_promises: int
+    reminders_sent: list[dict]
 
 
 class AccountDetailOut(AccountSummaryOut):
@@ -274,6 +413,7 @@ class AccountDetailOut(AccountSummaryOut):
     disputes: list[DisputeOut]
     escalations: list[EscalationOut]
     clarification_requests: list[ClarificationRequestOut]
+    call_log: list[CallLogEntryOut]
 
 
 def _summarize(account: Account, flags: list[Flag]) -> AccountSummaryOut:
@@ -287,6 +427,7 @@ def _summarize(account: Account, flags: list[Flag]) -> AccountSummaryOut:
         days_past_due=account.days_past_due(store.current_date()),
         risk_tier=account.risk_tier,
         flags=[FlagOut(label=f.label, reason=f.reason) for f in flags],
+        telegram_linked=account.telegram_chat_id is not None,
     )
 
 
@@ -330,7 +471,31 @@ def create_account(body: AccountCreateIn):
     if body.interest_rate_pct is not None:
         store.set_interest_rate_pct(account.account_id, body.interest_rate_pct)
         account = store.get_account_or_raise(account.account_id)
-    return AccountCreateOut(account=_summarize(account, compute_flags(account)), access_key=access_key)
+    return AccountCreateOut(
+        account=_summarize(account, compute_flags(account)),
+        access_key=access_key,
+        telegram_invite_link=_telegram_invite_link(account.account_id, access_key),
+    )
+
+
+@app.post(
+    "/accounts/{account_id}/reset-access-key",
+    response_model=ResetAccessKeyOut,
+    dependencies=[Depends(require_api_key)],
+)
+def reset_account_access_key(account_id: str):
+    """Mints a fresh access key (and, if configured, a fresh Telegram
+    invite link) for an account that already exists -- the only way to
+    recover a lost key or get a deep link for an account opened before
+    that feature existed, since store.create_account only ever hands the
+    key back once. The OLD key stops working immediately."""
+    if store.get_account(account_id) is None:
+        raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
+    access_key = store.reset_access_key(account_id)
+    return ResetAccessKeyOut(
+        account_id=account_id, access_key=access_key,
+        telegram_invite_link=_telegram_invite_link(account_id, access_key),
+    )
 
 
 @app.get("/accounts/{account_id}", response_model=AccountDetailOut, dependencies=[Depends(require_api_key)])
@@ -370,6 +535,67 @@ def get_account(account_id: str):
         clarification_requests=[
             ClarificationRequestOut(**c) for c in store.get_clarification_requests(account_id)
         ],
+        call_log=[CallLogEntryOut(**c) for c in store.get_call_log(account_id)],
+    )
+
+
+@app.patch("/accounts/{account_id}", response_model=AccountSummaryOut, dependencies=[Depends(require_api_key)])
+def update_account(account_id: str, body: AccountUpdateIn):
+    """Fixes a typo'd phone number or reclassifies risk tier -- found live:
+    there was no way to correct either after an account was created at
+    all. Only the fields actually given are touched; a wrong phone number
+    today means the borrower is genuinely uncontactable with no UI fix,
+    which this closes."""
+    if store.get_account(account_id) is None:
+        raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
+    fields = body.model_dump(exclude_none=True)
+    if not fields:
+        raise HTTPException(status_code=400, detail="at least one field must be given")
+    store.update_account_fields(account_id, **fields)
+    account = store.get_account_or_raise(account_id)
+    return _summarize(account, compute_flags(account))
+
+
+@app.get(
+    "/accounts/{account_id}/conversation",
+    response_model=list[TranscriptEntryOut],
+    dependencies=[Depends(require_api_key)],
+)
+def get_account_conversation(account_id: str):
+    """What the AI agent actually said to this borrower, and what it did
+    on their behalf -- not just messages ops itself sent. Found live: this
+    was the one real gap between "monitor" and "watch numbers change" --
+    staff could see payment history and flags but never the conversation
+    that produced them."""
+    if store.get_account(account_id) is None:
+        raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
+    entries = store.get_conversation_transcript(account_id)
+    return [
+        TranscriptEntryOut(
+            event_type=e["event_type"],
+            content=e["details"].get("content"),
+            tool=e["details"].get("tool"),
+            arguments=e["details"].get("arguments"),
+            created_at=e["created_at"],
+        )
+        for e in entries
+    ]
+
+
+@app.post("/outbound/run", response_model=RunOutboundOut, dependencies=[Depends(require_api_key)])
+def trigger_outbound_run(body: RunOutboundIn):
+    """Staff-triggered version of scripts/run_outbound_pass.py -- turns
+    what used to be a developer-only terminal command into something ops
+    can actually press, optionally scoped to a specific set of accounts
+    (e.g. the currently filtered/selected ones) instead of always
+    everyone. run_daily_pass's own idempotency (reminder_sent event-log
+    dedup, see outbound/run.py) makes pressing this twice for the same
+    account on the same day a safe no-op, not a double-send."""
+    result = run_daily_pass(body.account_ids)
+    return RunOutboundOut(
+        promises_resolved=len(result["promises_resolved"]),
+        escalated_for_broken_promises=len(result["escalated_for_broken_promises"]),
+        reminders_sent=result["reminders_sent"],
     )
 
 
@@ -614,6 +840,84 @@ async def send_clarification_request(account_id: str, body: ClarificationRequest
     # rather than trust client-side time, same pattern as approve/reject.
     latest = store.get_clarification_requests(account_id)[0]
     return ClarificationRequestOut(**latest)
+
+
+@app.post(
+    "/accounts/{account_id}/payments", response_model=RecordPaymentOut, dependencies=[Depends(require_api_key)]
+)
+def record_account_payment(account_id: str, body: RecordPaymentIn):
+    """Records a payment ops took directly -- over the phone, UPI, cash,
+    or an NEFT credit the automated payment-link flow never saw. Found
+    live: store.record_payment (the one place a payment actually lands,
+    with correct reducing-balance/overpayment/partial-payment semantics)
+    was only ever reachable through a borrower's own single-use payment
+    link -- an operator who takes a payment any other way had no door into
+    the system at all, meaning the single most common real action a
+    collections operator takes couldn't be done from the ops dashboard."""
+    if store.get_account(account_id) is None:
+        raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
+    try:
+        result = store.record_payment(
+            account_id, body.amount, payment_date=body.payment_date, apply_extra_to_next=body.apply_extra_to_next
+        )
+    except store.ExtraPaymentDecisionRequiredError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    store.log_event(account_id, "tool_called", {"tool": "record_payment_ops", "arguments": body.model_dump(mode="json"), "result": result})
+    return RecordPaymentOut(**result)
+
+
+@app.post(
+    "/accounts/{account_id}/disputes/resolve",
+    response_model=ResolveDisputeOut,
+    dependencies=[Depends(require_api_key)],
+)
+def resolve_account_dispute(account_id: str):
+    """Closes this account's currently open dispute. Found live: there was
+    no way, anywhere in this codebase (ops UI or store layer), to ever
+    turn a dispute back off -- once flagged, an account stayed permanently
+    'disputed' (and kept showing up in the Disputed filter/portfolio
+    count) even after an operator actually resolved the underlying issue."""
+    if store.get_account(account_id) is None:
+        raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
+    try:
+        result = store.resolve_dispute(account_id)
+    except store.NoOpenDisputeError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    store.log_event(account_id, "tool_called", {"tool": "resolve_dispute", "arguments": {"account_id": account_id}, "result": result})
+    return ResolveDisputeOut(**result)
+
+
+@app.post("/accounts/{account_id}/promises", response_model=LogPromiseOut, dependencies=[Depends(require_api_key)])
+def log_account_promise(account_id: str, body: LogPromiseIn):
+    """Logs a promise-to-pay an operator negotiated directly (e.g. on a
+    phone call). Found live: store.add_promise was only ever called from
+    the LLM agent's own borrower-chat tool -- a promise an operator
+    negotiated by phone had no way into the system at all, so it never
+    counted toward broken_promise_count() (which real policy -- the
+    mandatory-escalation threshold -- depends on) and was invisible to
+    whichever operator opened this account next."""
+    if store.get_account(account_id) is None:
+        raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
+    made_on = body.made_on or store.current_date()
+    created = store.add_promise(account_id, made_on, body.promised_date, body.promised_amount)
+    return LogPromiseOut(
+        account_id=account_id, made_on=made_on, promised_date=body.promised_date,
+        promised_amount=body.promised_amount, created=created,
+    )
+
+
+@app.post("/accounts/{account_id}/call-log", response_model=CallLogEntryOut, dependencies=[Depends(require_api_key)])
+def log_account_call(account_id: str, body: CallLogIn):
+    """Records that ops attempted to reach this borrower by phone, and
+    what happened -- so a second operator opening the same profile later
+    the same day can see a call was already attempted, instead of the
+    phone number being inert text with no record of contact ever attached
+    to it."""
+    if store.get_account(account_id) is None:
+        raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
+    store.log_call(account_id, body.outcome, body.note)
+    latest = store.get_call_log(account_id)[0]
+    return CallLogEntryOut(**latest)
 
 
 @app.get("/escalations", response_model=list[EscalationOut], dependencies=[Depends(require_api_key)])
