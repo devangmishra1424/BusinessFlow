@@ -9,7 +9,7 @@ GRACE_PERIOD_DAYS = 3
 
 # How many days before an EMI is due the proactive outbound heads-up
 # reminder goes out -- outbound/decide.py's own deadline-proximity check.
-HEADS_UP_DAYS_BEFORE_DUE = 2
+HEADS_UP_DAYS_BEFORE_DUE = 3
 
 # A promise-to-pay is "kept" if payment lands within this many days of the
 # promised date, not only on the exact date.
@@ -18,6 +18,15 @@ PROMISE_TOLERANCE_DAYS = 2
 # Escalate to a human on the account's Nth broken promise, not the 1st —
 # a single slip is normal; a pattern isn't.
 BROKEN_PROMISES_BEFORE_MANDATORY_ESCALATION = 2
+
+# outbound/run.py's follow_up reminders fire daily forever once an account
+# is past GRACE_PERIOD_DAYS, with no ceiling of their own -- past this many
+# days overdue, a plain reminder clearly isn't working, so the account is
+# also handed to a human instead of just nagging indefinitely. A round,
+# simple default in this project's existing style (see LATE_FEE_FLAT_AMOUNT
+# above) -- two weeks of unanswered daily reminders is a real pattern, not
+# a normal payment delay.
+MANDATORY_ESCALATION_DAYS_PAST_DUE = 14
 
 MAX_RESTRUCTURING_EXTENSION_MONTHS = 3
 

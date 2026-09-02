@@ -1,6 +1,7 @@
-"""Manually-triggerable entrypoint for the proactive outbound pass -- no
-scheduler exists yet (deferred alongside hosting/Telegram/voice), so
-this is what a real cron/cloud-scheduler job would call once one does.
+"""Manually-triggerable entrypoint for the proactive outbound pass -- a
+real OS/cloud cron would call this directly instead of running
+scripts/run_outbound_scheduler.py's own always-on loop, once that kind of
+hosting exists.
 
 Run: python -m scripts.run_outbound_pass
 """
@@ -8,14 +9,18 @@ Run: python -m scripts.run_outbound_pass
 import json
 import sys
 
-from businessflow.outbound.run import run_daily_outbound_pass
+from businessflow.outbound.run import run_daily_pass
 
 
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
-    sent = run_daily_outbound_pass()
-    print(json.dumps(sent, indent=2, ensure_ascii=False))
-    print(f"\n{len(sent)} reminder(s) sent")
+    result = run_daily_pass()
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    print(
+        f"\n{len(result['promises_resolved'])} promise(s) resolved, "
+        f"{len(result['escalated_for_broken_promises'])} escalated for broken promises, "
+        f"{len(result['reminders_sent'])} reminder(s) sent"
+    )
 
 
 if __name__ == "__main__":

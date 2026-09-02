@@ -7,7 +7,7 @@ real Postgres (and, for compose, a real Groq call).
 """
 
 import os
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -30,7 +30,7 @@ def _account(**overrides) -> Account:
 
 
 def test_exactly_at_the_heads_up_window_edge_gets_a_heads_up():
-    account = _account(emi_due_date=date(2026, 8, 23))  # HEADS_UP_DAYS_BEFORE_DUE=2 -> 2026-08-23
+    account = _account(emi_due_date=_TODAY + timedelta(days=HEADS_UP_DAYS_BEFORE_DUE))
     assert (account.emi_due_date - _TODAY).days == HEADS_UP_DAYS_BEFORE_DUE
 
     reminder = decide_reminder(account, as_of=_TODAY)
@@ -41,7 +41,7 @@ def test_exactly_at_the_heads_up_window_edge_gets_a_heads_up():
 
 
 def test_one_day_beyond_the_heads_up_window_gets_nothing_yet():
-    account = _account(emi_due_date=date(2026, 8, 24))  # 3 days out, beyond the 2-day window
+    account = _account(emi_due_date=_TODAY + timedelta(days=HEADS_UP_DAYS_BEFORE_DUE + 1))
 
     assert decide_reminder(account, as_of=_TODAY) is None
 
@@ -223,6 +223,114 @@ def test_send_reminder_with_a_payment_link_still_attempts_real_delivery(reseed_a
     )
 
     assert delivered is False
+
+
+@_pg_skip
+def test_resolve_matured_promises_marks_a_fulfilled_promise_kept(reseed_accounts):
+    # Regression coverage for a real gap this codebase's own README named
+    # under "Known gaps": promises.kept was only ever written once, by this
+    # same seed script, at seed time -- nothing ever evaluated a promise
+    # made afterward. BF-1001 has no seeded promises of its own (see
+    # scripts/seed_accounts.py's _PROMISE_OFFSETS), so this is a clean
+    # slate: add one, whose evaluation window has already passed, backed
+    # by a real matching payment, and confirm the job actually resolves it.
+    from businessflow.accounts import store
+
+    today = store.current_date()
+    made_on = today - timedelta(days=20)
+    promised_date = today - timedelta(days=10)  # well past promised_date + PROMISE_TOLERANCE_DAYS
+    store.add_promise("BF-1001", made_on, promised_date, 5_000)
+    store.record_payment("BF-1001", 5_000, payment_date=promised_date, apply_extra_to_next=False)
+
+    resolved = store.resolve_matured_promises()
+
+    matches = [r for r in resolved if r["account_id"] == "BF-1001"]
+    assert matches and all(r["kept"] is True for r in matches)
+
+
+@_pg_skip
+def test_resolve_matured_promises_marks_an_unfulfilled_promise_broken(reseed_accounts):
+    from businessflow.accounts import store
+
+    today = store.current_date()
+    store.add_promise("BF-1004", today - timedelta(days=20), today - timedelta(days=10), 99_999)
+
+    resolved = store.resolve_matured_promises()
+
+    matches = [r for r in resolved if r["account_id"] == "BF-1004"]
+    assert matches and all(r["kept"] is False for r in matches)
+
+
+@_pg_skip
+def test_resolve_matured_promises_leaves_a_still_pending_promise_alone(reseed_accounts):
+    # promised_date + PROMISE_TOLERANCE_DAYS hasn't passed yet -- must not
+    # be touched at all, kept or broken, until its window actually closes.
+    from businessflow.accounts import store
+
+    today = store.current_date()
+    store.add_promise("BF-1001", today, today + timedelta(days=5), 5_000)
+
+    resolved = store.resolve_matured_promises()
+
+    assert not any(r["account_id"] == "BF-1001" for r in resolved)
+    fresh = store.get_account_or_raise("BF-1001")
+    assert fresh.promises[-1].kept is None
+
+
+@_pg_skip
+def test_resolve_promises_escalates_exactly_once_the_broken_promise_threshold_is_crossed(reseed_accounts):
+    from businessflow.accounts import store
+    from businessflow.outbound.run import resolve_promises
+
+    # BF-1002 already has exactly one seeded broken promise (see
+    # scripts/seed_accounts.py's _PROMISE_OFFSETS: kept=False), so one more
+    # genuine break here crosses BROKEN_PROMISES_BEFORE_MANDATORY_ESCALATION
+    # (2) for the first time, not the fifth.
+    before = store.get_account_or_raise("BF-1002")
+    assert before.broken_promise_count() == 1
+
+    today = store.current_date()
+    store.add_promise("BF-1002", today - timedelta(days=20), today - timedelta(days=10), 99_999)
+
+    result = resolve_promises()
+
+    after = store.get_account_or_raise("BF-1002")
+    assert after.broken_promise_count() == 2
+    assert any(e["account_id"] == "BF-1002" for e in result["escalated"])
+
+    # Running it again (nothing new to resolve) must not open a second,
+    # duplicate escalation -- create_escalation's own account_id+reason
+    # dedup (see accounts/store.py) is what's actually relied on here.
+    second_result = resolve_promises()
+    assert not any(e["account_id"] == "BF-1002" for e in second_result["escalated"])
+    escalations = store.get_escalations_for_account("BF-1002")
+    broken_promise_escalations = [e for e in escalations if "broken promises" in e.reason.lower()]
+    assert len(broken_promise_escalations) == 1
+
+
+@_pg_skip
+@_groq_skip
+def test_run_daily_outbound_pass_escalates_a_chronically_overdue_account(reseed_accounts):
+    # Regression coverage for a real gap: follow_up reminders fired
+    # identically forever with no ceiling, never themselves escalating to
+    # a human no matter how delinquent an account got. BF-1002 has no open
+    # dispute (unlike BF-1003), so pushing it well past
+    # MANDATORY_ESCALATION_DAYS_PAST_DUE exercises the real decide->
+    # escalate path end to end.
+    from businessflow.accounts import store
+    from businessflow.outbound.run import _CHRONIC_DELINQUENCY_REASON, run_daily_outbound_pass
+
+    new_due_date = store.current_date() - timedelta(days=20)
+    store.get_connection().execute(
+        "update accounts set emi_due_date = %s where account_id = %s", (new_due_date, "BF-1002")
+    )
+
+    run_daily_outbound_pass(["BF-1002"])
+
+    escalations = store.get_escalations_for_account("BF-1002")
+    assert any(
+        e.reason == _CHRONIC_DELINQUENCY_REASON and e.status == "queued_for_human" for e in escalations
+    )
 
 
 @_pg_skip

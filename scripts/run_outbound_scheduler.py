@@ -1,13 +1,13 @@
 """Real, standalone scheduler for the proactive outbound pass -- runs
-continuously, firing run_daily_outbound_pass() once per day at a fixed
-UTC hour. Same "long-running local process" pattern
-channels/telegram_bot.py already uses (this project has no real hosting
-yet, so a cloud cron isn't an option -- see outbound/run.py's own
-comment on that history). Point a real OS/cloud cron at
-scripts/run_outbound_pass.py's main() instead once real hosting exists;
-run_daily_outbound_pass() itself is unchanged either way, and is already
-idempotent against firing more than once for the same account+kind in a
-day, so an extra wakeup near the boundary is harmless.
+continuously, firing run_daily_pass() once per day at a fixed UTC hour.
+Same "long-running local process" pattern channels/telegram_bot.py already
+uses (this project has no real hosting yet, so a cloud cron isn't an
+option -- see outbound/run.py's own comment on that history). Point a real
+OS/cloud cron at scripts/run_outbound_pass.py's main() instead once real
+hosting exists; run_daily_pass() itself is unchanged either way, and its
+reminder-sending half is already idempotent against firing more than once
+for the same account+kind in a day, so an extra wakeup near the boundary
+is harmless.
 
 Run: python -m scripts.run_outbound_scheduler
 """
@@ -16,7 +16,7 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 
-from businessflow.outbound.run import run_daily_outbound_pass
+from businessflow.outbound.run import run_daily_pass
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -44,8 +44,11 @@ def main() -> None:
 
         logger.info("running daily outbound pass")
         try:
-            sent = run_daily_outbound_pass()
-            logger.info("daily outbound pass sent %d reminder(s)", len(sent))
+            result = run_daily_pass()
+            logger.info(
+                "daily outbound pass: %d promise(s) resolved, %d escalated for broken promises, %d reminder(s) sent",
+                len(result["promises_resolved"]), len(result["escalated_for_broken_promises"]), len(result["reminders_sent"]),
+            )
         except Exception:
             # A long-running process: one bad day (a transient DB blip,
             # say) must not silence every future day's reminders. Logged
