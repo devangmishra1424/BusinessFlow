@@ -1,15 +1,36 @@
 """Speech-to-text via faster-whisper, CPU int8 -- the compute_type already
 verified against the project's RAM budget (see the blueprint's benchmark
-citation). Model size ("small" vs "base") is a parameter, not hardcoded,
-specifically so scripts/compare_whisper_sizes.py can load and compare both
-in the same process.
+citation). model_size is a parameter, not hardcoded, specifically so
+scripts/compare_whisper_sizes.py can load and compare several in the same
+process -- but transcribe()'s own default is the real fine-tuned model
+(see _DEFAULT_MODEL_SIZE below), not a bare size name like "small"/"base".
 """
 
+import os
 from functools import lru_cache
 
 import numpy as np
 import torch
 from faster_whisper import WhisperModel
+
+# The real fine-tuned model (Hindi-English code-switched, full corpus,
+# LoRA rank 32) -- trained on Kaggle, converted to CTranslate2, benchmarked
+# against the base "small" model on real MUCS test audio (see
+# eval/wer_benchmark.py's results): WER 0.532 vs the base model's 1.008,
+# roughly a 47% relative reduction. That fine-tune had existed for a while
+# but was never actually wired into transcribe()'s default -- the live
+# Telegram bot was calling transcribe() with no model_size override at
+# all, silently falling back to the generic, un-fine-tuned "small" this
+# whole time. Hosted on the Hub (not committed to git -- 278MB of binary
+# weights) since faster-whisper/huggingface_hub can load a CTranslate2
+# model directly by repo id, private-repo auth handled automatically via
+# the HF_TOKEN environment variable already required for other ASR/dataset
+# access (see .env.example). Override via WHISPER_MODEL_SIZE for anything
+# that genuinely wants a different model (the comparison scripts already
+# pass their own model_size explicitly and are unaffected by this).
+_DEFAULT_MODEL_SIZE = os.environ.get(
+    "WHISPER_MODEL_SIZE", "CaffeinatedCoding/businessflow-whisper-hi-en"
+)
 
 
 @lru_cache(maxsize=None)
@@ -17,7 +38,7 @@ def _model(model_size: str) -> WhisperModel:
     return WhisperModel(model_size, device="cpu", compute_type="int8")
 
 
-def transcribe(audio: torch.Tensor, model_size: str = "small", language: str | None = None) -> str:
+def transcribe(audio: torch.Tensor, model_size: str = _DEFAULT_MODEL_SIZE, language: str | None = None) -> str:
     """Transcribes a mono float32 audio tensor (as produced by
     businessflow.audio.io.load_wav_as_tensor or vad.trim_to_speech) to text.
     language=None lets Whisper auto-detect; pass "hi" or "en" to force it.
