@@ -22,6 +22,7 @@ step this channel adds.
 import asyncio
 import io
 import os
+import time
 
 import numpy as np
 import pytest
@@ -55,9 +56,11 @@ def _clear_channel_state():
     same chat_id number."""
     _sessions.clear()
     telegram_bot._language_choice.clear()
+    telegram_bot._session_locks.clear()
     yield
     _sessions.clear()
     telegram_bot._language_choice.clear()
+    telegram_bot._session_locks.clear()
 
 
 def _silence_ogg_bytes(seconds: float = 1.0, sample_rate: int = 48000) -> bytes:
@@ -343,6 +346,49 @@ def test_handle_incoming_voice_allows_credential_shaped_transcript_once_a_sessio
     assert transcript == "BF-1001 482913"
     assert reply == "handled"
     assert calls == [(900013, "BF-1001 482913")]
+
+
+def test_two_voice_turns_for_the_same_chat_never_run_concurrently(monkeypatch):
+    # Regression test for a real bug found live, not caught by any
+    # existing test here: handle_incoming_voice calls handle_incoming_message
+    # via asyncio.to_thread, mutating the shared, unlocked session["messages"]
+    # list. A slow turn (real STT + LLM + TTS is easily several seconds)
+    # still in flight when the borrower's next voice note or text message
+    # arrives raced against it in a separate worker thread -- whichever
+    # turn finished last silently overwrote the other's appended messages,
+    # which is exactly what made a borrower's question appear to vanish or
+    # get answered out of order. _get_session_lock now serializes every
+    # call into handle_incoming_message per chat_id; this proves it by
+    # firing two voice turns for the same chat concurrently and recording
+    # how many were ever "inside" handle_incoming_message at once.
+    chat_id = 900020
+    concurrent_count = 0
+    max_concurrent_seen = 0
+    order = []
+
+    def fake_handle_incoming_message(cid, text):
+        nonlocal concurrent_count, max_concurrent_seen
+        concurrent_count += 1
+        max_concurrent_seen = max(max_concurrent_seen, concurrent_count)
+        time.sleep(0.15)  # stand-in for real STT+LLM+TTS latency
+        order.append(text)
+        concurrent_count -= 1
+        return f"reply to {text}"
+
+    monkeypatch.setattr(telegram_bot, "handle_incoming_message", fake_handle_incoming_message)
+    monkeypatch.setattr(telegram_bot, "_decode_and_transcribe_voice_note", lambda raw, lang: raw.decode())
+
+    async def run_both():
+        return await asyncio.gather(
+            handle_incoming_voice(chat_id, _FakeTelegramFile(b"first question"), duration_seconds=3, language_hint="en"),
+            handle_incoming_voice(chat_id, _FakeTelegramFile(b"second question"), duration_seconds=3, language_hint="en"),
+        )
+
+    results = asyncio.run(run_both())
+
+    assert max_concurrent_seen == 1  # never more than one turn in flight for this chat
+    assert order == ["first question", "second question"]  # strictly sequential, not interleaved
+    assert {r[1] for r in results} == {"reply to first question", "reply to second question"}
 
 
 @_groq_skip

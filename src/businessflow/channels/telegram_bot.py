@@ -86,6 +86,26 @@ _sessions: dict[int, dict] = {}  # chat_id -> {"account_id": str | None, "langua
 _language_choice: dict[int, str] = {}  # chat_id -> "en" | "hi", set via /hindi or /english before a session exists
 _voice_preference: dict[int, bool] = {}  # chat_id -> True if text replies should also be spoken, via /voice
 
+# One lock per chat_id, serializing every call into handle_incoming_message
+# for that chat. Without this, a voice turn (STT + LLM + TTS -- easily
+# several seconds) still in flight when the user's next message (text or
+# another voice note) arrives races on the same session["messages"] list:
+# both turns read/append/reassign it concurrently in separate worker
+# threads (see the to_thread calls below), and whichever finishes last
+# silently overwrites the other's turn -- the real cause of a borrower's
+# question appearing to vanish or get answered out of order. No await
+# happens between the dict lookup and the assignment in
+# _get_session_lock, so two coroutines can never race to create two
+# different locks for the same brand-new chat_id.
+_session_locks: dict[int, asyncio.Lock] = {}
+
+
+def _get_session_lock(chat_id: int) -> asyncio.Lock:
+    lock = _session_locks.get(chat_id)
+    if lock is None:
+        lock = _session_locks[chat_id] = asyncio.Lock()
+    return lock
+
 
 def handle_incoming_message(chat_id: int, text: str) -> str:
     """All routing logic for a plain-text turn, decoupled from
@@ -252,7 +272,13 @@ async def handle_incoming_voice(
     # start a second one inside an already-running loop. Running the whole
     # synchronous call in a worker thread sidesteps that, without needing to
     # add an async version of the agent loop.
-    reply = await asyncio.to_thread(handle_incoming_message, chat_id, transcript)
+    #
+    # The lock only wraps this call, not the transcription above -- two
+    # voice notes' transcriptions can run concurrently (no shared state),
+    # but only one turn per chat may ever mutate that chat's session at a
+    # time (see _get_session_lock).
+    async with _get_session_lock(chat_id):
+        reply = await asyncio.to_thread(handle_incoming_message, chat_id, transcript)
     return transcript, reply
 
 
@@ -545,8 +571,11 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # See handle_incoming_voice's comment on the same to_thread call --
     # handle_incoming_message eventually calls agent.loop.run_turn, which
     # asyncio.run()s internally, and that can't happen from inside a
-    # coroutine already running on this event loop.
-    reply = await asyncio.to_thread(handle_incoming_message, chat_id, update.message.text)
+    # coroutine already running on this event loop. The lock serializes
+    # this against any voice turn for the same chat that might still be
+    # in flight -- see _get_session_lock.
+    async with _get_session_lock(chat_id):
+        reply = await asyncio.to_thread(handle_incoming_message, chat_id, update.message.text)
     await update.message.reply_text(reply)
     if _voice_preference.get(chat_id):
         await _send_spoken_reply(update, chat_id, reply)
