@@ -29,10 +29,13 @@ logger = logging.getLogger(__name__)
 
 def _load_payment_history(account_id: str) -> list[PaymentRecord]:
     rows = get_connection().execute(
-        "select payment_date, amount, on_time from payment_history where account_id = %s order by payment_date",
+        "select payment_date, amount, on_time, kind from payment_history where account_id = %s order by payment_date",
         (account_id,),
     ).fetchall()
-    return [PaymentRecord(date=r["payment_date"], amount=float(r["amount"]), on_time=r["on_time"]) for r in rows]
+    return [
+        PaymentRecord(date=r["payment_date"], amount=float(r["amount"]), on_time=r["on_time"], kind=r["kind"])
+        for r in rows
+    ]
 
 
 def _load_promises(account_id: str) -> list[PromiseToPay]:
@@ -62,6 +65,7 @@ def _row_to_account(row: dict) -> Account:
         nach_mandate_active=row["nach_mandate_active"],
         dispute_open=row["dispute_open"],
         risk_tier=row["risk_tier"],
+        pending_emi_credit=float(row["pending_emi_credit"]),
         interest_rate_pct=float(row["interest_rate_pct"]) if row["interest_rate_pct"] is not None else None,
         telegram_chat_id=row["telegram_chat_id"],
         payment_history=_load_payment_history(row["account_id"]),
@@ -373,7 +377,21 @@ def set_telegram_chat_id(account_id: str, chat_id: int) -> None:
     )
 
 
-def record_payment(account_id: str, amount: float, payment_date: date | None = None) -> dict:
+class ExtraPaymentDecisionRequiredError(ValueError):
+    """Raised when amount doesn't cover what's actually due this cycle and
+    the caller didn't say whether to credit it toward the next cycle. See
+    record_payment's docstring for the full decision table; the caller
+    (payment_confirm_endpoint) is expected to have already asked the
+    borrower before ever reaching this point, using the emi_amount_due
+    figure /pay/{token}/info returns for exactly that purpose."""
+
+
+def record_payment(
+    account_id: str,
+    amount: float,
+    payment_date: date | None = None,
+    apply_extra_to_next: bool | None = None,
+) -> dict:
     """The one place a payment actually LANDS: every other payment_history
     row in this system is seed data, never a live event this app itself
     produced. Called only from redeem_payment_token below -- never
@@ -382,10 +400,28 @@ def record_payment(account_id: str, amount: float, payment_date: date | None = N
     docstring for why).
 
     Real reducing-balance EMI semantics, kept deliberately simple to match
-    this project's existing "one flat EMI cuts one month" model (same
-    simplification calculate_hypothetical and get_payment_status's
-    outstanding_balance_approx already rely on): one payment always
-    retires exactly one month, regardless of the amount actually paid.
+    this project's existing "one flat EMI cuts one month" model -- but that
+    model only holds when the amount paid actually matches what's due.
+    What's due THIS cycle is emi_amount minus pending_emi_credit (a running
+    credit from a prior off-cycle payment the borrower chose to apply, or
+    an overpayment's excess -- see Account.pending_emi_credit).
+
+    - amount covers what's due (>=): the cycle retires normally -- one
+      month off, due date rolls forward, same as before. Anything paid
+      ABOVE what was due is automatically credited toward the next cycle
+      (kind="overpayment_applied") -- overpaying is never ambiguous, so
+      this needs no confirmation from the borrower.
+    - amount falls short of what's due: an off-cycle/partial payment.
+      Never retires a month on its own -- months_remaining/emi_due_date
+      are left untouched either way, since the cycle wasn't actually paid
+      off. Requires apply_extra_to_next to be explicitly True or False
+      (raises ExtraPaymentDecisionRequiredError on None, so this can't
+      silently guess the borrower's intent): True adds the full amount to
+      pending_emi_credit, reducing what's due next cycle
+      (kind="extra_applied"); False just records the payment with zero
+      effect on the schedule or the credit (kind="extra_unapplied") --
+      logged, not processed, exactly as asked for.
+
     months_remaining floors at 0 rather than going negative on a stray
     extra payment against an already-closed loan."""
     if payment_date is None:
@@ -393,24 +429,43 @@ def record_payment(account_id: str, amount: float, payment_date: date | None = N
     conn = get_connection()
     account = get_account_or_raise(account_id)
 
+    due_this_cycle = round(account.emi_amount - account.pending_emi_credit, 2)
     on_time = payment_date <= account.emi_due_date
+
+    if amount + 0.01 >= due_this_cycle:
+        excess = round(amount - due_this_cycle, 2)
+        kind = "overpayment_applied" if excess > 0.01 else "regular"
+        new_months_remaining = max(0, account.months_remaining - 1)
+        next_due_date = add_one_month(account.emi_due_date)
+        new_credit = excess
+    else:
+        if apply_extra_to_next is None:
+            raise ExtraPaymentDecisionRequiredError(
+                f"amount {amount} is less than the {due_this_cycle} due this cycle for account_id={account_id!r} -- "
+                "apply_extra_to_next must be True or False"
+            )
+        kind = "extra_applied" if apply_extra_to_next else "extra_unapplied"
+        new_months_remaining = account.months_remaining
+        next_due_date = account.emi_due_date
+        new_credit = round(account.pending_emi_credit + amount, 2) if apply_extra_to_next else account.pending_emi_credit
+
     conn.execute(
-        "insert into payment_history (account_id, payment_date, amount, on_time) values (%s, %s, %s, %s)",
-        (account_id, payment_date, amount, on_time),
+        "insert into payment_history (account_id, payment_date, amount, on_time, kind) values (%s, %s, %s, %s, %s)",
+        (account_id, payment_date, amount, on_time, kind),
     )
-    new_months_remaining = max(0, account.months_remaining - 1)
-    next_due_date = add_one_month(account.emi_due_date)
     conn.execute(
-        "update accounts set months_remaining = %s, emi_due_date = %s, updated_at = now() where account_id = %s",
-        (new_months_remaining, next_due_date, account_id),
+        "update accounts set months_remaining = %s, emi_due_date = %s, pending_emi_credit = %s, updated_at = now() where account_id = %s",
+        (new_months_remaining, next_due_date, new_credit, account_id),
     )
     return {
         "account_id": account_id,
         "amount": amount,
         "payment_date": payment_date.isoformat(),
         "on_time": on_time,
+        "kind": kind,
         "months_remaining": new_months_remaining,
         "next_emi_due_date": next_due_date.isoformat(),
+        "pending_emi_credit": new_credit,
     }
 
 
@@ -493,13 +548,24 @@ def get_payment_token_info(token: str) -> dict | None:
     }
 
 
-def redeem_payment_token(token: str) -> dict:
+def redeem_payment_token(token: str, apply_extra_to_next: bool | None = None) -> dict:
     """The only path by which a "pay now" link can actually move the
     account forward -- confirming re-checks used_at/expires_at rather
     than trusting the caller already checked via get_payment_token_info
     (that read can go stale between page-load and the borrower's click),
     so a double-submit or a replayed request can never record two
-    payments for one token."""
+    payments for one token.
+
+    apply_extra_to_next only matters if this token's amount turns out to
+    be less than what's actually due this cycle -- passed straight through
+    to record_payment. Checked here too, BEFORE the token is marked used
+    (see below), even though record_payment re-checks the same thing:
+    the normal path always has this decided before it ever reaches here
+    (pay.js asks the borrower up front, using the emi_amount_due
+    get_payment_token_info returns, and always sends an answer) -- but if
+    a caller skips that and this really is still undecided, raising before
+    marking the token used means a real payment link isn't burned for
+    nothing; the borrower can just try confirming again with an answer."""
     conn = get_connection()
     row = conn.execute(
         "select account_id, amount, expires_at, used_at from payment_tokens where token = %s",
@@ -512,8 +578,16 @@ def redeem_payment_token(token: str) -> dict:
     if row["expires_at"] < datetime.now(timezone.utc):
         raise PaymentTokenExpiredError("this payment link has expired")
 
+    account = get_account_or_raise(row["account_id"])
+    due_this_cycle = round(account.emi_amount - account.pending_emi_credit, 2)
+    if float(row["amount"]) + 0.01 < due_this_cycle and apply_extra_to_next is None:
+        raise ExtraPaymentDecisionRequiredError(
+            f"amount {row['amount']} is less than the {due_this_cycle} due this cycle for "
+            f"account_id={row['account_id']!r} -- apply_extra_to_next must be True or False"
+        )
+
     conn.execute("update payment_tokens set used_at = now() where token = %s", (token,))
-    return record_payment(row["account_id"], float(row["amount"]))
+    return record_payment(row["account_id"], float(row["amount"]), apply_extra_to_next=apply_extra_to_next)
 
 
 _ESCALATION_COLUMNS = "escalation_id, account_id, reason, status, created_at, resolved_at, proposed_changes, resolution_reason"

@@ -134,6 +134,7 @@ class PaymentRecordOut(BaseModel):
     date: date
     amount: float
     on_time: bool
+    kind: str  # "regular" | "extra_unapplied" | "extra_applied" | "overpayment_applied"
 
 
 class PromiseOut(BaseModel):
@@ -267,6 +268,7 @@ class AccountDetailOut(AccountSummaryOut):
     emi_due_date: date
     nach_mandate_active: bool
     dispute_open: bool
+    pending_emi_credit: float
     payment_history: list[PaymentRecordOut]
     promises: list[PromiseOut]
     disputes: list[DisputeOut]
@@ -348,8 +350,9 @@ def get_account(account_id: str):
         emi_due_date=account.emi_due_date,
         nach_mandate_active=account.nach_mandate_active,
         dispute_open=account.dispute_open,
+        pending_emi_credit=account.pending_emi_credit,
         payment_history=[
-            PaymentRecordOut(date=p.date, amount=p.amount, on_time=p.on_time) for p in account.payment_history
+            PaymentRecordOut(date=p.date, amount=p.amount, on_time=p.on_time, kind=p.kind) for p in account.payment_history
         ],
         promises=[
             PromiseOut(made_on=p.made_on, promised_date=p.promised_date, promised_amount=p.promised_amount, kept=p.kept)

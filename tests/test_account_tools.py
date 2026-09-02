@@ -188,9 +188,9 @@ def test_get_payment_history_returns_real_seeded_records_most_recent_first(resee
 
     assert result["account_id"] == "BF-1001"
     assert result["payment_history"] == [
-        {"date": _BF1001_PAYMENT_RECENT, "amount": 12500.0, "on_time": True},
-        {"date": _BF1001_PAYMENT_MID, "amount": 12500.0, "on_time": True},
-        {"date": _BF1001_PAYMENT_OLDEST, "amount": 12500.0, "on_time": True},
+        {"date": _BF1001_PAYMENT_RECENT, "amount": 12500.0, "on_time": True, "kind": "regular"},
+        {"date": _BF1001_PAYMENT_MID, "amount": 12500.0, "on_time": True, "kind": "regular"},
+        {"date": _BF1001_PAYMENT_OLDEST, "amount": 12500.0, "on_time": True, "kind": "regular"},
     ]
 
 

@@ -29,6 +29,12 @@ create table accounts (
     dispute_open         boolean not null default false,
     risk_tier            text not null,  -- 'low' | 'medium' | 'high'
 
+    -- A running credit from a prior off-cycle extra payment the borrower
+    -- chose to apply toward their next EMI, or the excess from an
+    -- overpayment -- subtracted from emi_amount to get what's actually
+    -- due this cycle. See accounts/store.py's record_payment.
+    pending_emi_credit   numeric not null default 0,
+
     -- Extracted from an uploaded, signed loan agreement (see
     -- rag/extraction.py's extract_loan_terms, wired into ops/api.py's
     -- upload_account_document) -- nullable because most accounts won't
@@ -61,6 +67,10 @@ create table payment_history (
     payment_date  date not null,
     amount        numeric not null,
     on_time       boolean not null,
+    -- 'regular' | 'extra_unapplied' | 'extra_applied' | 'overpayment_applied'
+    -- -- see accounts/models.py's PaymentRecord.kind for what each means.
+    kind          text not null default 'regular'
+                  check (kind in ('regular', 'extra_unapplied', 'extra_applied', 'overpayment_applied')),
     created_at    timestamptz not null default now()
 );
 

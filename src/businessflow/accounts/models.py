@@ -15,6 +15,15 @@ class PaymentRecord:
     date: date
     amount: float
     on_time: bool
+    # "regular" (matched that cycle's EMI, business as usual), "extra_unapplied"
+    # (an off-cycle amount the borrower chose NOT to apply to the schedule --
+    # recorded, but months_remaining/emi_due_date never moved), "extra_applied"
+    # (an off-cycle amount the borrower chose to credit toward the next EMI),
+    # or "overpayment_applied" (paid more than the EMI due that cycle; the
+    # excess was automatically credited toward the next EMI, no confirmation
+    # needed since overpaying is never ambiguous). See
+    # accounts/store.py's record_payment for where this is decided.
+    kind: str = "regular"
 
 
 @dataclass
@@ -61,6 +70,13 @@ class Account:
     nach_mandate_active: bool
     dispute_open: bool
     risk_tier: str  # "low" | "medium" | "high"
+
+    # A running credit from a prior off-cycle extra payment the borrower
+    # chose to apply, or the excess from an overpayment -- subtracted from
+    # emi_amount to get what's actually due THIS cycle (see record_payment).
+    # Zero for the overwhelming majority of accounts, which never make an
+    # off-cycle payment at all.
+    pending_emi_credit: float = 0.0
 
     # Extracted from an uploaded, signed loan agreement (see
     # rag/extraction.py's extract_loan_terms) -- None for most accounts

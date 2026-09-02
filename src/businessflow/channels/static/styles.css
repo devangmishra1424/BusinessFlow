@@ -146,6 +146,7 @@ button, input { font-family: inherit; }
   background: var(--accent); color: var(--on-accent); font-weight: 700;
   font-size: 14.5px; padding: 13px 0; border-radius: var(--radius-sm); transition: all 0.15s var(--ease);
 }
+.start-submit[hidden] { display: none; }
 .start-submit:hover { filter: brightness(1.08); }
 .start-submit:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
 .start-error { color: var(--danger); font-size: 13px; margin: 12px 0 0; text-align: center; }
@@ -164,6 +165,16 @@ button, input { font-family: inherit; }
 .pay-sub { margin: 0 0 22px; font-size: 13.5px; color: var(--text-2); }
 .pay-confirm-btn { margin-top: 4px; }
 .pay-hint { margin: 16px 0 0; font-size: 11.5px; color: var(--text-3); line-height: 1.5; }
+
+.pay-extra-note {
+  margin: 0 0 16px; font-size: 12.5px; color: var(--text-1); line-height: 1.5; text-align: left;
+  background: var(--other-dim); border: 1px solid rgba(75, 63, 168, 0.25); border-radius: var(--radius-md);
+  padding: 10px 13px;
+}
+.pay-extra-question { margin-top: 14px; }
+.pay-extra-prompt { margin: 0 0 10px; font-size: 13.5px; font-weight: 600; color: var(--text-0); text-align: left; }
+.pay-extra-actions { display: flex; gap: 10px; }
+.pay-extra-actions .start-submit, .pay-extra-actions .btn-cancel { flex: 1; justify-content: center; }
 .pay-check {
   width: 56px; height: 56px; margin: 0 auto 14px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 800;
@@ -350,6 +361,7 @@ button, input { font-family: inherit; }
 .dtl-dot.paid-late { background: var(--warning); }
 .dtl-dot.overdue { background: var(--danger); }
 .dtl-dot.upcoming { background: var(--text-3); }
+.dtl-dot.extra-applied, .dtl-dot.extra-unapplied { background: var(--other); }
 .dtl-info { flex: 1; min-width: 0; font-size: 13px; color: var(--text-1); }
 .dtl-info b { color: var(--text-0); }
 .dtl-meta { font-size: 11.5px; color: var(--text-3); margin-top: 1px; }

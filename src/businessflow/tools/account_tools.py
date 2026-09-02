@@ -60,7 +60,7 @@ def get_payment_status(account_id: str) -> dict:
         "days_past_due": days_past_due,
         "tenure_months": account.tenure_months,
         "months_remaining": account.months_remaining,
-        "outstanding_balance_approx": round(account.emi_amount * account.months_remaining, 2),
+        "outstanding_balance_approx": round(account.emi_amount * account.months_remaining - account.pending_emi_credit, 2),
         "interest_rate_pct": account.interest_rate_pct,
         "nach_mandate_active": account.nach_mandate_active,
         "late_fee_applicable": late_fee_applicable,
@@ -68,13 +68,24 @@ def get_payment_status(account_id: str) -> dict:
         "dispute_open": account.dispute_open,
         "risk_tier": account.risk_tier,
         "broken_promise_count": account.broken_promise_count(),
+        # A running credit from an earlier off-cycle extra payment the
+        # borrower chose to apply, or an overpayment's excess -- reduces
+        # what's actually due next cycle. Zero for the overwhelming
+        # majority of accounts, which never make an off-cycle payment.
+        "pending_emi_credit": account.pending_emi_credit,
     }
 
 
 @mcp.tool
 def get_payment_history(account_id: str, limit: int = 5) -> dict:
-    """Look up a borrower's most recent payment history: date, amount, and
-    whether it was on time, most recent first.
+    """Look up a borrower's most recent payment history: date, amount,
+    whether it was on time, and what kind of payment it was, most recent
+    first. kind is "regular" for an ordinary EMI-cycle payment,
+    "extra_unapplied"/"extra_applied" for an off-cycle payment the
+    borrower chose not to/chose to credit toward their next EMI, or
+    "overpayment_applied" for a payment larger than what was due that
+    cycle (the excess auto-credited toward the next one) -- see
+    accounts.store.record_payment for the full decision table.
 
     limit is clamped to a real, bounded maximum
     (_MAX_PAYMENT_HISTORY_LIMIT) rather than raising -- a borrower asking
@@ -87,7 +98,7 @@ def get_payment_history(account_id: str, limit: int = 5) -> dict:
     return {
         "account_id": account.account_id,
         "payment_history": [
-            {"date": r.date.isoformat(), "amount": r.amount, "on_time": r.on_time} for r in records
+            {"date": r.date.isoformat(), "amount": r.amount, "on_time": r.on_time, "kind": r.kind} for r in records
         ],
     }
 

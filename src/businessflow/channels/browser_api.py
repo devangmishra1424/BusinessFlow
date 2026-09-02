@@ -118,12 +118,16 @@ class AccountSnapshotOut(BaseModel):
     dispute_open: bool
     risk_tier: str
     broken_promise_count: int
+    pending_emi_credit: float
 
 
 class TimelineEntryOut(BaseModel):
     date: str
     amount: float
-    status: str  # "paid-on-time" | "paid-late" | "overdue" | "upcoming"
+    # "paid-on-time" | "paid-late" | "overdue" | "upcoming" | "extra-applied"
+    # | "extra-unapplied" -- the last two are an off-cycle payment that
+    # didn't retire a month on its own (see accounts.store.record_payment).
+    status: str
     label: str
 
 
@@ -221,15 +225,17 @@ def _build_emi_timeline(account: Account, days_past_due: int) -> list[dict]:
     occurrences at account.emi_amount each. The first projected occurrence is
     flagged "overdue" (instead of "upcoming") exactly when days_past_due > 0,
     same condition the JS version checks."""
-    past = [
-        {
-            "date": r.date.isoformat(),
-            "amount": r.amount,
-            "status": "paid-on-time" if r.on_time else "paid-late",
-            "label": "Paid on time" if r.on_time else "Paid late",
-        }
-        for r in account.payment_history
-    ]
+    def _entry(r):
+        base_label = "Paid on time" if r.on_time else "Paid late"
+        if r.kind == "extra_unapplied":
+            return {"date": r.date.isoformat(), "amount": r.amount, "status": "extra-unapplied", "label": "Extra payment (not applied)"}
+        if r.kind == "extra_applied":
+            return {"date": r.date.isoformat(), "amount": r.amount, "status": "extra-applied", "label": "Extra payment (credited to next EMI)"}
+        if r.kind == "overpayment_applied":
+            return {"date": r.date.isoformat(), "amount": r.amount, "status": "paid-on-time" if r.on_time else "paid-late", "label": f"{base_label} + extra credited"}
+        return {"date": r.date.isoformat(), "amount": r.amount, "status": "paid-on-time" if r.on_time else "paid-late", "label": base_label}
+
+    past = [_entry(r) for r in account.payment_history]
 
     upcoming = []
     if account.months_remaining > 0:
@@ -237,12 +243,19 @@ def _build_emi_timeline(account: Account, days_past_due: int) -> list[dict]:
         for i in range(account.months_remaining):
             is_next_due = i == 0
             overdue = is_next_due and days_past_due > 0
+            # Only the very next installment can carry a credit from an
+            # earlier off-cycle payment (see record_payment) -- every
+            # projection after that is a plain, full emi_amount.
+            amount_due = round(account.emi_amount - account.pending_emi_credit, 2) if is_next_due else account.emi_amount
+            label = f"Overdue -- {days_past_due}d past due" if overdue else "Scheduled"
+            if is_next_due and account.pending_emi_credit > 0.01:
+                label += f" (₹{account.pending_emi_credit:,.2f} credited)"
             upcoming.append(
                 {
                     "date": cursor.isoformat(),
-                    "amount": account.emi_amount,
+                    "amount": amount_due,
                     "status": "overdue" if overdue else "upcoming",
-                    "label": f"Overdue -- {days_past_due}d past due" if overdue else "Scheduled",
+                    "label": label,
                 }
             )
             cursor = store.add_one_month(cursor)
@@ -487,12 +500,28 @@ class PaymentTokenInfoOut(BaseModel):
     business_name: str
     borrower_name: str
     status: str  # "pending" | "used" | "expired"
+    # What's actually due THIS cycle (emi_amount minus any pending credit)
+    # -- the confirm page compares this against amount to decide whether
+    # to ask "apply this toward your next EMI?" before the borrower even
+    # clicks confirm. None for a used/expired token (no live account math
+    # worth showing at that point).
+    emi_amount_due: float | None = None
+
+
+class PaymentConfirmRequest(BaseModel):
+    # Only meaningful when amount < emi_amount_due; see store.record_payment's
+    # docstring for the full decision table. Left None for a normal payment
+    # that fully covers what's due -- store.record_payment never asks for
+    # it in that case.
+    apply_extra_to_next: bool | None = None
 
 
 class PaymentConfirmOut(BaseModel):
     amount: float
+    kind: str  # "regular" | "extra_unapplied" | "extra_applied" | "overpayment_applied"
     months_remaining: int
     next_emi_due_date: str
+    pending_emi_credit: float
 
 
 @app.get("/pay/{token}/info", response_model=PaymentTokenInfoOut)
@@ -506,30 +535,43 @@ def payment_token_info_endpoint(token: str):
     info = store.get_payment_token_info(token)
     if info is None:
         raise HTTPException(status_code=404, detail=f"no payment link found for token={token!r}")
+    if info["status"] == "pending":
+        account = store.get_account_or_raise(info["account_id"])
+        info["emi_amount_due"] = round(account.emi_amount - account.pending_emi_credit, 2)
     return PaymentTokenInfoOut(**info)
 
 
 @app.post("/pay/{token}/confirm", response_model=PaymentConfirmOut)
-def payment_confirm_endpoint(token: str):
+def payment_confirm_endpoint(token: str, req: PaymentConfirmRequest | None = None):
     """The only endpoint that can actually move an account forward from a
     payment link -- store.redeem_payment_token re-checks used_at/
     expires_at itself rather than trusting this endpoint already did (a
     double-submit from a slow network or an impatient double-tap must
-    never record two payments for one token)."""
+    never record two payments for one token). req is optional so a plain
+    POST with no body (a full payment, matching what's due) still works --
+    the frontend only ever sends apply_extra_to_next when it actually has
+    an answer to send."""
+    apply_extra_to_next = req.apply_extra_to_next if req is not None else None
     try:
-        result = store.redeem_payment_token(token)
+        result = store.redeem_payment_token(token, apply_extra_to_next=apply_extra_to_next)
     except store.PaymentTokenNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except store.PaymentTokenAlreadyUsedError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     except store.PaymentTokenExpiredError as e:
         raise HTTPException(status_code=410, detail=str(e)) from e
+    except store.ExtraPaymentDecisionRequiredError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
     store.log_event(
         result["account_id"], "tool_called",
-        {"tool": "record_payment", "arguments": {"token": token}, "result": result},
+        {"tool": "record_payment", "arguments": {"token": token, "apply_extra_to_next": apply_extra_to_next}, "result": result},
     )
     return PaymentConfirmOut(
-        amount=result["amount"], months_remaining=result["months_remaining"], next_emi_due_date=result["next_emi_due_date"]
+        amount=result["amount"],
+        kind=result["kind"],
+        months_remaining=result["months_remaining"],
+        next_emi_due_date=result["next_emi_due_date"],
+        pending_emi_credit=result["pending_emi_credit"],
     )
 
 

@@ -1082,23 +1082,30 @@ function renderDetail(a, documents) {
   }
 
   function buildEmiTimeline(account) {
-    const past = account.payment_history.map((p) => ({
-      date: p.date,
-      amount: p.amount,
-      status: p.on_time ? "paid-on-time" : "paid-late",
-      label: p.on_time ? "Paid on time" : "Paid late",
-    }));
+    // Mirrors channels/browser_api.py's _build_emi_timeline -- see that
+    // function's own comment for the full kind -> status/label mapping.
+    const past = account.payment_history.map((p) => {
+      const baseLabel = p.on_time ? "Paid on time" : "Paid late";
+      if (p.kind === "extra_unapplied") return { date: p.date, amount: p.amount, status: "extra-unapplied", label: "Extra payment (not applied)" };
+      if (p.kind === "extra_applied") return { date: p.date, amount: p.amount, status: "extra-applied", label: "Extra payment (credited to next EMI)" };
+      if (p.kind === "overpayment_applied") return { date: p.date, amount: p.amount, status: p.on_time ? "paid-on-time" : "paid-late", label: `${baseLabel} + extra credited` };
+      return { date: p.date, amount: p.amount, status: p.on_time ? "paid-on-time" : "paid-late", label: baseLabel };
+    });
 
     const upcoming = [];
     if (account.months_remaining > 0 && account.emi_due_date) {
       const cursor = new Date(`${account.emi_due_date}T00:00:00`);
+      const credit = account.pending_emi_credit || 0;
       for (let i = 0; i < account.months_remaining; i++) {
         const isNextDue = i === 0;
+        const overdue = isNextDue && account.days_past_due > 0;
+        let label = overdue ? `Overdue — ${account.days_past_due}d past due` : "Scheduled";
+        if (isNextDue && credit > 0.01) label += ` (${fmtInr(credit)} credited)`;
         upcoming.push({
           date: toLocalIsoDate(cursor),
-          amount: account.emi_amount,
-          status: isNextDue && account.days_past_due > 0 ? "overdue" : "upcoming",
-          label: isNextDue && account.days_past_due > 0 ? `Overdue — ${account.days_past_due}d past due` : "Scheduled",
+          amount: isNextDue ? Math.round((account.emi_amount - credit) * 100) / 100 : account.emi_amount,
+          status: overdue ? "overdue" : "upcoming",
+          label,
         });
         cursor.setMonth(cursor.getMonth() + 1);
       }

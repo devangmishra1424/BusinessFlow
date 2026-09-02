@@ -494,6 +494,7 @@ def test_payment_info_endpoint_returns_pending_for_a_fresh_token(throwaway_accou
     assert response.json() == {
         "account_id": throwaway_account.account_id, "amount": 3000.0,
         "business_name": "Pay Test Co", "borrower_name": "Pay Test Borrower", "status": "pending",
+        "emi_amount_due": 3000.0,  # emi_amount minus a fresh account's zero pending_emi_credit
     }
 
 
@@ -564,3 +565,97 @@ def test_payment_confirm_endpoint_410s_for_an_expired_token(throwaway_account):
     assert response.status_code == 410
     updated = store.get_account_or_raise(throwaway_account.account_id)
     assert len(updated.payment_history) == 0
+
+
+@_pg_skip
+def test_payment_confirm_endpoint_422s_for_a_short_payment_with_no_decision(throwaway_account):
+    # throwaway_account's emi_amount is 3000 -- 1000 doesn't cover it, and
+    # apply_extra_to_next was never sent, so accounts.store.record_payment
+    # has nothing to decide on. This must NOT burn the token: a borrower
+    # (or a client bug) that skips the question should still be able to
+    # confirm again with a real answer, not lose the link entirely.
+    token = store.create_payment_token(throwaway_account.account_id, 1000)
+
+    response = client.post(f"/pay/{token}/confirm")
+
+    assert response.status_code == 422
+    updated = store.get_account_or_raise(throwaway_account.account_id)
+    assert len(updated.payment_history) == 0
+    assert updated.months_remaining == throwaway_account.months_remaining
+
+    # The token is still usable -- retrying with a real answer succeeds.
+    retry = client.post(f"/pay/{token}/confirm", json={"apply_extra_to_next": False})
+    assert retry.status_code == 200
+
+
+@_pg_skip
+def test_short_payment_declined_is_logged_but_never_touches_the_schedule(throwaway_account):
+    token = store.create_payment_token(throwaway_account.account_id, 1000)
+
+    response = client.post(f"/pay/{token}/confirm", json={"apply_extra_to_next": False})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["kind"] == "extra_unapplied"
+    assert body["months_remaining"] == throwaway_account.months_remaining  # unchanged -- not retired
+    assert body["pending_emi_credit"] == 0.0  # not applied, so no credit either
+
+    updated = store.get_account_or_raise(throwaway_account.account_id)
+    assert updated.months_remaining == throwaway_account.months_remaining
+    assert updated.emi_due_date == throwaway_account.emi_due_date
+    assert updated.pending_emi_credit == 0.0
+    assert updated.payment_history[0].kind == "extra_unapplied"
+    assert updated.payment_history[0].amount == 1000.0
+
+
+@_pg_skip
+def test_short_payment_applied_credits_the_next_installment_and_a_later_payment_consumes_it(throwaway_account):
+    # Full round trip of the spec: an off-cycle 1000 against a 3000 EMI,
+    # applied -> doesn't retire this cycle but DOES reduce what's due next
+    # cycle; a later payment for exactly that reduced amount then finishes
+    # retiring the cycle and the credit is consumed (back to zero), not
+    # carried forward again.
+    token1 = store.create_payment_token(throwaway_account.account_id, 1000)
+    first = client.post(f"/pay/{token1}/confirm", json={"apply_extra_to_next": True})
+    assert first.status_code == 200
+    first_body = first.json()
+    assert first_body["kind"] == "extra_applied"
+    assert first_body["months_remaining"] == throwaway_account.months_remaining  # not retired yet
+    assert first_body["pending_emi_credit"] == 1000.0
+
+    # emi_amount_due on a fresh token now reflects the credit.
+    token2 = store.create_payment_token(throwaway_account.account_id, 2000)
+    info2 = client.get(f"/pay/{token2}/info").json()
+    assert info2["emi_amount_due"] == 2000.0  # 3000 emi_amount - 1000 credit
+
+    second = client.post(f"/pay/{token2}/confirm")  # 2000 now exactly covers what's due -- no decision needed
+    assert second.status_code == 200
+    second_body = second.json()
+    assert second_body["kind"] == "regular"
+    assert second_body["months_remaining"] == throwaway_account.months_remaining - 1  # now retired
+    assert second_body["pending_emi_credit"] == 0.0  # consumed, not carried forward again
+
+    updated = store.get_account_or_raise(throwaway_account.account_id)
+    assert updated.pending_emi_credit == 0.0
+    assert updated.months_remaining == throwaway_account.months_remaining - 1
+    assert [p.kind for p in updated.payment_history] == ["extra_applied", "regular"]
+
+
+@_pg_skip
+def test_overpayment_is_applied_automatically_with_no_decision_needed(throwaway_account):
+    # 4000 against a 3000 EMI: unambiguous, so no apply_extra_to_next is
+    # required at all -- the cycle retires normally AND the 1000 excess is
+    # credited toward next cycle in the same call.
+    token = store.create_payment_token(throwaway_account.account_id, 4000)
+
+    response = client.post(f"/pay/{token}/confirm")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["kind"] == "overpayment_applied"
+    assert body["months_remaining"] == throwaway_account.months_remaining - 1
+    assert body["pending_emi_credit"] == 1000.0
+
+    updated = store.get_account_or_raise(throwaway_account.account_id)
+    assert updated.pending_emi_credit == 1000.0
+    assert updated.payment_history[0].kind == "overpayment_applied"

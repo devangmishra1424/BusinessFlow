@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/styles.css?v=6" />
+<link rel="stylesheet" href="/static/styles.css?v=9" />
 </head>
 <body>
 
@@ -27,10 +27,23 @@
       <p class="pay-label">Confirm your payment</p>
       <p class="pay-amount" id="pay-amount"></p>
       <p class="pay-sub" id="pay-business"></p>
+
+      <p class="pay-extra-note" id="pay-overpay-note" hidden></p>
+
       <button type="button" class="start-submit pay-confirm-btn" id="pay-confirm-btn">
         Confirm payment
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
+
+      <div id="pay-extra-question" class="pay-extra-question" hidden>
+        <p class="pay-extra-note" id="pay-extra-note"></p>
+        <p class="pay-extra-prompt">Apply this toward your next EMI installment?</p>
+        <div class="pay-extra-actions">
+          <button type="button" class="start-submit" id="pay-extra-yes-btn">Yes, apply it</button>
+          <button type="button" class="btn-cancel" id="pay-extra-no-btn">No, just record it</button>
+        </div>
+      </div>
+
       <p class="pay-hint">This is a demo payment -- no real money moves, but it really does record a real payment on your account.</p>
     </div>
 
@@ -47,6 +60,6 @@
   </div>
 </div>
 
-<script src="/static/pay.js?v=1"></script>
+<script src="/static/pay.js?v=2"></script>
 </body>
 </html>
