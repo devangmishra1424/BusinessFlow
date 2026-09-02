@@ -7,6 +7,8 @@ really does call store.record_payment and really does move
 months_remaining/emi_due_date/payment_history forward -- there's just no
 real bank or card processor sitting behind the "confirm" click."""
 
+import ast
+import operator
 import os
 
 from businessflow.accounts import store
@@ -135,3 +137,79 @@ def calculate_hypothetical(account_id: str, restructuring_type: str, extra_month
         "settlement_amount": settlement_amount,
         "discount_pct": SETTLEMENT_DISCOUNT_PCT,
     }
+
+
+# guardrail/grounding.py's check_grounding only trusts a number that
+# already appears in a real tool result or the borrower's own words --
+# by design, it can't verify arbitrary arithmetic on those numbers (its
+# own module docstring documents this as a deliberate trade-off, not an
+# oversight: checking derived math for real would need actual
+# computation, and doing that INSIDE the guardrail risks its own bugs).
+# Found live, repeatedly: the model doing that math in its own reply
+# text instead -- "you'd pay roughly 95% of ₹1,084,741.92, which is
+# about ₹1,031,504.84" -- got blocked outright, leaving the borrower with
+# no number at all for a completely reasonable question. compute() closes
+# this the right way: the arithmetic happens in a real tool call, so its
+# result is a genuine tool message like any other, grounded through the
+# exact same mechanism as every other real figure -- no special-casing
+# arithmetic in the guardrail at all, and no way for the model to slip an
+# invented number through it either, since the result is computed here,
+# not asserted by the model.
+_ALLOWED_BINOPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+}
+_ALLOWED_UNARYOPS = {ast.USub: operator.neg, ast.UAdd: operator.pos}
+
+
+def _safe_eval_arithmetic(node: ast.AST) -> float:
+    """Walks a parsed expression, only ever evaluating plain numeric
+    literals combined with +, -, *, / and unary +/-. Deliberately an AST
+    walk with an explicit allowlist, not a regex-filtered eval() -- no
+    name lookup, attribute access, subscripting, or call node is ever a
+    reachable branch here, so there is no code-execution surface to
+    reason about, unlike restricting eval()'s input text ever could
+    fully guarantee."""
+    if isinstance(node, ast.Expression):
+        return _safe_eval_arithmetic(node.body)
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+        return float(node.value)
+    if isinstance(node, ast.BinOp) and type(node.op) in _ALLOWED_BINOPS:
+        left = _safe_eval_arithmetic(node.left)
+        right = _safe_eval_arithmetic(node.right)
+        if isinstance(node.op, ast.Div) and right == 0:
+            raise ValueError("division by zero")
+        return _ALLOWED_BINOPS[type(node.op)](left, right)
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _ALLOWED_UNARYOPS:
+        return _ALLOWED_UNARYOPS[type(node.op)](_safe_eval_arithmetic(node.operand))
+    raise ValueError(f"expression contains something other than plain arithmetic: {ast.dump(node)}")
+
+
+@mcp.tool
+def compute(expression: str) -> dict:
+    """Evaluate a plain arithmetic expression -- numbers and + - * / ( )
+    only -- and return the exact result to state verbatim. Call this
+    whenever you need to state a number that's DERIVED from other real
+    figures already established this conversation (a percentage of a
+    real balance, a sum, a difference) and no other tool already returns
+    it directly. Never do this arithmetic yourself in your reply text:
+    the grounding guardrail only trusts a number that came from a real
+    tool result, and will block your own mental math even when the
+    inputs were real and the arithmetic was correct.
+
+    Example: the borrower's real outstanding balance is ₹1,084,741.92
+    (from get_payment_status) and they ask what a 5% discount would look
+    like -- call compute("1084741.92 * 0.95"), then state ITS result, not
+    a number you calculated yourself.
+
+    Raises ValueError for anything that isn't plain arithmetic (a name,
+    a function call, anything resembling code) -- this is a calculator,
+    not a code execution tool."""
+    try:
+        tree = ast.parse(expression, mode="eval")
+        result = _safe_eval_arithmetic(tree)
+    except (SyntaxError, ValueError) as e:
+        raise ValueError(f"{expression!r} isn't a plain arithmetic expression: {e}") from e
+    return {"expression": expression, "result": round(result, 2)}

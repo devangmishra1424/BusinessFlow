@@ -137,6 +137,18 @@ def test_prompt_holds_the_settlement_discount_firm_against_negotiation_pressure(
     assert "not negotiable through this channel" in prompt
 
 
+def test_prompt_forbids_mental_math_and_points_to_compute_instead():
+    # Real bug found live, twice in the same conversation: the model
+    # narrated its own arithmetic ("roughly 95% of ₹X, that's about ₹Y")
+    # instead of calling a real tool, and the grounding guardrail
+    # correctly blocked the invented number both times -- leaving the
+    # borrower with no answer at all to a reasonable question.
+    prompt = build_system_prompt(language="en")
+    assert "Never do arithmetic yourself" in prompt
+    assert "compute()" in prompt
+    assert "there is nothing" in prompt  # the "blocked -> state no figure" instruction
+
+
 def test_prompt_treats_an_explicit_complaint_as_a_grievance_grounded_in_check_policy():
     # escalation_policy.md only ever covered handing an account to a human
     # HERE -- nothing told the model what to do when the borrower is

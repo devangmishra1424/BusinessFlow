@@ -61,7 +61,8 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "{ground_policy_claims} {check_dispute_block_first} {out_of_domain_legal} "
     "{ground_nach_failures} {fraud_or_identity_claim} {due_date_change_requests} "
     "{cibil_credit_score} {discount_firmness} {restructuring_approval_flow} "
-    "{payment_history_requests} {closure_certificate_requests} {grievance_redressal}"
+    "{payment_history_requests} {closure_certificate_requests} {grievance_redressal} "
+    "{no_mental_math}"
 )
 
 # Real borrowers hedge ("maybe 15k", "not sure which is better") instead of
@@ -181,6 +182,31 @@ _CHECK_DISPUTE_BLOCK_FIRST = (
     "several times, a NEW concrete number still needs its own real tool "
     "call. Don't rely on what you already know about the account instead "
     "of checking the specific new figure."
+)
+
+# Found live, twice in the same real conversation: asked about an
+# early-settlement discount on a disputed account, the model narrated
+# "you'd normally get a 5% discount, that's about ₹X" using its own
+# arithmetic BEFORE explaining the dispute blocks it -- calculate_hypothetical
+# returns no settlement_amount at all when blocked (see
+# _blocked_from_automated_restructuring), so there is no real figure to
+# state in that case, period. The guardrail correctly rejected the
+# invented number both times, leaving the borrower with no answer at all
+# instead of a clean "here's why I can't give you a number yet."
+_NO_MENTAL_MATH = (
+    "Never do arithmetic yourself in a reply -- not a percentage, not a "
+    "sum, not 'roughly X'. The grounding guardrail only trusts a number "
+    "that came from a real tool result; your own mental math gets blocked "
+    "even when the inputs were real and the arithmetic was correct, which "
+    "means the borrower gets NO answer instead of the real one. If a tool "
+    "like calculate_hypothetical already returns the figure you need, use "
+    "that exact value. If you need a number derived from other real "
+    "figures already established this conversation (a percentage of a "
+    "real balance, a difference, a sum) and no other tool returns it "
+    "directly, call compute() and state its exact result. If a policy "
+    "tool comes back blocked (eligible: False) with no figure attached, "
+    "don't estimate what the number WOULD have been -- there is nothing "
+    "to state; explain the block and offer escalation instead."
 )
 
 # Found live via eval/realistic_conversation_benchmark.py: after backing
@@ -548,6 +574,7 @@ def build_system_prompt(language: str = "en", account_id: str | None = None) -> 
         payment_history_requests=_PAYMENT_HISTORY_REQUESTS,
         closure_certificate_requests=_CLOSURE_CERTIFICATE_REQUESTS,
         grievance_redressal=_GRIEVANCE_REDRESSAL,
+        no_mental_math=_NO_MENTAL_MATH,
     )
 
 
