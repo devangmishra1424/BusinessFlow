@@ -328,13 +328,22 @@ function addUserMessage(text) {
   scrollToBottom();
 }
 
+const SPEAKER_ICON = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M11 5 6 9H3v6h3l5 4V5Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 8a5 5 0 0 1 0 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
+
 function addAssistantMessage(text, toolCalls = [], isError = false) {
   const row = document.createElement("div");
   row.className = `msg-row assistant${isError ? " error" : ""}`;
   const chipsHtml = toolCalls.length
     ? `<div class="tool-chips">${toolCalls.map((t) => `<span class="tool-chip">✓ ${escapeHtml(TOOL_LABELS[t.tool] || t.tool)}</span>`).join("")}</div>`
     : "";
-  row.innerHTML = `<div class="msg-bubble">${escapeHtml(text)}</div>${chipsHtml}`;
+  // No speaker button on an error bubble -- there's nothing real to speak,
+  // and playSpeech would just re-send the friendly error text as if it
+  // were part of the conversation.
+  const speakHtml = isError ? "" : `<button type="button" class="speak-btn" title="Listen to this reply" aria-label="Listen to this reply">${SPEAKER_ICON}</button>`;
+  row.innerHTML = `<div class="msg-bubble-row"><div class="msg-bubble">${escapeHtml(text)}</div>${speakHtml}</div>${chipsHtml}`;
+  if (!isError) {
+    row.querySelector(".speak-btn").addEventListener("click", (e) => playSpeech(text, e.currentTarget));
+  }
   $messageList.appendChild(row);
   scrollToBottom();
 }
@@ -392,6 +401,218 @@ $messageForm.addEventListener("submit", async (e) => {
     $messageInput.focus();
   }
 });
+
+/* ============================================================
+   Voice input -- record via MediaRecorder, decode+re-encode to WAV
+   client-side, upload to POST .../messages/voice.
+
+   Why re-encode at all: Chrome/Edge's MediaRecorder only ever emits
+   WebM/Opus, which the backend's decode step (soundfile/libsndfile) can't
+   read -- there's no ffmpeg on the server and no codec dependency was
+   added for it (see browser_api.py's module docstring). AudioContext can
+   always decode whatever the browser itself just recorded, so decoding
+   here and re-encoding to plain WAV (which soundfile reads natively, same
+   as it already does for Telegram's OGG/Opus voice notes) needs no new
+   dependency on either side.
+   ============================================================ */
+const $micBtn = document.getElementById("mic-btn");
+const $recordingIndicator = document.getElementById("recording-indicator");
+const $recordingTimer = document.getElementById("recording-timer");
+
+const VOICE_SUPPORTED = !!(
+  navigator.mediaDevices && window.MediaRecorder && (window.AudioContext || window.webkitAudioContext)
+);
+if (!VOICE_SUPPORTED) $micBtn.hidden = true;
+
+let mediaRecorder = null;
+let recordedChunks = [];
+let recordingStartedAt = 0;
+let recordingTimerId = null;
+let micStream = null;
+
+function audioBufferToWav(buffer) {
+  const left = buffer.getChannelData(0);
+  const channelData = buffer.numberOfChannels > 1
+    ? (() => {
+        const right = buffer.getChannelData(1);
+        const mono = new Float32Array(left.length);
+        for (let i = 0; i < left.length; i++) mono[i] = (left[i] + right[i]) / 2;
+        return mono;
+      })()
+    : left;
+
+  const sampleRate = buffer.sampleRate;
+  const pcm = new Int16Array(channelData.length);
+  for (let i = 0; i < channelData.length; i++) {
+    const s = Math.max(-1, Math.min(1, channelData[i]));
+    pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+
+  const dataSize = pcm.length * 2; // 16-bit mono
+  const buf = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buf);
+  const writeStr = (offset, str) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true); // fmt chunk size
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // byte rate (mono, 16-bit)
+  view.setUint16(32, 2, true); // block align
+  view.setUint16(34, 16, true); // bits per sample
+  writeStr(36, "data");
+  view.setUint32(40, dataSize, true);
+  for (let i = 0; i < pcm.length; i++) view.setInt16(44 + i * 2, pcm[i], true);
+
+  return new Blob([buf], { type: "audio/wav" });
+}
+
+function fmtElapsed(ms) {
+  const totalSeconds = Math.floor(ms / 1000);
+  return `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, "0")}`;
+}
+
+function setRecordingUi(recording) {
+  $recordingIndicator.hidden = !recording;
+  $messageInput.hidden = recording;
+  $sendBtn.hidden = recording;
+  $micBtn.classList.toggle("recording", recording);
+  $micBtn.title = recording ? "Stop recording" : "Record a voice message";
+  $micBtn.setAttribute("aria-label", recording ? "Stop recording" : "Record voice message");
+}
+
+async function startRecording() {
+  if (!state.conversationId || state.sending) return;
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
+  } catch (err) {
+    addAssistantMessage("Couldn't access your microphone -- please allow microphone access and try again.", [], true);
+    return;
+  }
+
+  recordedChunks = [];
+  mediaRecorder = new MediaRecorder(micStream);
+  mediaRecorder.addEventListener("dataavailable", (e) => {
+    if (e.data.size > 0) recordedChunks.push(e.data);
+  });
+  mediaRecorder.addEventListener("stop", handleRecordingStopped);
+  mediaRecorder.start();
+
+  recordingStartedAt = Date.now();
+  $recordingTimer.textContent = "0:00";
+  recordingTimerId = setInterval(() => {
+    $recordingTimer.textContent = fmtElapsed(Date.now() - recordingStartedAt);
+  }, 250);
+  setRecordingUi(true);
+}
+
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+  clearInterval(recordingTimerId);
+  micStream?.getTracks().forEach((t) => t.stop());
+  setRecordingUi(false);
+}
+
+async function handleRecordingStopped() {
+  const recordedMimeType = mediaRecorder.mimeType || "audio/webm";
+  const recordingDurationMs = Date.now() - recordingStartedAt;
+  const blob = new Blob(recordedChunks, { type: recordedMimeType });
+  recordedChunks = [];
+  if (blob.size === 0 || recordingDurationMs < 300) return; // too short to be a real recording -- likely an accidental tap
+
+  state.sending = true;
+  $micBtn.disabled = true;
+  showTyping();
+
+  let audioCtx;
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const decoded = await audioCtx.decodeAudioData(await blob.arrayBuffer());
+    const wavBlob = audioBufferToWav(decoded);
+
+    const formData = new FormData();
+    formData.append("audio", wavBlob, "recording.wav");
+    const res = await fetch(`/conversations/${state.conversationId}/messages/voice`, { method: "POST", body: formData });
+    if (!res.ok) {
+      let detail = `request failed (${res.status})`;
+      try {
+        detail = (await res.json()).detail || detail;
+      } catch (_) {}
+      throw new ApiError(res.status, detail);
+    }
+    const result = await res.json();
+    hideTyping();
+    if (result.transcript) addUserMessage(result.transcript);
+    addAssistantMessage(result.reply, result.tool_calls);
+    if (result.tool_calls && result.tool_calls.length) state.dashboardStale = true;
+    if (result.verified_account_id) {
+      state.accountId = result.verified_account_id;
+      const chip = document.getElementById("account-chip");
+      chip.hidden = false;
+      chip.textContent = state.accountId;
+    }
+  } catch (err) {
+    hideTyping();
+    addAssistantMessage(
+      err instanceof ApiError ? friendlyMessageError(err) : "Couldn't process that recording -- please try again.",
+      [],
+      true,
+    );
+  } finally {
+    audioCtx?.close();
+    state.sending = false;
+    $micBtn.disabled = false;
+  }
+}
+
+if (VOICE_SUPPORTED) {
+  $micBtn.addEventListener("click", () => {
+    if (mediaRecorder && mediaRecorder.state === "recording") {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  });
+}
+
+/* ============================================================
+   Voice output -- on-demand TTS for one reply, played inline when the
+   borrower taps the speaker icon on an assistant bubble (see
+   addAssistantMessage above). Not generated automatically for every
+   reply -- only for one someone actually wants to hear.
+   ============================================================ */
+async function playSpeech(text, buttonEl) {
+  if (!state.conversationId || buttonEl.classList.contains("loading") || buttonEl.classList.contains("playing")) return;
+  buttonEl.classList.add("loading");
+  try {
+    const res = await fetch(`/conversations/${state.conversationId}/speech`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok) throw new Error(`speech request failed (${res.status})`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const audioEl = new Audio(url);
+    const cleanup = () => {
+      buttonEl.classList.remove("playing");
+      URL.revokeObjectURL(url);
+    };
+    audioEl.addEventListener("ended", cleanup);
+    audioEl.addEventListener("error", cleanup);
+    buttonEl.classList.remove("loading");
+    buttonEl.classList.add("playing");
+    await audioEl.play();
+  } catch (err) {
+    buttonEl.classList.remove("loading", "playing");
+  }
+}
 
 /* ============================================================
    Dashboard screen

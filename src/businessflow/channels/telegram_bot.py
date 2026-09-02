@@ -65,7 +65,7 @@ from businessflow.agent.loop import (
     verify_and_start_conversation,
 )
 from businessflow.audio.asr import transcribe
-from businessflow.audio.tts import speak_english, speak_hindi
+from businessflow.audio.tts import encode_ogg_opus, speak_english, speak_hindi
 from businessflow.audio.vad import trim_to_speech
 from businessflow.audio.verbalizer import verbalize
 from businessflow.channels.credentials import looks_like_credentials, parse_credentials
@@ -557,13 +557,12 @@ async def _send_spoken_reply(update: Update, chat_id: int, reply: str) -> None:
     # but never silent -- logged with the real exception either way.
     language = _sessions.get(chat_id, {}).get("language") or _language_choice.get(chat_id, "en")
     try:
-        speech = speak_hindi(verbalize(reply)) if language == "hi" else speak_english(verbalize(reply))
-        buf = io.BytesIO()
-        sf.write(buf, speech.audio.numpy(), speech.sample_rate, format="OGG", subtype="OPUS")
+        speech = speak_hindi(verbalize(reply, language)) if language == "hi" else speak_english(verbalize(reply, language))
+        voice_bytes = encode_ogg_opus(speech)
     except Exception:
         logger.warning("Voice-reply synthesis failed for chat_id=%s", chat_id, exc_info=True)
         return
-    await update.message.reply_voice(voice=buf.getvalue())
+    await update.message.reply_voice(voice=voice_bytes)
 
 
 async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -611,10 +610,8 @@ async def on_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text(_transcript_echo(transcript))
 
     language = _sessions.get(chat_id, {}).get("language") or _language_choice.get(chat_id, "en")
-    speech = speak_hindi(verbalize(reply_text)) if language == "hi" else speak_english(verbalize(reply_text))
-    buf = io.BytesIO()
-    sf.write(buf, speech.audio.numpy(), speech.sample_rate, format="OGG", subtype="OPUS")
-    await update.message.reply_voice(voice=buf.getvalue())
+    speech = speak_hindi(verbalize(reply_text, language)) if language == "hi" else speak_english(verbalize(reply_text, language))
+    await update.message.reply_voice(voice=encode_ogg_opus(speech))
 
 
 async def _register_commands(application: Application) -> None:

@@ -1,7 +1,6 @@
-"""HTTP API for a browser-based text chat channel -- the backend a
+"""HTTP API for a browser-based text+voice chat channel -- the backend a
 frontend can call (built separately, per the plan: backend first, then
-UI/UX). Text only for now, matching the project's "text primary, voice
-later" decision.
+UI/UX).
 
 Conversation state is held in-process, in memory, keyed by a generated
 conversation_id -- restarting this server loses any conversation still
@@ -9,20 +8,44 @@ in flight. Cross-session memory (the recap a returning borrower's NEXT
 conversation gets) is unaffected, since that's persisted to Postgres via
 memory/conversation_memory.py independently of this in-memory state.
 
+Voice: the frontend records via MediaRecorder and uploads to
+POST .../messages/voice. Chrome/Edge's MediaRecorder only ever emits
+WebM/Opus, which soundfile/libsndfile (this project's only audio codec
+dependency -- see telegram_bot.py's own note on avoiding ffmpeg/pydub)
+cannot read at all -- unlike Telegram's OGG/Opus voice notes, which it
+handles natively. Rather than add a codec dependency or an ffmpeg install
+to the VM, the frontend decodes the recording via the browser's own
+AudioContext (which can always decode whatever the browser itself just
+encoded) and re-encodes it to a plain WAV blob before uploading -- see
+static/app.js's audioBufferToWav. That keeps the server-side decode path
+(_decode_and_transcribe_voice, below) identical to telegram_bot.py's,
+since soundfile reads WAV natively.
+
+TTS is on-demand per reply (POST .../speech), not generated for every
+assistant message automatically -- the frontend only calls it when a
+borrower taps the speaker icon on a specific bubble they want to hear,
+so synthesis compute is spent only on replies someone actually wants
+spoken.
+
 Run: uvicorn businessflow.channels.browser_api:app --reload
 (defaults to port 8000). The ops dashboard API (ops/api.py) is a
 separate FastAPI app on port 8001 -- run both side by side, they don't
 share state or a port.
 """
 
+import io
+import threading
 import uuid
 from datetime import date, datetime
 from pathlib import Path
 
 import groq
-from fastapi import FastAPI, HTTPException
+import soundfile as sf
+import torch
+import torchaudio
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -37,11 +60,17 @@ from businessflow.agent.loop import (
     start_conversation,
     verify_and_start_conversation,
 )
+from businessflow.audio.asr import transcribe
+from businessflow.audio.tts import encode_ogg_opus, speak_english, speak_hindi
+from businessflow.audio.vad import trim_to_speech
+from businessflow.audio.verbalizer import verbalize
 from businessflow.channels.credentials import looks_like_credentials, parse_credentials
 from businessflow.ops.flags import Flag, compute_flags
 from businessflow.tools.account_tools import flag_dispute, get_payment_status
 from businessflow.tools.escalation_tools import escalate_to_human
 from businessflow.tools.payment_tools import generate_payment_link
+
+_MAX_VOICE_NOTE_SECONDS = 120  # same bound as telegram_bot.py -- an explicit cap on ASR compute, not an unbounded wait
 
 app = FastAPI(title="BusinessFlow Chat API")
 
@@ -62,6 +91,23 @@ app.add_middleware(
 )
 
 _conversations: dict[str, dict] = {}
+
+# One lock per conversation_id, serializing every call into
+# _process_text_turn for that conversation -- the same race
+# telegram_bot.py's _session_locks fixes (see that module's comment):
+# without it, a text turn and a voice turn for the same conversation_id
+# still in flight at once could both read/append/reassign
+# session["messages"] concurrently in separate thread-pool workers (every
+# endpoint below is a sync def, which FastAPI runs in a thread pool, not
+# on the event loop), and whichever finishes last would silently
+# overwrite the other's turn. setdefault is a single atomic dict
+# operation in CPython, so two threads can never race to create two
+# different locks for the same brand-new conversation_id.
+_conversation_locks: dict[str, threading.Lock] = {}
+
+
+def _get_conversation_lock(conversation_id: str) -> threading.Lock:
+    return _conversation_locks.setdefault(conversation_id, threading.Lock())
 
 
 class StartConversationRequest(BaseModel):
@@ -93,6 +139,11 @@ class SendMessageResponse(BaseModel):
     # the frontend update its own account-bound UI (the header chip)
     # without parsing the reply text to detect what just happened.
     verified_account_id: str | None = None
+    # Set only by the voice endpoint -- what ASR actually heard, so the
+    # frontend can show it as the borrower's own chat bubble instead of
+    # silently acting on audio the borrower never sees transcribed. None
+    # for a plain text turn (nothing was transcribed).
+    transcript: str | None = None
 
 
 class AccountSnapshotOut(BaseModel):
@@ -340,6 +391,73 @@ def start_conversation_endpoint(req: StartConversationRequest):
     return StartConversationResponse(conversation_id=conversation_id, account_id=req.account_id, language=req.language)
 
 
+def _process_text_turn(conversation_id: str, session: dict, text: str) -> SendMessageResponse:
+    """Shared turn-processing logic for both the text (send_message_endpoint)
+    and voice (send_voice_message_endpoint) paths below: verification
+    mid-conversation, run_turn_with_memory, and tool-call extraction. text
+    is either the raw typed message or a voice transcript -- identical
+    handling either way, same as telegram_bot.py's handle_incoming_message
+    is shared by its text and voice paths. Everything that reads or
+    mutates session["messages"]/session["account_id"] happens under this
+    conversation's lock (see _get_conversation_lock's comment for the race
+    this closes)."""
+    with _get_conversation_lock(conversation_id):
+        # An anonymous session can still verify mid-conversation by sending
+        # "<account_id> <6-digit key>" as a plain message -- the same pattern
+        # telegram_bot.py already handles (see channels/credentials.py). Found
+        # live: a borrower typing their real account_id + access_key straight
+        # into an anonymous browser chat had both values forwarded to the LLM
+        # as free text, which then passed the ACCESS KEY as account_id to a
+        # tool and crashed it (get_payment_status raised "no account found for
+        # account_id='<the key>'"). Checked here, before this message ever
+        # reaches run_turn_with_memory, exactly like Telegram's guard.
+        if session["account_id"] is None and looks_like_credentials(text):
+            account_id, access_key = parse_credentials(text)
+            try:
+                conversation = verify_and_start_conversation(session["language"], account_id, access_key)
+            except AccessDeniedError:
+                return SendMessageResponse(
+                    reply=f"That access key doesn't match account {account_id} -- please check and send both again.",
+                    tool_calls=[],
+                )
+            except AccountLockedError as e:
+                return SendMessageResponse(reply=str(e), tool_calls=[])
+            # Verification itself is not a turn -- run_turn_with_memory is
+            # deliberately not called for this message, matching
+            # telegram_bot.py's handle_incoming_message. The anonymous
+            # session's history is discarded outright: its system prompt
+            # never knew an account_id existed, so there's nothing in it
+            # worth carrying into the newly-verified conversation.
+            session["account_id"] = account_id
+            session["messages"] = conversation
+            return SendMessageResponse(
+                reply=f"Verified -- I've pulled up account {account_id}. What can I help you with?",
+                tool_calls=[],
+                verified_account_id=account_id,
+            )
+
+        turn_start = len(session["messages"])
+        session["messages"].append({"role": "user", "content": text})
+        try:
+            updated_conversation, reply = run_turn_with_memory(session["messages"], session["account_id"])
+        except groq.RateLimitError as e:
+            # Something the frontend can actually act on (show "try again in a
+            # bit", maybe auto-retry) -- not the same as a real bug, so it
+            # shouldn't come back as an opaque 500.
+            session["messages"].pop()  # don't leave a user message with no reply appended
+            raise HTTPException(status_code=503, detail=f"Groq rate limit reached: {e.message}") from e
+        except groq.APIStatusError as e:
+            session["messages"].pop()
+            raise HTTPException(status_code=502, detail=f"upstream LLM provider error: {e.message}") from e
+        session["messages"] = updated_conversation
+
+        tool_calls = extract_new_tool_calls(updated_conversation, turn_start)
+        return SendMessageResponse(
+            reply=reply,
+            tool_calls=[ToolCallInfo(tool=name, arguments=args) for name, args in tool_calls],
+        )
+
+
 @app.post("/conversations/{conversation_id}/messages", response_model=SendMessageResponse)
 def send_message_endpoint(conversation_id: str, req: SendMessageRequest):
     session = _conversations.get(conversation_id)
@@ -347,61 +465,117 @@ def send_message_endpoint(conversation_id: str, req: SendMessageRequest):
         raise HTTPException(status_code=404, detail=f"no conversation found for id={conversation_id!r}")
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message must not be empty")
+    return _process_text_turn(conversation_id, session, req.message)
 
-    # An anonymous session can still verify mid-conversation by sending
-    # "<account_id> <6-digit key>" as a plain message -- the same pattern
-    # telegram_bot.py already handles (see channels/credentials.py). Found
-    # live: a borrower typing their real account_id + access_key straight
-    # into an anonymous browser chat had both values forwarded to the LLM
-    # as free text, which then passed the ACCESS KEY as account_id to a
-    # tool and crashed it (get_payment_status raised "no account found for
-    # account_id='<the key>'"). Checked here, before this message ever
-    # reaches run_turn_with_memory, exactly like Telegram's guard.
-    if session["account_id"] is None and looks_like_credentials(req.message):
-        account_id, access_key = parse_credentials(req.message)
-        try:
-            conversation = verify_and_start_conversation(session["language"], account_id, access_key)
-        except AccessDeniedError:
-            return SendMessageResponse(
-                reply=f"That access key doesn't match account {account_id} -- please check and send both again.",
-                tool_calls=[],
-            )
-        except AccountLockedError as e:
-            return SendMessageResponse(reply=str(e), tool_calls=[])
-        # Verification itself is not a turn -- run_turn_with_memory is
-        # deliberately not called for this message, matching
-        # telegram_bot.py's handle_incoming_message. The anonymous
-        # session's history is discarded outright: its system prompt
-        # never knew an account_id existed, so there's nothing in it
-        # worth carrying into the newly-verified conversation.
-        session["account_id"] = account_id
-        session["messages"] = conversation
+
+def _decode_and_transcribe_voice(raw_bytes: bytes, language: str | None) -> str | None:
+    """Same decode/resample/VAD/transcribe pipeline as telegram_bot.py's
+    _decode_and_transcribe_voice_note (see that function's docstring for
+    the full reasoning) -- duplicated rather than imported across channel
+    modules, matching this codebase's existing convention of each channel
+    wiring the lower-level audio primitives itself (see this file's and
+    telegram_bot.py's module docstrings). soundfile auto-detects the
+    container from the bytes themselves, so this handles the WAV this
+    channel actually uploads (see send_voice_message_endpoint) exactly as
+    it would OGG/Opus. Returns None if VAD found no speech, or if the
+    decoded audio exceeds _MAX_VOICE_NOTE_SECONDS -- callers must not feed
+    either case to ASR."""
+    data, sr = sf.read(io.BytesIO(raw_bytes), dtype="float32", always_2d=False)
+    if data.ndim > 1:
+        data = data.mean(axis=1)  # collapse to mono, same convention as audio/io.py
+
+    actual_duration_seconds = len(data) / sr
+    if actual_duration_seconds > _MAX_VOICE_NOTE_SECONDS:
+        return None
+
+    audio_tensor = torch.from_numpy(data)
+    if sr != 16000:
+        audio_tensor = torchaudio.functional.resample(audio_tensor, orig_freq=sr, new_freq=16000)
+
+    trimmed = trim_to_speech(audio_tensor, sampling_rate=16000)
+    if trimmed.numel() == 0:
+        return None
+    return transcribe(trimmed, language=language)
+
+
+def _transcript_echo(transcript: str) -> str:
+    """What's safe to send back to the frontend as the borrower's own
+    displayed transcript. SECURITY: mirrors telegram_bot.py's own
+    _transcript_echo exactly (see that function's docstring) -- a
+    credential-shaped transcript must never be echoed back verbatim, since
+    the frontend renders this field as the borrower's own chat bubble, and
+    that would put the account_id + 6-digit access key in the browser's
+    visible chat history and in this response's JSON body. Applies
+    unconditionally, not just for an unverified session, same as
+    Telegram's version."""
+    if looks_like_credentials(transcript):
+        return "[account details -- redacted]"
+    return transcript
+
+
+@app.post("/conversations/{conversation_id}/messages/voice", response_model=SendMessageResponse)
+def send_voice_message_endpoint(conversation_id: str, audio: UploadFile = File(...)):
+    """Browser equivalent of telegram_bot.py's handle_incoming_voice: the
+    frontend records via MediaRecorder, re-encodes to WAV client-side (see
+    this file's module docstring for why), and uploads it here. Same
+    credential-safety guard as Telegram: a spoken account_id+key that ASR
+    mis-hears must never be forwarded into verification, since a wrong
+    digit would burn one of the account's limited AccountLockedError
+    attempts through no fault of the borrower's -- so a credential-shaped
+    transcript from an unverified session is rejected before it ever
+    reaches _process_text_turn, asking the borrower to type it instead."""
+    session = _conversations.get(conversation_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"no conversation found for id={conversation_id!r}")
+
+    raw_bytes = audio.file.read()
+    transcript = _decode_and_transcribe_voice(raw_bytes, session["language"])
+    if not transcript or not transcript.strip():
         return SendMessageResponse(
-            reply=f"Verified -- I've pulled up account {account_id}. What can I help you with?",
+            reply="Sorry, I couldn't make out that recording -- please make sure it's under 2 minutes and try again.",
             tool_calls=[],
-            verified_account_id=account_id,
         )
 
-    turn_start = len(session["messages"])
-    session["messages"].append({"role": "user", "content": req.message})
-    try:
-        updated_conversation, reply = run_turn_with_memory(session["messages"], session["account_id"])
-    except groq.RateLimitError as e:
-        # Something the frontend can actually act on (show "try again in a
-        # bit", maybe auto-retry) -- not the same as a real bug, so it
-        # shouldn't come back as an opaque 500.
-        session["messages"].pop()  # don't leave a user message with no reply appended
-        raise HTTPException(status_code=503, detail=f"Groq rate limit reached: {e.message}") from e
-    except groq.APIStatusError as e:
-        session["messages"].pop()
-        raise HTTPException(status_code=502, detail=f"upstream LLM provider error: {e.message}") from e
-    session["messages"] = updated_conversation
+    if session["account_id"] is None and looks_like_credentials(transcript):
+        return SendMessageResponse(
+            reply=(
+                "That sounded like your account ID and access key -- to avoid a "
+                'misheard digit locking your account, please TYPE them instead, '
+                'e.g. "BF-1001 482913".'
+            ),
+            tool_calls=[],
+            transcript=_transcript_echo(transcript),
+        )
 
-    tool_calls = extract_new_tool_calls(updated_conversation, turn_start)
-    return SendMessageResponse(
-        reply=reply,
-        tool_calls=[ToolCallInfo(tool=name, arguments=args) for name, args in tool_calls],
-    )
+    result = _process_text_turn(conversation_id, session, transcript)
+    result.transcript = _transcript_echo(transcript)
+    return result
+
+
+class SpeechRequest(BaseModel):
+    text: str
+
+
+@app.post("/conversations/{conversation_id}/speech")
+def speech_endpoint(conversation_id: str, req: SpeechRequest):
+    """On-demand TTS for one reply -- called only when the borrower taps
+    the speaker icon on a specific bubble (see this file's module
+    docstring), not generated automatically for every assistant message.
+    Reuses this conversation's own language setting rather than accepting
+    one from the client, so playback always matches what the conversation
+    has been using throughout. Returns raw OGG/Opus bytes, same encoding
+    telegram_bot.py's TTS replies already use -- every major browser can
+    play that back natively, even though (per this file's module
+    docstring) Chrome/Edge cannot *record* into that container."""
+    session = _conversations.get(conversation_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"no conversation found for id={conversation_id!r}")
+    if not req.text.strip():
+        raise HTTPException(status_code=400, detail="text must not be empty")
+
+    language = session["language"]
+    speech = speak_hindi(verbalize(req.text, language)) if language == "hi" else speak_english(verbalize(req.text, language))
+    return Response(content=encode_ogg_opus(speech), media_type="audio/ogg")
 
 
 @app.get("/conversations/{conversation_id}/dashboard", response_model=DashboardResponse)

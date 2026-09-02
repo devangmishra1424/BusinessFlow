@@ -48,7 +48,7 @@ def voice_roundtrip(
     conversation.append({"role": "user", "content": transcript})
     _conversation, reply_text = run_turn(conversation)
 
-    speech = _speak(verbalize(reply_text), language)
+    speech = _speak(verbalize(reply_text, language), language)
     return RoundTripResult(transcript=transcript, reply_text=reply_text, speech=speech)
 
 
@@ -58,5 +58,5 @@ def text_roundtrip(user_message: str, language: str = "en", account_id: str | No
     conversation.append({"role": "user", "content": user_message})
     _conversation, reply_text = run_turn(conversation)
 
-    speech = _speak(verbalize(reply_text), language)
+    speech = _speak(verbalize(reply_text, language), language)
     return RoundTripResult(transcript=None, reply_text=reply_text, speech=speech)

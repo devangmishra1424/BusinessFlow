@@ -9,13 +9,19 @@ everything else here (health, conversation creation, error paths) needs
 no LLM at all.
 """
 
+import io
 import os
 from pathlib import Path
 
+import numpy as np
 import pytest
+import soundfile as sf
+import torch
 from fastapi.testclient import TestClient
 
 from businessflow.accounts import store
+from businessflow.audio.tts import Speech
+from businessflow.channels import browser_api
 from businessflow.channels.browser_api import app
 
 client = TestClient(app)
@@ -661,3 +667,200 @@ def test_overpayment_is_applied_automatically_with_no_decision_needed(throwaway_
     updated = store.get_account_or_raise(throwaway_account.account_id)
     assert updated.pending_emi_credit == 1000.0
     assert updated.payment_history[0].kind == "overpayment_applied"
+
+
+# --- browser voice/TTS: _decode_and_transcribe_voice / _transcript_echo ------
+#
+# Same "real model over mock" convention as tests/test_telegram_channel.py's
+# equivalent section (see that file's module docstring): the VAD step uses a
+# real, local Silero VAD model on real, in-memory-synthesized audio -- no
+# network, no API key needed for silence to correctly produce no transcript.
+
+
+def _silence_wav_bytes(seconds: float = 1.0, sample_rate: int = 48000) -> bytes:
+    """A short digital-silence clip as real WAV bytes -- the container this
+    channel actually receives (see browser_api.py's module docstring on why
+    the frontend re-encodes to WAV before uploading, rather than the OGG/Opus
+    Telegram voice notes arrive as)."""
+    silence = np.zeros(int(seconds * sample_rate), dtype="float32")
+    buf = io.BytesIO()
+    sf.write(buf, silence, sample_rate, format="WAV")
+    return buf.getvalue()
+
+
+def test_decode_and_transcribe_voice_returns_none_on_silence():
+    result = browser_api._decode_and_transcribe_voice(_silence_wav_bytes(), "en")
+
+    assert result is None
+
+
+def test_decode_and_transcribe_voice_resamples_a_non_16k_source():
+    # Browser mics commonly capture at 44.1kHz/48kHz -- confirms the
+    # resample path runs without raising for a rate that genuinely differs
+    # from the 16kHz VAD/ASR expect.
+    result = browser_api._decode_and_transcribe_voice(_silence_wav_bytes(seconds=1.0, sample_rate=44100), None)
+
+    assert result is None  # still silence -- just proves resample+VAD ran without crashing
+
+
+def test_decode_and_transcribe_voice_enforces_the_real_decoded_duration(monkeypatch):
+    # Same regression coverage as telegram_bot.py's equivalent test: the cap
+    # must be checked against the ACTUAL decoded length, not a caller claim
+    # (there isn't even a caller-supplied duration here) -- proven by
+    # monkeypatching VAD/ASR to prove they're never reached once the real
+    # decoded length exceeds the cap.
+    def _must_not_be_called(*args, **kwargs):
+        raise AssertionError("VAD/ASR must not run once the real decoded duration exceeds the cap")
+
+    monkeypatch.setattr(browser_api, "trim_to_speech", _must_not_be_called)
+    monkeypatch.setattr(browser_api, "transcribe", _must_not_be_called)
+
+    over_cap_seconds = browser_api._MAX_VOICE_NOTE_SECONDS + 5
+    result = browser_api._decode_and_transcribe_voice(_silence_wav_bytes(seconds=over_cap_seconds, sample_rate=16000), "en")
+
+    assert result is None
+
+
+def test_transcript_echo_redacts_a_credential_shaped_transcript():
+    # Regression coverage for the same leak telegram_bot.py's own
+    # _transcript_echo was built to close: a spoken account_id + 6-digit
+    # access key must never be echoed back verbatim, since the frontend
+    # renders this field as the borrower's own chat bubble.
+    echo = browser_api._transcript_echo("BF-1001 482913")
+
+    assert echo == "[account details -- redacted]"
+    assert "482913" not in echo
+
+
+def test_transcript_echo_passes_through_a_normal_transcript():
+    assert browser_api._transcript_echo("what is my current EMI amount") == "what is my current EMI amount"
+
+
+# --- POST /conversations/{id}/messages/voice ---------------------------------
+
+
+def test_send_voice_message_to_nonexistent_conversation_returns_404():
+    response = client.post(
+        "/conversations/does-not-exist/messages/voice",
+        files={"audio": ("recording.wav", _silence_wav_bytes(), "audio/wav")},
+    )
+
+    assert response.status_code == 404
+
+
+@_pg_skip
+def test_send_voice_message_reports_no_speech_detected(reseed_accounts):
+    conversation_id = _start_verified_conversation("BF-1001", "482913")
+
+    response = client.post(
+        f"/conversations/{conversation_id}/messages/voice",
+        files={"audio": ("recording.wav", _silence_wav_bytes(), "audio/wav")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "couldn't make out" in body["reply"]
+    assert body["transcript"] is None
+
+
+@_pg_skip
+def test_send_voice_message_blocks_credential_shaped_transcript_from_verification(monkeypatch):
+    # Mirrors telegram_bot.py's equivalent test: a credential-shaped
+    # transcript from an unverified session must never reach
+    # _process_text_turn (no failed-attempt side effect from a misheard
+    # digit), and the response must not echo the raw account_id/access key
+    # back to the frontend. ASR itself is monkeypatched here (as in the
+    # Telegram test) since getting real ASR to transcribe synthesized audio
+    # into an exact "BF-1001 482913" string would be unreliable.
+    monkeypatch.setattr(browser_api, "_decode_and_transcribe_voice", lambda raw, lang: "BF-1001 482913")
+    calls = []
+    monkeypatch.setattr(browser_api, "_process_text_turn", lambda cid, session, text: calls.append((cid, text)))
+
+    start = client.post("/conversations", json={"language": "en"})
+    conversation_id = start.json()["conversation_id"]
+
+    response = client.post(
+        f"/conversations/{conversation_id}/messages/voice",
+        files={"audio": ("recording.wav", b"unused", "audio/wav")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "TYPE" in body["reply"]
+    assert body["transcript"] == "[account details -- redacted]"
+    assert calls == []  # _process_text_turn must never see this transcript
+
+
+@_pg_skip
+def test_send_voice_message_allows_credential_shaped_transcript_once_verified(monkeypatch):
+    # The guard is specifically "no verified account yet" -- once the
+    # conversation is already verified, a credential-shaped voice
+    # transcript is just an ordinary message and should flow through to
+    # _process_text_turn like any other turn.
+    monkeypatch.setattr(browser_api, "_decode_and_transcribe_voice", lambda raw, lang: "BF-1001 482913")
+    calls = []
+
+    def fake_process_text_turn(cid, session, text):
+        calls.append((cid, text))
+        return browser_api.SendMessageResponse(reply="handled", tool_calls=[])
+
+    monkeypatch.setattr(browser_api, "_process_text_turn", fake_process_text_turn)
+
+    conversation_id = _start_verified_conversation("BF-1001", "482913")
+
+    response = client.post(
+        f"/conversations/{conversation_id}/messages/voice",
+        files={"audio": ("recording.wav", b"unused", "audio/wav")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["reply"] == "handled"
+    assert body["transcript"] == "[account details -- redacted]"  # still redacted, verified or not
+    assert calls == [(conversation_id, "BF-1001 482913")]
+
+
+# --- POST /conversations/{id}/speech ------------------------------------------
+
+
+def test_speech_endpoint_404s_for_unknown_conversation():
+    response = client.post("/conversations/does-not-exist/speech", json={"text": "hello"})
+
+    assert response.status_code == 404
+
+
+@_pg_skip
+def test_speech_endpoint_400s_for_empty_text(reseed_accounts):
+    conversation_id = _start_verified_conversation("BF-1001", "482913")
+
+    response = client.post(f"/conversations/{conversation_id}/speech", json={"text": "   "})
+
+    assert response.status_code == 400
+
+
+@_pg_skip
+def test_speech_endpoint_returns_real_playable_audio_in_the_conversations_language(monkeypatch):
+    # TTS model loading/inference is slow and unrelated to what this
+    # endpoint itself is responsible for (language routing, encoding,
+    # content-type) -- speak_english/speak_hindi are monkeypatched to a
+    # tiny synthetic Speech, matching this file's existing convention of
+    # not re-testing another module's own already-covered behavior.
+    calls = []
+    fake_speech = Speech(audio=torch.zeros(1600), sample_rate=16000)
+    monkeypatch.setattr(browser_api, "speak_english", lambda text: calls.append(("en", text)) or fake_speech)
+    monkeypatch.setattr(browser_api, "speak_hindi", lambda text: calls.append(("hi", text)) or fake_speech)
+    monkeypatch.setattr(browser_api, "verbalize", lambda text: text)
+
+    start = client.post("/conversations", json={"account_id": "BF-1001", "access_key": "482913", "language": "hi"})
+    conversation_id = start.json()["conversation_id"]
+
+    response = client.post(f"/conversations/{conversation_id}/speech", json={"text": "aapka EMI due hai"})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/ogg"
+    assert calls == [("hi", "aapka EMI due hai")]  # routed to the conversation's own language, not a client-supplied one
+
+    # Real, decodable OGG/Opus bytes -- not just any non-empty blob.
+    data, sr = sf.read(io.BytesIO(response.content))
+    assert sr == 16000
+    assert len(data) > 0
