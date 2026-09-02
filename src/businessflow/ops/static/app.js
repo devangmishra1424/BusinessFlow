@@ -1256,6 +1256,7 @@ function renderDetail(a, documents) {
               <textarea id="clarify-note" rows="2" placeholder="e.g. Third missed promise this quarter, dispute still unresolved — need them to explain."></textarea>
               <div class="clarify-actions-row">
                 <button type="button" class="btn btn-reject" id="clarify-polish-btn">✨ Polish wording</button>
+                ${a.flags.length ? `<button type="button" class="btn btn-reject" id="clarify-summarize-btn">📋 Summarize all flags</button>` : ""}
                 <span class="clarify-hint">Drafts a professional message below, grounded in this account's real flags — you still review it before sending.</span>
               </div>
               <label class="clarify-label" for="clarify-message">Message to send</label>
@@ -1359,6 +1360,30 @@ function renderDetail(a, documents) {
     } finally {
       polishBtn.disabled = false;
       polishBtn.textContent = "✨ Polish wording";
+    }
+  });
+
+  // "Round up all the flags" -- draftClarification always sends every one
+  // of this account's real, current flag reasons to the LLM regardless of
+  // what note the operator wrote (see ops/api.py's draft_clarification);
+  // this just skips needing to write a note first, for the common case of
+  // wanting a message that's purely "here's everything currently open on
+  // your account, please respond" rather than adding a specific new point.
+  const summarizeBtn = document.getElementById("clarify-summarize-btn");
+  summarizeBtn?.addEventListener("click", async () => {
+    summarizeBtn.disabled = true;
+    summarizeBtn.textContent = "Summarizing…";
+    try {
+      const result = await draftClarification(
+        a.account_id,
+        "Summarize every currently open flag on this account for the borrower and ask them to respond."
+      );
+      document.getElementById("clarify-message").value = result.draft;
+    } catch (err) {
+      toast(err.message, true);
+    } finally {
+      summarizeBtn.disabled = false;
+      summarizeBtn.textContent = "📋 Summarize all flags";
     }
   });
 

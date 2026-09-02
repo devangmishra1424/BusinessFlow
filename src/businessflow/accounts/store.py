@@ -302,18 +302,32 @@ class EscalationAlreadyResolvedError(ValueError):
 def approve_restructuring(escalation_id: str) -> dict:
     """The only place in this system that actually commits a
     restructuring: applies an escalation's proposed_changes to the real
-    account row, then marks the escalation resolved. Re-checks
-    resolved_at rather than blindly re-applying, so a double-click or a
-    retried request can't double-apply the same change -- raises instead
-    of silently no-op'ing a second time, since silently returning
-    "success" on a stale retry could make an operator think a second,
-    different approval landed when nothing happened.
+    account row (if it has any -- see below), then marks the escalation
+    resolved. Re-checks resolved_at rather than blindly re-applying, so a
+    double-click or a retried request can't double-apply the same change
+    -- raises instead of silently no-op'ing a second time, since silently
+    returning "success" on a stale retry could make an operator think a
+    second, different approval landed when nothing happened.
 
-    Known limitation, not solved here: this applies proposed_changes
-    exactly as they were computed at proposal time. If the account's real
-    state changed in between (a payment posted, a dispute opened), this
-    does not re-validate against the CURRENT state -- a real deployment
-    handling money for real would want that; this demo doesn't."""
+    Most escalations are NOT a structured restructuring proposal --
+    escalate_to_human (an open dispute, repeated broken promises, or the
+    agent just being unsure) creates one with proposed_changes=None; only
+    propose_restructuring computes real terms. Approving one of those
+    used to raise ValueError here -- an unhandled 500 in the ops
+    dashboard the instant anyone clicked Approve on the vast majority of
+    real escalations, which are exactly this kind. There's nothing to
+    mechanically apply for those, so approving one now just closes it out
+    (status='approved', account untouched) -- the same "I've handled this,
+    close it" an operator already means by clicking Approve on a plain
+    hand-off, typically after sending a clarification request or handling
+    it some other real way outside this one mechanical apply-terms step.
+
+    Known limitation, not solved here: for a real extend_tenure proposal,
+    this applies proposed_changes exactly as they were computed at
+    proposal time. If the account's real state changed in between (a
+    payment posted, a dispute opened), this does not re-validate against
+    the CURRENT state -- a real deployment handling money for real would
+    want that; this demo doesn't."""
     conn = get_connection()
     row = conn.execute(
         "select account_id, proposed_changes, resolved_at from escalations where escalation_id = %s",
@@ -325,23 +339,21 @@ def approve_restructuring(escalation_id: str) -> dict:
         raise EscalationAlreadyResolvedError(f"escalation_id={escalation_id!r} is already resolved")
 
     changes = row["proposed_changes"]
-    if not changes:
-        raise ValueError(f"escalation_id={escalation_id!r} has no proposed_changes to apply")
-
     account_id = row["account_id"]
-    if changes.get("type") == "extend_tenure":
-        conn.execute(
-            "update accounts set months_remaining = %s, emi_amount = %s, updated_at = now() where account_id = %s",
-            (changes["new_months_remaining"], changes["new_emi_amount"], account_id),
-        )
-    else:
-        raise ValueError(f"escalation_id={escalation_id!r} has an unknown proposed_changes type {changes.get('type')!r}")
+    if changes:
+        if changes.get("type") == "extend_tenure":
+            conn.execute(
+                "update accounts set months_remaining = %s, emi_amount = %s, updated_at = now() where account_id = %s",
+                (changes["new_months_remaining"], changes["new_emi_amount"], account_id),
+            )
+        else:
+            raise ValueError(f"escalation_id={escalation_id!r} has an unknown proposed_changes type {changes.get('type')!r}")
 
     conn.execute(
         "update escalations set status = 'approved', resolved_at = now() where escalation_id = %s",
         (escalation_id,),
     )
-    return {"escalation_id": escalation_id, "account_id": account_id, **changes}
+    return {"escalation_id": escalation_id, "account_id": account_id, **(changes or {})}
 
 
 def reject_restructuring(escalation_id: str, reason: str | None) -> dict:

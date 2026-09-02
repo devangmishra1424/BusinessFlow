@@ -215,6 +215,33 @@ def test_approve_escalation_endpoint_applies_real_changes_and_notifies(reseed_ac
 
 @_pg_skip
 @_ops_key_skip
+def test_approve_escalation_endpoint_closes_a_plain_escalation_instead_of_500ing(reseed_accounts):
+    # Regression test for a real bug: escalate_to_human (the vast majority
+    # of real escalations -- an open dispute, repeated broken promises, or
+    # the agent just being unsure) creates one with no proposed_changes.
+    # Clicking Approve on one of these in the ops dashboard used to raise
+    # an unhandled ValueError -> a plain 500 with no useful detail, on
+    # ordinary use, not an edge case.
+    from businessflow.accounts import store
+    from businessflow.tools.escalation_tools import escalate_to_human
+
+    escalation = escalate_to_human(account_id="BF-1001", reason="Borrower has a general question, unsure how to help.")
+    before = store.get_account_or_raise("BF-1001")
+
+    response = client.post(f"/escalations/{escalation['escalation_id']}/approve", headers=_auth())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "approved"
+    assert body["resolved_at"] is not None
+
+    after = store.get_account_or_raise("BF-1001")
+    assert after.months_remaining == before.months_remaining
+    assert after.emi_amount == before.emi_amount
+
+
+@_pg_skip
+@_ops_key_skip
 def test_reject_escalation_endpoint_with_an_optional_reason(reseed_accounts):
     from businessflow.accounts import store
     from businessflow.tools.escalation_tools import propose_restructuring

@@ -636,23 +636,34 @@ def _escalation_out(escalation) -> EscalationOut:
     "/escalations/{escalation_id}/approve", response_model=EscalationOut, dependencies=[Depends(require_api_key)]
 )
 async def approve_escalation(escalation_id: str):
-    """A human clicking Approve on a structured restructuring request:
-    applies the real proposed_changes to the account (see accounts/
-    store.py's approve_restructuring -- the only place in this system
-    that actually commits one) and, if the borrower has a linked
-    Telegram chat, sends them the real new terms."""
+    """A human clicking Approve: if this escalation is a structured
+    restructuring request, applies its real proposed_changes to the
+    account (see accounts/store.py's approve_restructuring -- the only
+    place in this system that actually commits one); most escalations
+    aren't one of those (an open dispute, a broken-promise pattern, or
+    the agent just being unsure -- see approve_restructuring's own
+    docstring), so this just closes those out with no account change.
+    Either way, if the borrower has a linked Telegram chat, tells them."""
     try:
         result = store.approve_restructuring(escalation_id)
     except store.EscalationNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except store.EscalationAlreadyResolvedError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
+    except ValueError as e:
+        # An unrecognized proposed_changes shape -- a real, if unlikely,
+        # data problem worth surfacing as a clean 400, not the unhandled
+        # 500 this used to be.
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
-    message = (
-        f"Good news -- your recent request has been approved. Your loan now has "
-        f"{result['new_months_remaining']} months remaining, with a new EMI of "
-        f"₹{result['new_emi_amount']:,.2f}."
-    )
+    if "new_months_remaining" in result and "new_emi_amount" in result:
+        message = (
+            f"Good news -- your recent request has been approved. Your loan now has "
+            f"{result['new_months_remaining']} months remaining, with a new EMI of "
+            f"₹{result['new_emi_amount']:,.2f}."
+        )
+    else:
+        message = "Good news -- your recent request has been approved."
     await notify.notify_restructuring_decision(result["account_id"], approved=True, message=message)
 
     escalation = store.get_escalation(escalation_id)
