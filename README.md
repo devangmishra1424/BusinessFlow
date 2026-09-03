@@ -138,7 +138,9 @@ src/businessflow/
   tools/          The MCP tools the agent loop calls
 
 scripts/          seed_accounts.py, seed_kb.py, chat.py (interactive CLI),
-                   run_outbound_pass.py (manual trigger -- no scheduler yet)
+                   run_outbound_pass.py (manual trigger), run_outbound_scheduler.py
+                   (the real always-on scheduler, deployed as a 4th systemd
+                   service in production)
 eval/             Standalone benchmarks (tool-calling, retrieval, reasoning
                    accuracy, a red-team pass, ASR WER) -- not part of the
                    pytest suite; run each with `python -m eval.<name>`
@@ -195,9 +197,12 @@ python -m businessflow.channels.telegram_bot
 
 # Internal ops dashboard API (needs OPS_API_KEY, sent as X-API-Key)
 uvicorn businessflow.ops.api:app --reload --port 8001
+
+# Outbound reminder scheduler (real, always-on -- fires the daily pass itself)
+python -m scripts.run_outbound_scheduler
 ```
 
-In production (the live links above) these three run as separate systemd
+In production (the live links above) these four run as separate systemd
 services on a small Azure VM behind Caddy for automatic HTTPS, with GitHub
 Actions deploying on every push to `main` that passes CI (a forced-command
 SSH key on the VM only ever runs its own fixed pull-and-restart sequence, so
@@ -229,13 +234,17 @@ production database.
 Said plainly, because a lending ops tool that hides its own gaps would be
 worse than one that lists them:
 
-- **A logged promise-to-pay never resolves.** `log_promise_to_pay` records a
-  promise, but nothing yet evaluates it against what actually got paid and
-  flips it to kept or broken -- worth building (compare the promised date
-  and amount against real payment history once the date passes), not yet
-  built.
-- **Disputes open but don't close.** Escalations have a real approve/reject
-  flow with a resolution reason; disputes don't have the equivalent yet.
+- **No multi-tenancy.** Everything (schema, ops auth, RAG's `general`
+  policy-doc scope) assumes one lending business runs the whole deployment.
+  A second real customer would need an `organizations` table threaded
+  through every table and query, per-org ops credentials, and per-org RAG
+  scoping -- not just a schema column. Deliberately not built: this is a
+  single-tenant proof of concept, not a live multi-customer product yet.
+- **No bulk/multi-select actions on the account grid.** Staff can trigger
+  reminders for the whole filtered view at once (`POST /outbound/run`), but
+  there's no way to select several specific accounts and fan out a
+  clarification request to just them -- one account at a time for anything
+  beyond reminders.
 - End-to-end latency measurement isn't built. A production-grade frontend
   design pass beyond the current functional dashboards, and horizontal
   scaling, are out of scope for a project at this size.
