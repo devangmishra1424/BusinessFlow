@@ -237,3 +237,19 @@ def test_print_regression_delta_lower_is_better_does_not_flag_a_speedup(capsys):
     print_regression_delta({"p50_seconds": 2.0}, {"p50_seconds": 1.0}, metrics=("p50_seconds",), lower_is_better=True)
     output = capsys.readouterr().out
     assert "REGRESSION" not in output
+
+
+def test_print_regression_delta_returns_the_names_of_metrics_that_regressed(capsys):
+    # scripts/run_eval_monitor.py needs this as data, not just printed
+    # text, to decide whether to alert.
+    regressed = print_regression_delta({"precision": 0.9, "recall": 0.8}, {"precision": 0.5, "recall": 0.5})
+
+    assert regressed == ["precision", "recall"]
+
+
+def test_print_regression_delta_returns_empty_list_when_nothing_regressed(capsys):
+    assert print_regression_delta({"precision": 0.9}, {"precision": 0.92}) == []
+
+
+def test_print_regression_delta_returns_empty_list_with_no_previous_run(capsys):
+    assert print_regression_delta(None, {"precision": 0.9}) == []

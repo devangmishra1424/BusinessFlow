@@ -157,6 +157,21 @@ create table events (
     created_at  timestamptz not null default now()
 );
 
+-- A/B testing for the system prompt (agent/prompt_versions.py) -- at most
+-- one non-baseline row is ever "active" at a time (see that module's own
+-- docstring for why). rollout_percent of 0 (the default) means every
+-- conversation still gets the untouched baseline prompt even with a row
+-- present; nothing here changes production behavior until an operator
+-- deliberately raises it above 0.
+create table prompt_versions (
+    version_id              text primary key,
+    description             text not null,
+    system_prompt_template  text not null,
+    rollout_percent         integer not null default 0 check (rollout_percent between 0 and 100),
+    active                  boolean not null default true,
+    created_at              timestamptz not null default now()
+);
+
 -- RAG vector store: every ingested chunk (general policy KB, or a
 -- specific borrower's uploaded loan agreement/KYC/etc), on the same
 -- Postgres project as everything above rather than a separate local

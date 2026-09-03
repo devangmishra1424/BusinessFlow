@@ -104,3 +104,18 @@ async def notify_clarification_request(account_id: str, message: str) -> bool:
     outbound/compose.py, always human-reviewed before this is called).
     Returns True if the borrower was actually reached over Telegram."""
     return await _deliver_and_log(account_id, message, "clarification_request_sent", {})
+
+
+def send_ops_alert(text: str) -> bool:
+    """For an internal signal meant for a human operator, not a borrower
+    (e.g. scripts/run_eval_monitor.py's nightly regression check) --
+    delivered to a fixed admin chat via OPS_ALERT_TELEGRAM_CHAT_ID, the
+    same Bot/token every borrower-facing message here already uses.
+    Returns False (never raises) if that chat id isn't configured, or if
+    Telegram itself rejects delivery -- callers must log loudly themselves
+    as the real fallback, since there's no account to log an event
+    against here the way _deliver_and_log's callers can."""
+    chat_id = os.environ.get("OPS_ALERT_TELEGRAM_CHAT_ID")
+    if not chat_id:
+        return False
+    return asyncio.run(_send_telegram_message(int(chat_id), text))

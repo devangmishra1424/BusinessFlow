@@ -145,7 +145,9 @@ def main():
     print("\n=== vs previous run (clean runs only) ===")
     previous = record_run_history("latency_benchmark", summary, _RESULTS_DIR)
     previous_clean = previous.get("clean") if previous else None
-    print_regression_delta(previous_clean, summary["clean"], metrics=("p50_seconds", "p90_seconds", "mean_seconds"), lower_is_better=True)
+    summary["regressed_metrics"] = print_regression_delta(
+        previous_clean, summary["clean"], metrics=("p50_seconds", "p90_seconds", "mean_seconds"), lower_is_better=True
+    )
 
     _RESULTS_DIR.mkdir(exist_ok=True)
     out_path = _RESULTS_DIR / "latency_benchmark.json"

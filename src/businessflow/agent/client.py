@@ -541,18 +541,26 @@ def switch_to_fallback_key() -> bool:
     return False
 
 
-def build_system_prompt(language: str = "en", account_id: str | None = None) -> str:
+def build_system_prompt(language: str = "en", account_id: str | None = None, template: str | None = None) -> str:
     """account_id, when given, tells the agent which borrower it's
     speaking with -- it's how the model knows what to pass as account_id
     when it calls a tool, the same way a real deployment would identify
     the caller by phone/WhatsApp number rather than asking them to state
-    an internal account ID out loud."""
+    an internal account ID out loud.
+
+    template, when given, OVERRIDES the default, hand-tuned
+    _SYSTEM_PROMPT_TEMPLATE below -- used only by agent/prompt_versions.py's
+    A/B routing to run an alternate, stored prompt variant against a real
+    percentage of conversations. Every existing caller that doesn't pass
+    it keeps using the default template, unchanged. A variant template
+    must use the exact same {placeholder} names as the default -- this
+    still .format()s it with the same keyword arguments either way."""
     account_context = (
         f"You are speaking with the borrower on account {account_id}. "
         if account_id
         else _NO_ACCOUNT_CONTEXT
     )
-    return _SYSTEM_PROMPT_TEMPLATE.format(
+    return (template or _SYSTEM_PROMPT_TEMPLATE).format(
         account_context=account_context,
         language_instruction=_LANGUAGE_INSTRUCTIONS[language],
         commitment_discipline=_COMMITMENT_DISCIPLINE,

@@ -7,12 +7,14 @@ which just talks without checking anything against real data.
 import asyncio
 import json
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import groq
 import langfuse
 
 from businessflow.accounts import store
+from businessflow.agent import prompt_versions
 from businessflow.agent.client import MODEL, build_system_prompt, client, switch_to_fallback_key
 from businessflow.guardrail import grounding
 from businessflow.guardrail.unverified_restructuring import check_unverified_restructuring_claim
@@ -236,7 +238,18 @@ async def _run_turn_async(
 
 
 def start_conversation(language: str = "en", account_id: str | None = None) -> list[dict]:
-    return [{"role": "system", "content": build_system_prompt(language, account_id)}]
+    # bucket_key is account_id itself when there is one -- the same
+    # borrower must land in the same A/B arm across separate calls, not
+    # get bounced between prompt variants. An anonymous conversation has
+    # no stable identity to bucket by, so it gets its own random key
+    # (an independent coin flip, and never logged -- see
+    # prompt_versions.py's own docstring for why there's nothing to
+    # attribute an outcome to without an account).
+    bucket_key = account_id or uuid.uuid4().hex
+    version_id, template = prompt_versions.choose_prompt_version(bucket_key)
+    if account_id and version_id != prompt_versions.BASELINE_VERSION_ID:
+        store.log_event(account_id, "prompt_version_assigned", {"version_id": version_id})
+    return [{"role": "system", "content": build_system_prompt(language, account_id, template)}]
 
 
 _sync_loop: asyncio.AbstractEventLoop | None = None

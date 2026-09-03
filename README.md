@@ -52,7 +52,13 @@ built and measured against this exact KB: recall@1 went 0.61 -> 0.79 on
 Hindi/Hinglish queries once it shipped. Query expansion and a higher
 reasoning-effort setting were also built and A/B tested against real traffic
 -- both showed no clear win at this scale, so both stayed off by default
-rather than shipped on faith.
+rather than shipped on faith. That earlier round was a manual, run-then-
+compare check; `agent/prompt_versions.py` makes the same idea a standing
+capability -- a second system-prompt variant can run against a real,
+configurable percentage of live conversations (deterministically bucketed
+per borrower, not a coin-flip per turn), with which version each
+conversation got logged to `events` for comparison. Off by default
+(0% rollout) until an operator deliberately turns an experiment on.
 
 **A mechanical guardrail, because "the prompt says don't hallucinate" isn't
 a real safeguard.** Every reply is checked, after the model writes it and
@@ -73,7 +79,11 @@ tool-calling benchmark, a retrieval benchmark, and a regression tracker
 (`eval/tool_scoring.py`) that has already caught one real regression before a
 fix was confirmed. Every one of these runs against real Groq/Postgres calls
 -- nothing in this project is mocked; a test either runs for real or is
-skipped cleanly when a credential isn't set.
+skipped cleanly when a credential isn't set. These no longer only run when
+a human remembers to: `scripts/run_eval_monitor.py` fires the fast four
+(tool-calling, reasoning-accuracy, red-team, latency) nightly against real
+traffic and alerts (Telegram, with a loud log line either way) the moment
+one of them actually regresses.
 
 **Shipped, not just running locally.** Three real channels -- browser chat +
 dashboard, a Telegram bot with a full slash-command menu, and the ops
@@ -200,9 +210,13 @@ uvicorn businessflow.ops.api:app --reload --port 8001
 
 # Outbound reminder scheduler (real, always-on -- fires the daily pass itself)
 python -m scripts.run_outbound_scheduler
+
+# Eval regression monitor (real, always-on -- nightly tool-calling/reasoning/
+# red-team/latency check against real Groq+Postgres+RAG, alerts on regression)
+python -m scripts.run_eval_monitor
 ```
 
-In production (the live links above) these four run as separate systemd
+In production (the live links above) these five run as separate systemd
 services on a small Azure VM behind Caddy for automatic HTTPS, with GitHub
 Actions deploying on every push to `main` that passes CI (a forced-command
 SSH key on the VM only ever runs its own fixed pull-and-restart sequence, so

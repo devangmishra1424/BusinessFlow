@@ -225,6 +225,28 @@ def test_send_reminder_with_a_payment_link_still_attempts_real_delivery(reseed_a
     assert delivered is False
 
 
+def test_send_ops_alert_returns_false_with_no_chat_id_configured(monkeypatch):
+    # No DB, no Telegram call at all -- OPS_ALERT_TELEGRAM_CHAT_ID unset is
+    # the expected default state (it's optional, see .env.example), and
+    # this must short-circuit before ever touching the network.
+    from businessflow.outbound.send import send_ops_alert
+
+    monkeypatch.delenv("OPS_ALERT_TELEGRAM_CHAT_ID", raising=False)
+
+    assert send_ops_alert("something regressed") is False
+
+
+def test_send_ops_alert_attempts_real_delivery_when_a_chat_id_is_configured(monkeypatch):
+    # 900999 isn't a real chat -- same "fake chat_id, real rejection (or
+    # a missing-token no-op)" proof as send_reminder's own tests above;
+    # either way _send_telegram_message returns False, never raises.
+    from businessflow.outbound.send import send_ops_alert
+
+    monkeypatch.setenv("OPS_ALERT_TELEGRAM_CHAT_ID", "900999")
+
+    assert send_ops_alert("something regressed") is False
+
+
 @_pg_skip
 def test_resolve_matured_promises_marks_a_fulfilled_promise_kept(reseed_accounts):
     # Regression coverage for a real gap this codebase's own README named

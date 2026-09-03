@@ -188,7 +188,7 @@ def main():
 
     print("\n=== vs previous run ===")
     previous = record_run_history("reasoning_accuracy", summary, _RESULTS_DIR)
-    print_regression_delta(previous, summary, metrics=("reasoning_accuracy_rate",))
+    summary["regressed_metrics"] = print_regression_delta(previous, summary, metrics=("reasoning_accuracy_rate",))
 
     _RESULTS_DIR.mkdir(exist_ok=True)
     out_path = _RESULTS_DIR / "reasoning_accuracy.json"

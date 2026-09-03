@@ -185,7 +185,7 @@ def main():
 
     print("\n=== vs previous run ===")
     previous = record_run_history("tool_calling_benchmark", summary, _RESULTS_DIR)
-    print_regression_delta(previous, summary, metrics=("precision", "recall", "scenario_success_rate"))
+    summary["regressed_metrics"] = print_regression_delta(previous, summary, metrics=("precision", "recall", "scenario_success_rate"))
 
     _RESULTS_DIR.mkdir(exist_ok=True)
     out_path = _RESULTS_DIR / "tool_calling_benchmark.json"

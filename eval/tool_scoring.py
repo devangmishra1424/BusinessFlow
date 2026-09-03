@@ -189,17 +189,27 @@ def record_run_history(name: str, summary: dict, results_dir: Path) -> dict | No
 
 def print_regression_delta(
     previous: dict | None, current: dict, metrics: tuple[str, ...] = ("precision", "recall"), lower_is_better: bool = False,
-) -> None:
+) -> list[str]:
     """lower_is_better=True for metrics like latency, where a DECREASE is
     the improvement -- using the default (higher-is-better) sense on
-    those would flag a real speedup as a regression."""
+    those would flag a real speedup as a regression.
+
+    Returns the names of metrics that actually regressed (empty if none,
+    or if there's no previous run to compare against) -- a human running
+    this by hand can just read the printed REGRESSION flags, but
+    scripts/run_eval_monitor.py needs this back as data to decide whether
+    to alert, not re-parse its own stdout."""
     if previous is None:
         print("(no previous run recorded -- this is the first)")
-        return
+        return []
+    regressed = []
     for m in metrics:
         if m not in previous or m not in current:
             continue
         delta = current[m] - previous[m]
         got_worse = delta > 0.01 if lower_is_better else delta < -0.01
+        if got_worse:
+            regressed.append(m)
         flag = "  <-- REGRESSION" if got_worse else ""
         print(f"  {m}: {previous[m]} -> {current[m]} ({delta:+.4f}){flag}")
+    return regressed
