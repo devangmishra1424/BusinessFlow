@@ -858,7 +858,7 @@ def test_send_voice_message_blocks_credential_shaped_transcript_from_verificatio
     # into an exact "BF-1001 482913" string would be unreliable.
     monkeypatch.setattr(browser_api, "_decode_and_transcribe_voice", lambda raw, lang: "BF-1001 482913")
     calls = []
-    monkeypatch.setattr(browser_api, "_process_text_turn", lambda cid, session, text: calls.append((cid, text)))
+    monkeypatch.setattr(browser_api, "_process_text_turn", lambda cid, session, text, client_ip: calls.append((cid, text)))
 
     start = client.post("/conversations", json={"language": "en"})
     conversation_id = start.json()["conversation_id"]
@@ -884,7 +884,7 @@ def test_send_voice_message_allows_credential_shaped_transcript_once_verified(mo
     monkeypatch.setattr(browser_api, "_decode_and_transcribe_voice", lambda raw, lang: "BF-1001 482913")
     calls = []
 
-    def fake_process_text_turn(cid, session, text):
+    def fake_process_text_turn(cid, session, text, client_ip):
         calls.append((cid, text))
         return browser_api.SendMessageResponse(reply="handled", tool_calls=[])
 
