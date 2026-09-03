@@ -15,10 +15,19 @@ the VM) and takes hours even sampled; retrieval_benchmark doesn't use the
 record_run_history/regression convention the other four already do. Both
 stay manual, run-when-you-mean-to checks.
 
+voice_naturalness_benchmark.py is included, but only its deterministic
+correctness checks (verbalizer coverage, duration sanity) can actually
+trigger an alert here -- its SQUIM naturalness SCORES are real but
+genuinely noisy run to run (Piper/MMS-TTS are both stochastic), so that
+module deliberately keeps those out of its own regressed_metrics to avoid
+crying wolf nightly; see that module's own docstring. This suite needs no
+Groq/Postgres at all (TTS + a local SQUIM model only), so it still runs
+even on a night the other four can't reach Groq.
+
 Runs at 21:00 UTC (~2:30am IST) -- deliberately off-peak, so this suite's
-own ~30-40 real Groq calls a night don't compete with real borrower
-conversations for the same shared per-minute/per-day quota that has
-genuinely run dry before (see outbound/run.py's own history with it).
+own real Groq calls a night don't compete with real borrower conversations
+for the same shared per-minute/per-day quota that has genuinely run dry
+before (see outbound/run.py's own history with it).
 
 Run: python -m scripts.run_eval_monitor
 """
@@ -28,7 +37,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from businessflow.outbound.send import send_ops_alert
-from eval import latency_benchmark, reasoning_accuracy, red_team, tool_calling_benchmark
+from eval import latency_benchmark, reasoning_accuracy, red_team, tool_calling_benchmark, voice_naturalness_benchmark
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -41,6 +50,7 @@ _SUITES = [
     ("reasoning_accuracy", reasoning_accuracy.main),
     ("red_team", red_team.main),
     ("latency_benchmark", latency_benchmark.main),
+    ("voice_naturalness_benchmark", voice_naturalness_benchmark.main),
 ]
 
 

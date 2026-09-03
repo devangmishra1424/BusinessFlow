@@ -30,7 +30,14 @@ benchmarked against the base model (`eval/asr_wer.py`) rather than assumed
 better -- plus a VAD stage (Silero) ahead of it and TTS on the way out (Piper
 for English, MMS for Hindi). Every model in the pipeline runs int8-quantized
 ONNX, chosen deliberately for the RAM/latency envelope a real voice turn
-needs, not left at full precision by default.
+needs, not left at full precision by default. Multi-sentence replies are
+synthesized per sentence and rejoined with a deliberate pause between them
+(`audio/tts.py`), not concatenated back-to-back -- and that change is
+measured, not just assumed to help: `eval/voice_naturalness_benchmark.py`
+scores every synthesized reply with torchaudio's pretrained SQUIM model
+(reference-free STOI/PESQ/SI-SDR, already a dependency here -- no new heavy
+model), plus a deterministic check that `audio/verbalizer.py` actually
+caught every date/amount before it ever reached TTS.
 
 **A real agentic core, not a prompt wrapped around an API call.** One
 tool-calling reasoning loop (`agent/loop.py`) that decides, per turn, which
@@ -80,10 +87,13 @@ tool-calling benchmark, a retrieval benchmark, and a regression tracker
 fix was confirmed. Every one of these runs against real Groq/Postgres calls
 -- nothing in this project is mocked; a test either runs for real or is
 skipped cleanly when a credential isn't set. These no longer only run when
-a human remembers to: `scripts/run_eval_monitor.py` fires the fast four
-(tool-calling, reasoning-accuracy, red-team, latency) nightly against real
-traffic and alerts (Telegram, with a loud log line either way) the moment
-one of them actually regresses.
+a human remembers to: `scripts/run_eval_monitor.py` fires five suites
+(tool-calling, reasoning-accuracy, red-team, latency, voice-naturalness)
+nightly and alerts (Telegram, with a loud log line either way) the moment
+one actually regresses -- voice-naturalness only alerts on its
+deterministic correctness checks, not its SQUIM scores, which are real
+but too noisy run-to-run (Piper/MMS-TTS are both stochastic) to threshold
+without crying wolf; those stay a printed trend line for a human to read.
 
 **Shipped, not just running locally.** Three real channels -- browser chat +
 dashboard, a Telegram bot with a full slash-command menu, and the ops

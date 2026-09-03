@@ -1,0 +1,88 @@
+{
+  "summary": {
+    "scenario_count": 6,
+    "verbalizer_failures": 0,
+    "duration_implausible_count": 0,
+    "en_mean_stoi": 0.9986,
+    "en_mean_pesq": 4.1636,
+    "en_mean_sisdr": 30.6546,
+    "hi_mean_stoi": 0.9969,
+    "hi_mean_pesq": 4.1478,
+    "hi_mean_sisdr": 28.7513,
+    "regressed_metrics": []
+  },
+  "results": [
+    {
+      "scenario_id": "plain_multi_sentence_en",
+      "language": "en",
+      "text": "Your EMI is due soon. Please pay before the due date to avoid a late fee.",
+      "verbalized_text": "Your EMI is due soon. Please pay before the due date to avoid a late fee.",
+      "duration_seconds": 4.461,
+      "duration_plausible": true,
+      "verbalizer_left_a_stray_pattern": false,
+      "stoi": 0.9985,
+      "pesq": 4.0655,
+      "sisdr": 31.271
+    },
+    {
+      "scenario_id": "date_and_amount_en",
+      "language": "en",
+      "text": "Your payment of ₹12,500 is due on 2026-09-15.",
+      "verbalized_text": "Your payment of twelve thousand, five hundred rupees is due on the fifteenth of September, twenty twenty-six.",
+      "duration_seconds": 6.177,
+      "duration_plausible": true,
+      "verbalizer_left_a_stray_pattern": false,
+      "stoi": 0.9981,
+      "pesq": 4.0981,
+      "sisdr": 31.4521
+    },
+    {
+      "scenario_id": "single_sentence_en",
+      "language": "en",
+      "text": "How can I help you with your account today?",
+      "verbalized_text": "How can I help you with your account today?",
+      "duration_seconds": 2.252,
+      "duration_plausible": true,
+      "verbalizer_left_a_stray_pattern": false,
+      "stoi": 0.9991,
+      "pesq": 4.3272,
+      "sisdr": 29.2407
+    },
+    {
+      "scenario_id": "plain_multi_sentence_hi",
+      "language": "hi",
+      "text": "आपकी EMI जल्द देय है। कृपया समय पर भुगतान करें।",
+      "verbalized_text": "आपकी ईएमआई जल्द देय है। कृपया समय पर भुगतान करें।",
+      "duration_seconds": 4.76,
+      "duration_plausible": true,
+      "verbalizer_left_a_stray_pattern": false,
+      "stoi": 0.9981,
+      "pesq": 4.1989,
+      "sisdr": 27.8614
+    },
+    {
+      "scenario_id": "date_and_amount_hi",
+      "language": "hi",
+      "text": "आपकी ₹12,500 की किस्त 2026-09-15 को देय है।",
+      "verbalized_text": "आपकी बारह हज़ार पांच सौ रुपये की किस्त पंद्रह सितंबर, दो हज़ार छब्बीस को देय है।",
+      "duration_seconds": 6.336,
+      "duration_plausible": true,
+      "verbalizer_left_a_stray_pattern": false,
+      "stoi": 0.9976,
+      "pesq": 4.147,
+      "sisdr": 29.7286
+    },
+    {
+      "scenario_id": "single_sentence_hi",
+      "language": "hi",
+      "text": "मैं आपकी क्या मदद कर सकता हूँ?",
+      "verbalized_text": "मैं आपकी क्या मदद कर सकता हूँ?",
+      "duration_seconds": 2.752,
+      "duration_plausible": true,
+      "verbalizer_left_a_stray_pattern": false,
+      "stoi": 0.9949,
+      "pesq": 4.0974,
+      "sisdr": 28.6638
+    }
+  ]
+}

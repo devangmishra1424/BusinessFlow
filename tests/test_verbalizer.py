@@ -1,4 +1,4 @@
-from businessflow.audio.verbalizer import _hindi_number_words, verbalize
+from businessflow.audio.verbalizer import _hindi_number_words, has_unverbalized_pattern, verbalize
 
 
 def test_verbalizes_rupee_amount_with_rs_prefix():
@@ -86,3 +86,28 @@ def test_hindi_number_words_spot_checks():
     assert _hindi_number_words(2026) == "दो हज़ार छब्बीस"
     assert _hindi_number_words(17053) == "सत्रह हज़ार तिरेपन"
     assert _hindi_number_words(100000) == "एक लाख"
+
+
+# --- has_unverbalized_pattern --------------------------------------------
+#
+# Used by eval/voice_naturalness_benchmark.py to confirm the exact live
+# bug this module's own docstring describes (a number silently reaching
+# TTS unconverted) hasn't come back.
+
+
+def test_has_unverbalized_pattern_true_for_raw_iso_date():
+    assert has_unverbalized_pattern("due on 2026-08-18") is True
+
+
+def test_has_unverbalized_pattern_true_for_raw_rupee_amount():
+    assert has_unverbalized_pattern("pay ₹12,500 now") is True
+
+
+def test_has_unverbalized_pattern_false_after_verbalize():
+    text = verbalize("Your ₹12,500 payment is due on 2026-09-15.")
+
+    assert has_unverbalized_pattern(text) is False
+
+
+def test_has_unverbalized_pattern_false_for_text_with_no_pattern_at_all():
+    assert has_unverbalized_pattern("it is 3 days past due") is False

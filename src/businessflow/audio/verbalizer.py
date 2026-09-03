@@ -112,6 +112,17 @@ def _verbalize_rupees(match: re.Match, language: str) -> str:
     return words
 
 
+def has_unverbalized_pattern(text: str) -> bool:
+    """True if text still contains an ISO date or rupee amount verbalize()
+    is supposed to catch -- i.e. verbalize() either was never called on
+    this text, or (a real regression) failed to actually remove one.
+    Used by eval/voice_naturalness_benchmark.py to confirm the exact live
+    bug this module's own docstring describes (a number silently reaching
+    TTS unconverted) hasn't come back, without duplicating the regex
+    patterns that already live here."""
+    return bool(_ISO_DATE.search(text) or _RUPEE_AMOUNT.search(text))
+
+
 def verbalize(text: str, language: str = "en") -> str:
     """Rewrites ISO dates (YYYY-MM-DD), rupee amounts (₹12,500 or
     Rs. 12500), and a small glossary of domain acronyms into words --
