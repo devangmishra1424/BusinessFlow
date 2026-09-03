@@ -222,8 +222,9 @@ to be slow (multiple hours end to end) since it includes real ASR/LLM/DB
 calls, not unit-test-speed mocks.
 
 Standalone benchmarks under `eval/` (tool-calling accuracy, retrieval
-Recall@k/MRR, ASR WER) aren't part of this suite -- run each directly, e.g.
-`python -m eval.retrieval_benchmark`.
+Recall@k/MRR, ASR WER, end-to-end turn latency) aren't part of this suite --
+run each directly, e.g. `python -m eval.retrieval_benchmark` or
+`python -m eval.latency_benchmark`.
 
 CI (`.github/workflows/tests.yml`) runs the same suite on every push/PR to
 `main`, against its own disposable Postgres+pgvector container -- never the
@@ -240,6 +241,9 @@ worse than one that lists them:
   through every table and query, per-org ops credentials, and per-org RAG
   scoping -- not just a schema column. Deliberately not built: this is a
   single-tenant proof of concept, not a live multi-customer product yet.
-- End-to-end latency measurement isn't built. A production-grade frontend
-  design pass beyond the current functional dashboards, and horizontal
-  scaling, are out of scope for a project at this size.
+- A production-grade frontend design pass beyond the current functional
+  dashboards, and horizontal scaling, are out of scope for a project at
+  this size. (End-to-end latency IS measured, see `eval.latency_benchmark`
+  in Testing above -- it times the full text/LLM/tool-loop path against
+  real Groq, Postgres, and RAG, separating clean runs from ones that hit a
+  mid-turn key rotation.)

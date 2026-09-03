@@ -14,9 +14,24 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
+from businessflow.ops import api as ops_api
 from businessflow.ops.api import app
+from businessflow.rate_limit import RateLimiter
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _reset_ops_key_rate_limiter(monkeypatch):
+    """require_api_key's brute-force limiter is module-level, process-
+    global state -- without resetting it between tests, one test's
+    wrong-key request could accumulate toward a completely different
+    test's own 429 threshold, since the whole suite runs in one process.
+    A fresh instance per test keeps every test's wrong-key behavior fully
+    isolated, the same reasoning test_policy_tools.py's own
+    _reset_retriever_cache already applies to a different piece of
+    module-level state."""
+    monkeypatch.setattr(ops_api, "_ops_key_brute_force_limiter", RateLimiter(max_requests=5, window_seconds=300))
 
 _pg_skip = pytest.mark.skipif(
     not os.environ.get("DATABASE_URL"),
@@ -46,6 +61,39 @@ def test_health():
 def test_accounts_endpoint_rejects_a_missing_api_key():
     response = client.get("/accounts")
     assert response.status_code == 401
+
+
+@_ops_key_skip
+def test_accounts_endpoint_rate_limits_repeated_wrong_api_keys(monkeypatch):
+    # A tighter limiter than the real default (5/300s) so this test doesn't
+    # need to send 6 real requests to prove the behavior.
+    monkeypatch.setattr(ops_api, "_ops_key_brute_force_limiter", RateLimiter(max_requests=2, window_seconds=300))
+    bad_headers = {"X-API-Key": "definitely-not-the-real-key"}
+
+    first = client.get("/accounts", headers=bad_headers)
+    second = client.get("/accounts", headers=bad_headers)
+    third = client.get("/accounts", headers=bad_headers)
+
+    assert first.status_code == 401
+    assert second.status_code == 401
+    assert third.status_code == 429  # the real key itself would ALSO get 429 here -- see the module docstring
+
+
+def test_accounts_endpoint_rate_limit_is_scoped_to_wrong_keys_only(monkeypatch):
+    # The REAL key must never count toward the limiter, however many times
+    # it's presented -- only failures should ever move an operator toward
+    # 429, or a legitimate dashboard's own auto-refresh would eventually
+    # lock itself out. store.list_accounts is mocked out so this runs with
+    # no real DATABASE_URL -- the one thing under test is require_api_key's
+    # own behavior, not list_accounts' real data.
+    monkeypatch.setattr(ops_api, "_ops_key_brute_force_limiter", RateLimiter(max_requests=1, window_seconds=300))
+    monkeypatch.setenv("OPS_API_KEY", "a-real-test-key")
+    monkeypatch.setattr(ops_api.store, "list_accounts", lambda: [])
+
+    for _ in range(5):
+        response = client.get("/accounts", headers={"X-API-Key": "a-real-test-key"})
+        assert response.status_code == 200
+        assert response.status_code != 429
 
 
 @_ops_key_skip

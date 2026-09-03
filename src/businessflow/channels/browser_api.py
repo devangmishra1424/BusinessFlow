@@ -43,7 +43,7 @@ import groq
 import soundfile as sf
 import torch
 import torchaudio
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -66,6 +66,7 @@ from businessflow.audio.vad import trim_to_speech
 from businessflow.audio.verbalizer import verbalize
 from businessflow.channels.credentials import looks_like_credentials, parse_credentials
 from businessflow.ops.flags import Flag, compute_flags
+from businessflow.rate_limit import RateLimiter
 from businessflow.tools.account_tools import flag_dispute, get_payment_status
 from businessflow.tools.escalation_tools import escalate_to_human
 from businessflow.tools.payment_tools import generate_payment_link
@@ -365,8 +366,17 @@ def health():
     return {"status": "ok"}
 
 
+# AccessDeniedError's own AccountLockedError (repeated wrong keys against
+# ONE account_id) doesn't cover trying a handful of DIFFERENT account_ids,
+# one guess each, from the same IP -- this closes that specific gap. Only
+# actual failures count as hits, same reasoning as ops/api.py's own
+# brute-force limiter: a borrower who gets it right immediately (the
+# overwhelming normal case) must never be throttled by this.
+_credential_brute_force_limiter = RateLimiter(max_requests=8, window_seconds=300)
+
+
 @app.post("/conversations", response_model=StartConversationResponse)
-def start_conversation_endpoint(req: StartConversationRequest):
+def start_conversation_endpoint(request: Request, req: StartConversationRequest):
     if req.language not in ("en", "hi"):
         raise HTTPException(status_code=400, detail="language must be 'en' or 'hi'")
 
@@ -376,6 +386,11 @@ def start_conversation_endpoint(req: StartConversationRequest):
         try:
             conversation = verify_and_start_conversation(req.language, req.account_id, req.access_key)
         except AccessDeniedError:
+            client_ip = request.client.host if request.client else "unknown"
+            if not _credential_brute_force_limiter.check(client_ip):
+                raise HTTPException(
+                    status_code=429, detail="Too many verification attempts from this location -- please wait a few minutes."
+                ) from None
             raise HTTPException(status_code=401, detail=f"wrong access key for account {req.account_id}") from None
         except AccountLockedError as e:
             raise HTTPException(status_code=429, detail=str(e)) from None
@@ -391,7 +406,7 @@ def start_conversation_endpoint(req: StartConversationRequest):
     return StartConversationResponse(conversation_id=conversation_id, account_id=req.account_id, language=req.language)
 
 
-def _process_text_turn(conversation_id: str, session: dict, text: str) -> SendMessageResponse:
+def _process_text_turn(conversation_id: str, session: dict, text: str, client_ip: str) -> SendMessageResponse:
     """Shared turn-processing logic for both the text (send_message_endpoint)
     and voice (send_voice_message_endpoint) paths below: verification
     mid-conversation, run_turn_with_memory, and tool-call extraction. text
@@ -416,6 +431,15 @@ def _process_text_turn(conversation_id: str, session: dict, text: str) -> SendMe
             try:
                 conversation = verify_and_start_conversation(session["language"], account_id, access_key)
             except AccessDeniedError:
+                # Same brute-force limiter /conversations uses -- a wrong
+                # guess typed mid-chat is exactly as real an attempt as one
+                # sent at conversation start, and must count toward the
+                # same per-IP budget, not reset it for free.
+                if not _credential_brute_force_limiter.check(client_ip):
+                    return SendMessageResponse(
+                        reply="Too many verification attempts from this location -- please wait a few minutes.",
+                        tool_calls=[],
+                    )
                 return SendMessageResponse(
                     reply=f"That access key doesn't match account {account_id} -- please check and send both again.",
                     tool_calls=[],
@@ -459,13 +483,14 @@ def _process_text_turn(conversation_id: str, session: dict, text: str) -> SendMe
 
 
 @app.post("/conversations/{conversation_id}/messages", response_model=SendMessageResponse)
-def send_message_endpoint(conversation_id: str, req: SendMessageRequest):
+def send_message_endpoint(request: Request, conversation_id: str, req: SendMessageRequest):
     session = _conversations.get(conversation_id)
     if session is None:
         raise HTTPException(status_code=404, detail=f"no conversation found for id={conversation_id!r}")
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message must not be empty")
-    return _process_text_turn(conversation_id, session, req.message)
+    client_ip = request.client.host if request.client else "unknown"
+    return _process_text_turn(conversation_id, session, req.message, client_ip)
 
 
 def _decode_and_transcribe_voice(raw_bytes: bytes, language: str | None) -> str | None:
@@ -514,7 +539,7 @@ def _transcript_echo(transcript: str) -> str:
 
 
 @app.post("/conversations/{conversation_id}/messages/voice", response_model=SendMessageResponse)
-def send_voice_message_endpoint(conversation_id: str, audio: UploadFile = File(...)):
+def send_voice_message_endpoint(request: Request, conversation_id: str, audio: UploadFile = File(...)):
     """Browser equivalent of telegram_bot.py's handle_incoming_voice: the
     frontend records via MediaRecorder, re-encodes to WAV client-side (see
     this file's module docstring for why), and uploads it here. Same
@@ -547,7 +572,8 @@ def send_voice_message_endpoint(conversation_id: str, audio: UploadFile = File(.
             transcript=_transcript_echo(transcript),
         )
 
-    result = _process_text_turn(conversation_id, session, transcript)
+    client_ip = request.client.host if request.client else "unknown"
+    result = _process_text_turn(conversation_id, session, transcript, client_ip)
     result.transcript = _transcript_echo(transcript)
     return result
 
@@ -715,8 +741,17 @@ def payment_token_info_endpoint(token: str):
     return PaymentTokenInfoOut(**info)
 
 
+# Unlike the two limiters above, this one is NOT scoped to failures only --
+# a payment token is a single guessable string with no separate password,
+# so unlike an account_id+key pair, volume itself is the risk (someone
+# scanning many token guesses from one IP looking for a live one). A real
+# borrower only ever calls this once per link, so a generous per-IP volume
+# cap here costs normal use nothing.
+_payment_confirm_rate_limiter = RateLimiter(max_requests=20, window_seconds=300)
+
+
 @app.post("/pay/{token}/confirm", response_model=PaymentConfirmOut)
-def payment_confirm_endpoint(token: str, req: PaymentConfirmRequest | None = None):
+def payment_confirm_endpoint(request: Request, token: str, req: PaymentConfirmRequest | None = None):
     """The only endpoint that can actually move an account forward from a
     payment link -- store.redeem_payment_token re-checks used_at/
     expires_at itself rather than trusting this endpoint already did (a
@@ -725,6 +760,9 @@ def payment_confirm_endpoint(token: str, req: PaymentConfirmRequest | None = Non
     POST with no body (a full payment, matching what's due) still works --
     the frontend only ever sends apply_extra_to_next when it actually has
     an answer to send."""
+    client_ip = request.client.host if request.client else "unknown"
+    if not _payment_confirm_rate_limiter.check(client_ip):
+        raise HTTPException(status_code=429, detail="Too many payment attempts from this location -- please wait a few minutes.")
     apply_extra_to_next = req.apply_extra_to_next if req is not None else None
     try:
         result = store.redeem_payment_token(token, apply_extra_to_next=apply_extra_to_next)

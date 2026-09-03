@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Literal
 
 from docling.exceptions import ConversionError
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Security, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Security, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.security import APIKeyHeader
@@ -39,6 +39,7 @@ from businessflow.outbound import send as notify
 from businessflow.outbound.compose import draft_clarification_message
 from businessflow.outbound.run import run_daily_pass
 from businessflow.rag.extraction import extract_loan_terms
+from businessflow.rate_limit import RateLimiter
 from businessflow.rag.ingest import extract_document_text, ingest_document
 from businessflow.tools.escalation_tools import escalate_to_human
 
@@ -124,11 +125,24 @@ def _cleanup_rejected_upload(saved_path: Path, account_dir: Path) -> None:
         pass
 
 
-def require_api_key(provided_key: str = Security(_api_key_header)) -> None:
+# Only a WRONG key counts as a hit -- a legitimate operator's dashboard
+# auto-refreshes every 30s across several endpoints, which a limiter
+# keyed on every request (right or wrong) would eventually throttle for
+# real, normal use. This is specifically a brute-force guard on the one
+# shared secret gating this entire portfolio's data -- there's no
+# per-operator account to lock the way browser_api.py's borrower flow
+# already can (see AccountLockedError), so this is the whole mitigation.
+_ops_key_brute_force_limiter = RateLimiter(max_requests=5, window_seconds=300)
+
+
+def require_api_key(request: Request, provided_key: str = Security(_api_key_header)) -> None:
     expected_key = os.environ.get("OPS_API_KEY")
     if not expected_key:
         raise RuntimeError("OPS_API_KEY is not set -- copy .env.example to .env and fill it in")
     if provided_key != expected_key:
+        client_ip = request.client.host if request.client else "unknown"
+        if not _ops_key_brute_force_limiter.check(client_ip):
+            raise HTTPException(status_code=429, detail="Too many invalid API key attempts -- try again later.")
         raise HTTPException(status_code=401, detail="invalid or missing X-API-Key header")
 
 

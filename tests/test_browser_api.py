@@ -20,11 +20,25 @@ import torch
 from fastapi.testclient import TestClient
 
 from businessflow.accounts import store
+from businessflow.agent.loop import AccessDeniedError
 from businessflow.audio.tts import Speech
 from businessflow.channels import browser_api
 from businessflow.channels.browser_api import app
+from businessflow.rate_limit import RateLimiter
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _reset_browser_api_rate_limiters(monkeypatch):
+    """browser_api's two brute-force/volume limiters are module-level,
+    process-global state -- without resetting them between tests, one
+    test's failed attempts could push a completely different test past
+    its own 429 threshold, since the whole suite runs in one process.
+    Mirrors test_ops_api.py's own _reset_ops_key_rate_limiter for the
+    same reason."""
+    monkeypatch.setattr(browser_api, "_credential_brute_force_limiter", RateLimiter(max_requests=8, window_seconds=300))
+    monkeypatch.setattr(browser_api, "_payment_confirm_rate_limiter", RateLimiter(max_requests=20, window_seconds=300))
 
 _pg_skip = pytest.mark.skipif(
     not os.environ.get("DATABASE_URL"),
@@ -116,6 +130,36 @@ def test_start_conversation_rejects_invalid_language():
     assert "language" in response.json()["detail"]
 
 
+def test_start_conversation_rate_limits_repeated_wrong_access_keys(monkeypatch):
+    # verify_and_start_conversation mocked out so this needs no real DB --
+    # the only thing under test is the limiter wired around it, not
+    # account verification itself (already covered above, DB-gated).
+    monkeypatch.setattr(browser_api, "verify_and_start_conversation", lambda *a, **kw: (_ for _ in ()).throw(AccessDeniedError()))
+    monkeypatch.setattr(browser_api, "_credential_brute_force_limiter", RateLimiter(max_requests=2, window_seconds=300))
+    body = {"account_id": "BF-1001", "access_key": "000000", "language": "en"}
+
+    first = client.post("/conversations", json=body)
+    second = client.post("/conversations", json=body)
+    third = client.post("/conversations", json=body)
+
+    assert first.status_code == 401
+    assert second.status_code == 401
+    assert third.status_code == 429  # the real key would ALSO get 429 here -- see rate_limit.py's module docstring
+
+
+def test_start_conversation_rate_limit_is_scoped_to_successful_verification_only(monkeypatch):
+    # A correct key, however many times a legitimate borrower's page reload
+    # or retry sends it, must never itself move the limiter toward 429.
+    monkeypatch.setattr(browser_api, "verify_and_start_conversation", lambda *a, **kw: [])
+    monkeypatch.setattr(browser_api, "_credential_brute_force_limiter", RateLimiter(max_requests=1, window_seconds=300))
+    body = {"account_id": "BF-1001", "access_key": "482913", "language": "en"}
+
+    for _ in range(5):
+        response = client.post("/conversations", json=body)
+        assert response.status_code == 200
+        assert response.status_code != 429
+
+
 def test_send_message_to_nonexistent_conversation_returns_404():
     response = client.post("/conversations/does-not-exist/messages", json={"message": "hello"})
 
@@ -161,6 +205,28 @@ def test_sending_credentials_with_a_wrong_key_does_not_verify(reseed_accounts):
 
     assert response.status_code == 200
     assert "doesn't match" in response.json()["reply"]
+
+
+def test_typing_wrong_credentials_mid_chat_is_rate_limited_same_as_conversation_start(monkeypatch):
+    # This is the SECOND real entry point for the same account_id-guessing
+    # gap /conversations already guards -- a borrower (or attacker) can
+    # just as easily try several different account_ids by typing them into
+    # an already-open anonymous chat instead of creating a new one each
+    # time. Must share the exact same limiter/budget, not get its own free
+    # allowance. No DB needed: an anonymous conversation touches none, and
+    # verify_and_start_conversation is mocked out here too.
+    monkeypatch.setattr(browser_api, "verify_and_start_conversation", lambda *a, **kw: (_ for _ in ()).throw(AccessDeniedError()))
+    monkeypatch.setattr(browser_api, "_credential_brute_force_limiter", RateLimiter(max_requests=2, window_seconds=300))
+    start = client.post("/conversations", json={"language": "en"})
+    conversation_id = start.json()["conversation_id"]
+
+    first = client.post(f"/conversations/{conversation_id}/messages", json={"message": "BF-1001 000000"})
+    second = client.post(f"/conversations/{conversation_id}/messages", json={"message": "BF-1002 111111"})
+    third = client.post(f"/conversations/{conversation_id}/messages", json={"message": "BF-1003 222222"})
+
+    assert first.status_code == 200 and "doesn't match" in first.json()["reply"]
+    assert second.status_code == 200 and "doesn't match" in second.json()["reply"]
+    assert third.status_code == 200 and "Too many verification attempts" in third.json()["reply"]
 
 
 # ---------------------------------------------------------------------------
@@ -557,6 +623,24 @@ def test_payment_confirm_endpoint_404s_for_an_unknown_token():
     response = client.post("/pay/totally-made-up-token/confirm")
 
     assert response.status_code == 404
+
+
+def test_payment_confirm_endpoint_rate_limits_repeated_attempts_from_one_ip(monkeypatch):
+    # Unlike the two limiters above, this one counts EVERY attempt, not
+    # just failures -- a payment token has no separate password to get
+    # wrong, so volume itself (someone scanning many token guesses) is the
+    # risk. store.redeem_payment_token mocked out so no DB is needed --
+    # only require_api_key-style limiter wiring is under test here.
+    monkeypatch.setattr(store, "redeem_payment_token", lambda *a, **kw: (_ for _ in ()).throw(store.PaymentTokenNotFoundError("no payment link found")))
+    monkeypatch.setattr(browser_api, "_payment_confirm_rate_limiter", RateLimiter(max_requests=2, window_seconds=300))
+
+    first = client.post("/pay/guess-1/confirm")
+    second = client.post("/pay/guess-2/confirm")
+    third = client.post("/pay/guess-3/confirm")
+
+    assert first.status_code == 404
+    assert second.status_code == 404
+    assert third.status_code == 429
 
 
 @_pg_skip
