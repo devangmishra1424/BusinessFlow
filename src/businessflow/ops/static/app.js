@@ -12,6 +12,7 @@ const state = {
   activeFilter: "all",
   sortBy: "urgency", // "urgency" | "risk" | "id" -- see filteredAccounts()
   search: "",
+  selectedAccountIds: new Set(),
   sinceHours: 24,
   detailAccountId: null,
   refreshTimer: null,
@@ -180,6 +181,12 @@ const triggerOutboundRun = (accountIds) =>
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ account_ids: accountIds }),
+  });
+const sendBulkClarification = (accountIds, message) =>
+  api("/clarification-requests/bulk", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ account_ids: accountIds, message }),
   });
 const markClarificationsResolved = (accountId) =>
   api(`/accounts/${accountId}/clarification-requests/mark-resolved`, { method: "POST" });
@@ -611,18 +618,22 @@ document.getElementById("sort-select").addEventListener("change", (e) => {
 
 // Turns what used to be a developer-only terminal command
 // (scripts/run_outbound_pass.py) into something ops can actually press --
-// scoped to whatever the current filter/search shows, not blindly
-// everyone, so "send reminders to just my overdue accounts" is one click.
-// A native confirm(), not just a disabled-state guard, since this sends
-// real messages to real borrowers -- the one action in this whole
-// dashboard where a stray click has an external, unrecallable effect.
+// scoped to a specific selection when one exists, otherwise to whatever
+// the current filter/search shows, so "send reminders to just these 3" or
+// "to everyone currently overdue" are both one click. A native confirm(),
+// not just a disabled-state guard, since this sends real messages to real
+// borrowers -- one of the few actions in this dashboard where a stray
+// click has an external, unrecallable effect.
 document.getElementById("send-reminders-btn").addEventListener("click", async () => {
-  const targets = filteredAccounts().map((a) => a.account_id);
+  const targets = state.selectedAccountIds.size
+    ? [...state.selectedAccountIds]
+    : filteredAccounts().map((a) => a.account_id);
   if (!targets.length) {
     toast("No accounts match the current filter.", true);
     return;
   }
-  if (!confirm(`Send today's reminders to ${targets.length} account(s) matching the current filter?`)) return;
+  const scope = state.selectedAccountIds.size ? "selected" : "matching the current filter";
+  if (!confirm(`Send today's reminders to ${targets.length} account(s) ${scope}?`)) return;
 
   const btn = document.getElementById("send-reminders-btn");
   btn.disabled = true;
@@ -639,6 +650,89 @@ document.getElementById("send-reminders-btn").addEventListener("click", async ()
   }
 });
 
+document.getElementById("selection-clear-btn").addEventListener("click", () => {
+  state.selectedAccountIds.clear();
+  renderAccountGrid();
+});
+
+/* ============================================================
+   Bulk clarification -- one operator-written message, sent verbatim to
+   every currently-selected account (see send_bulk_clarification's own
+   docstring for why this deliberately isn't an AI draft per account).
+   ============================================================ */
+const $bulkClarifyBackdrop = document.getElementById("bulk-clarify-backdrop");
+const $bulkClarifyModal = document.getElementById("bulk-clarify-modal");
+
+function openBulkClarifyModal() {
+  const ids = [...state.selectedAccountIds];
+  document.getElementById("bulk-clarify-count").textContent = ids.length;
+  const accountsById = new Map(state.accounts.map((a) => [a.account_id, a]));
+  document.getElementById("bulk-clarify-recipients").innerHTML = ids
+    .map((id) => `<span class="badge">${escapeHtml(accountsById.get(id)?.borrower_name || id)}</span>`)
+    .join("");
+  document.getElementById("bulk-clarify-message").value = "";
+  document.getElementById("bulk-clarify-error").hidden = true;
+  document.getElementById("bulk-clarify-result").hidden = true;
+  $bulkClarifyModal.hidden = false;
+  $bulkClarifyBackdrop.hidden = false;
+  setTimeout(() => {
+    $bulkClarifyModal.classList.add("open");
+    $bulkClarifyBackdrop.classList.add("open");
+  }, 10);
+}
+
+function closeBulkClarifyModal() {
+  $bulkClarifyModal.classList.remove("open");
+  $bulkClarifyBackdrop.classList.remove("open");
+  setTimeout(() => {
+    $bulkClarifyModal.hidden = true;
+    $bulkClarifyBackdrop.hidden = true;
+  }, 300);
+}
+
+document.getElementById("selection-clarify-btn").addEventListener("click", openBulkClarifyModal);
+document.getElementById("bulk-clarify-close").addEventListener("click", closeBulkClarifyModal);
+document.getElementById("bulk-clarify-cancel-btn").addEventListener("click", closeBulkClarifyModal);
+$bulkClarifyBackdrop.addEventListener("click", closeBulkClarifyModal);
+
+document.getElementById("bulk-clarify-send-btn").addEventListener("click", async () => {
+  const errorEl = document.getElementById("bulk-clarify-error");
+  const resultEl = document.getElementById("bulk-clarify-result");
+  errorEl.hidden = true;
+  resultEl.hidden = true;
+
+  const message = document.getElementById("bulk-clarify-message").value.trim();
+  const ids = [...state.selectedAccountIds];
+  if (!message) {
+    errorEl.textContent = "Write a message first.";
+    errorEl.hidden = false;
+    return;
+  }
+  if (!ids.length) {
+    errorEl.textContent = "Nothing selected.";
+    errorEl.hidden = false;
+    return;
+  }
+
+  const btn = document.getElementById("bulk-clarify-send-btn");
+  btn.disabled = true;
+  btn.textContent = "Sending…";
+  try {
+    const result = await sendBulkClarification(ids, message);
+    resultEl.textContent = `Sent to ${result.sent_to.length} account(s), ${result.delivered_via_telegram.length} delivered over Telegram${result.not_found.length ? `, ${result.not_found.length} not found` : ""}.`;
+    resultEl.hidden = false;
+    toast(`Clarification sent to ${result.sent_to.length} account(s).`);
+    state.selectedAccountIds.clear();
+    renderAccountGrid();
+  } catch (err) {
+    errorEl.textContent = err.message;
+    errorEl.hidden = false;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Send to all selected";
+  }
+});
+
 function renderAccountGrid() {
   const list = filteredAccounts();
   const grid = document.getElementById("account-grid");
@@ -647,15 +741,42 @@ function renderAccountGrid() {
   grid.querySelectorAll(".account-card").forEach((card) =>
     card.addEventListener("click", () => openDetail(card.dataset.id))
   );
+  grid.querySelectorAll(".account-select-checkbox").forEach((checkbox) =>
+    checkbox.addEventListener("click", (e) => e.stopPropagation()) // don't also open the card
+  );
+  grid.querySelectorAll(".account-select-checkbox").forEach((checkbox) =>
+    checkbox.addEventListener("change", (e) => {
+      const id = e.target.dataset.id;
+      if (e.target.checked) state.selectedAccountIds.add(id);
+      else state.selectedAccountIds.delete(id);
+      e.target.closest(".account-card-wrap").querySelector(".account-card").classList.toggle("selected", e.target.checked);
+      renderSelectionBar();
+    })
+  );
+  renderSelectionBar();
+}
+
+// Found live, per the product owner's own framing: staff could only ever
+// act on one account at a time (send a reminder, send a clarification) --
+// this is the "who's it for" answer, a real selection an operator builds
+// up across the filtered/sorted grid, not a hidden power-user feature.
+function renderSelectionBar() {
+  const bar = document.getElementById("selection-bar");
+  const count = state.selectedAccountIds.size;
+  bar.hidden = count === 0;
+  if (count > 0) document.getElementById("selection-count").textContent = count;
 }
 
 function accountCardHtml(a) {
   const flagsHtml = a.flags.length
     ? a.flags.map((f) => `<span class="flag-chip ${f.label}" title="${escapeHtml(f.reason)}">${escapeHtml(FLAG_LABELS[f.label] || f.label)}</span>`).join("")
     : `<span class="flag-chip clean">Clean</span>`;
+  const isSelected = state.selectedAccountIds.has(a.account_id);
 
   return `
-  <button class="account-card" data-id="${a.account_id}">
+  <div class="account-card-wrap">
+  <input type="checkbox" class="account-select-checkbox" data-id="${a.account_id}" ${isSelected ? "checked" : ""} aria-label="Select ${escapeHtml(a.borrower_name)}" />
+  <button class="account-card ${isSelected ? "selected" : ""}" data-id="${a.account_id}">
     <div class="account-top">
       <div class="avatar" style="${avatarStyle(a.account_id)}">${initials(a.borrower_name)}</div>
       <div class="account-names">
@@ -676,7 +797,8 @@ function accountCardHtml(a) {
       <span>${a.account_id}</span>
       <span class="dpd ${a.days_past_due > 0 ? "overdue" : ""}">${a.days_past_due > 0 ? `${a.days_past_due}d past due` : "current"}</span>
     </div>
-  </button>`;
+  </button>
+  </div>`;
 }
 
 document.getElementById("search-input").addEventListener("input", (e) => {

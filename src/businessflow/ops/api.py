@@ -859,6 +859,64 @@ async def send_clarification_request(account_id: str, body: ClarificationRequest
     return ClarificationRequestOut(**latest)
 
 
+class BulkClarificationIn(BaseModel):
+    account_ids: list[str]
+    message: str
+
+
+class BulkClarificationOut(BaseModel):
+    sent_to: list[str]
+    delivered_via_telegram: list[str]
+    not_found: list[str]
+
+
+# An explicit, bounded cap on a single bulk send -- an ops person picking a
+# whole filtered view (e.g. "everyone overdue") is a real, expected use, but
+# an unbounded fan-out of real Telegram sends from one click is a real (if
+# modest) outage/spam surface, not something worth allowing unbounded.
+_MAX_BULK_CLARIFICATION_ACCOUNTS = 50
+
+
+@app.post(
+    "/clarification-requests/bulk", response_model=BulkClarificationOut, dependencies=[Depends(require_api_key)]
+)
+async def send_bulk_clarification(body: BulkClarificationIn):
+    """Sends ONE already-written message, verbatim, to every account in
+    account_ids -- deliberately not an LLM draft per account (that's
+    grounded in a single account's own flags, see draft_clarification;
+    fanning that out to N accounts would mean N real Groq calls for one
+    click, adding real cost/latency and, per this project's own
+    experience, real rate-limit risk). An operator wanting personalized
+    wording for one specific account still has the single-account flow.
+
+    Continues past an unknown account_id rather than failing the whole
+    batch -- a stale/typo'd id in a large selection shouldn't block
+    delivery to everyone else; it comes back in not_found instead."""
+    if not body.account_ids:
+        raise HTTPException(status_code=400, detail="account_ids must not be empty")
+    if not body.message.strip():
+        raise HTTPException(status_code=400, detail="message must not be empty")
+    if len(body.account_ids) > _MAX_BULK_CLARIFICATION_ACCOUNTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"at most {_MAX_BULK_CLARIFICATION_ACCOUNTS} accounts per bulk send, got {len(body.account_ids)}",
+        )
+
+    sent_to: list[str] = []
+    delivered_via_telegram: list[str] = []
+    not_found: list[str] = []
+    for account_id in body.account_ids:
+        if store.get_account(account_id) is None:
+            not_found.append(account_id)
+            continue
+        delivered = await notify.notify_clarification_request(account_id, body.message)
+        sent_to.append(account_id)
+        if delivered:
+            delivered_via_telegram.append(account_id)
+
+    return BulkClarificationOut(sent_to=sent_to, delivered_via_telegram=delivered_via_telegram, not_found=not_found)
+
+
 @app.post(
     "/accounts/{account_id}/clarification-requests/mark-resolved",
     response_model=list[ClarificationRequestOut],

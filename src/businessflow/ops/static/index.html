@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/styles.css?v=16" />
+<link rel="stylesheet" href="/static/styles.css?v=17" />
 </head>
 <body>
 
@@ -81,6 +81,14 @@
         <button class="btn btn-approve" id="new-account-btn">+ New account</button>
       </div>
     </section>
+
+    <div class="selection-bar" id="selection-bar" hidden>
+      <span><b id="selection-count">0</b> selected</span>
+      <div class="selection-bar-actions">
+        <button type="button" class="btn" id="selection-clear-btn">Clear</button>
+        <button type="button" class="btn btn-approve" id="selection-clarify-btn">Send clarification…</button>
+      </div>
+    </div>
 
     <section class="account-grid" id="account-grid"></section>
     <p class="empty-state" id="account-empty" hidden>No accounts match this filter.</p>
@@ -193,8 +201,25 @@
   </div>
 </div>
 
+<div id="bulk-clarify-backdrop" class="detail-backdrop" hidden></div>
+<div id="bulk-clarify-modal" class="new-account-modal" hidden>
+  <div class="detail-close" id="bulk-clarify-close">✕</div>
+  <div class="detail-body">
+    <h2 class="modal-title">Send a clarification to <span id="bulk-clarify-count">0</span> accounts</h2>
+    <p class="modal-subtitle">One message, sent as-is to every account currently selected — delivered over Telegram where linked, always logged either way. Not AI-drafted (that's grounded in one account's own flags at a time); write it yourself for a mixed group.</p>
+    <div id="bulk-clarify-recipients" class="bulk-clarify-recipients"></div>
+    <textarea id="bulk-clarify-message" class="bulk-clarify-textarea" rows="5" placeholder="e.g. This is a reminder that your EMI payment is past due -- please respond or make a payment as soon as possible."></textarea>
+    <p class="mini-form-error" id="bulk-clarify-error" hidden></p>
+    <div class="clarify-actions-row">
+      <button type="button" class="btn btn-approve" id="bulk-clarify-send-btn">Send to all selected</button>
+      <button type="button" class="btn btn-reject" id="bulk-clarify-cancel-btn">Cancel</button>
+    </div>
+    <p class="upload-result" id="bulk-clarify-result" hidden></p>
+  </div>
+</div>
+
 <div id="toast" class="toast" hidden></div>
 
-<script src="/static/app.js?v=16"></script>
+<script src="/static/app.js?v=17"></script>
 </body>
 </html>

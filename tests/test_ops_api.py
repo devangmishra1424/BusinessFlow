@@ -510,6 +510,74 @@ def test_call_log_endpoint_rejects_an_invalid_outcome():
     assert response.status_code == 422
 
 
+# --- POST /clarification-requests/bulk -------------------------------------
+
+
+@_pg_skip
+@_ops_key_skip
+def test_bulk_clarification_endpoint_sends_the_same_message_to_every_account(reseed_accounts):
+    response = client.post(
+        "/clarification-requests/bulk",
+        json={"account_ids": ["BF-1001", "BF-1002"], "message": "Please respond about your account."},
+        headers=_auth(),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body["sent_to"]) == {"BF-1001", "BF-1002"}
+    assert body["not_found"] == []
+
+    from businessflow.accounts import store
+
+    for account_id in ("BF-1001", "BF-1002"):
+        latest = store.get_clarification_requests(account_id)[0]
+        assert latest["message"] == "Please respond about your account."
+
+
+@_pg_skip
+@_ops_key_skip
+def test_bulk_clarification_endpoint_continues_past_an_unknown_account(reseed_accounts):
+    response = client.post(
+        "/clarification-requests/bulk",
+        json={"account_ids": ["BF-1001", "BF-9999"], "message": "Please respond."},
+        headers=_auth(),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sent_to"] == ["BF-1001"]
+    assert body["not_found"] == ["BF-9999"]
+
+
+@_ops_key_skip
+def test_bulk_clarification_endpoint_rejects_an_empty_account_list():
+    response = client.post(
+        "/clarification-requests/bulk", json={"account_ids": [], "message": "hello"}, headers=_auth()
+    )
+
+    assert response.status_code == 400
+
+
+@_ops_key_skip
+def test_bulk_clarification_endpoint_rejects_an_empty_message():
+    response = client.post(
+        "/clarification-requests/bulk", json={"account_ids": ["BF-1001"], "message": "   "}, headers=_auth()
+    )
+
+    assert response.status_code == 400
+
+
+@_ops_key_skip
+def test_bulk_clarification_endpoint_rejects_too_many_accounts():
+    response = client.post(
+        "/clarification-requests/bulk",
+        json={"account_ids": [f"BF-{i}" for i in range(60)], "message": "hello"},
+        headers=_auth(),
+    )
+
+    assert response.status_code == 400
+
+
 @_pg_skip
 @_ops_key_skip
 def test_list_open_escalations_reflects_a_real_new_escalation(reseed_accounts):

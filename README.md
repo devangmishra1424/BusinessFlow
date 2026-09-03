@@ -240,11 +240,6 @@ worse than one that lists them:
   through every table and query, per-org ops credentials, and per-org RAG
   scoping -- not just a schema column. Deliberately not built: this is a
   single-tenant proof of concept, not a live multi-customer product yet.
-- **No bulk/multi-select actions on the account grid.** Staff can trigger
-  reminders for the whole filtered view at once (`POST /outbound/run`), but
-  there's no way to select several specific accounts and fan out a
-  clarification request to just them -- one account at a time for anything
-  beyond reminders.
 - End-to-end latency measurement isn't built. A production-grade frontend
   design pass beyond the current functional dashboards, and horizontal
   scaling, are out of scope for a project at this size.
