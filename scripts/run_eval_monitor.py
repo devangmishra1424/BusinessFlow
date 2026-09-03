@@ -1,13 +1,23 @@
-"""Real, standalone scheduler for nightly eval regression monitoring --
-same "long-running local process, wakes at a fixed daily hour" pattern as
-run_outbound_scheduler.py (see that module's docstring for why a cloud
-cron isn't an option for this project yet). Runs a fixed, fast subset of
-eval/*.py's own real benchmarks against real Groq/Postgres/RAG -- each one
-already knows how to compare itself against its own run history and flag
-a regression (eval/tool_scoring.py's record_run_history/
+"""One-shot nightly eval regression check -- triggered by
+businessflow-eval-monitor.timer (systemd, OnCalendar=*-*-* 21:00:00 UTC),
+NOT an always-on resident process. Runs a fixed, fast subset of eval/*.py's
+own real benchmarks against real Groq/Postgres/RAG -- each one already
+knows how to compare itself against its own run history and flag a
+regression (eval/tool_scoring.py's record_run_history/
 print_regression_delta). The only thing genuinely missing before this was
 someone -- or something -- actually running them daily and looking at the
 answer, instead of only on a human's own manual `python -m eval.foo`.
+
+Deliberately NOT a resident sleep-loop like run_outbound_scheduler.py:
+this needs the full torch/transformers/TTS/ASR/RAG stack loaded (hundreds
+of MB of import weight before any real inference even starts) to do
+anything at all, and it only actually needs to DO anything once a night.
+Found live: keeping that loaded 24/7 as a 5th always-on service, on a VM
+with only 3.8GB total RAM, was a real, direct contributor to the kernel
+OOM-killing a DIFFERENT, borrower-facing service (businessflow-bot) mid-
+conversation -- see the timer/service unit files this module's own
+deploy notes reference. A one-shot process that starts, runs, and exits
+holds that memory for a few minutes a night instead of all day.
 
 wer_benchmark.py and retrieval_benchmark.py are deliberately excluded:
 wer_benchmark needs the MUCS dataset checked out locally (not present on
@@ -24,26 +34,29 @@ crying wolf nightly; see that module's own docstring. This suite needs no
 Groq/Postgres at all (TTS + a local SQUIM model only), so it still runs
 even on a night the other four can't reach Groq.
 
-Runs at 21:00 UTC (~2:30am IST) -- deliberately off-peak, so this suite's
-own real Groq calls a night don't compete with real borrower conversations
-for the same shared per-minute/per-day quota that has genuinely run dry
-before (see outbound/run.py's own history with it).
+Deploy (VM, one-time setup):
+  businessflow-eval-monitor.service -- Type=oneshot, no [Install]/Restart=
+    (a oneshot unit that "fails" every night would be noise; a genuine
+    failure inside is already caught per-suite by run_all_suites and
+    logged/alerted, not left to systemd's own failure handling).
+  businessflow-eval-monitor.timer -- OnCalendar=*-*-* 21:00:00 UTC,
+    Persistent=true (catches up on the next boot if the VM was down
+    exactly at 21:00), WantedBy=timers.target.
+  `sudo systemctl daemon-reload && sudo systemctl enable --now
+  businessflow-eval-monitor.timer` -- do NOT enable the .service itself
+  (the timer activates it; enabling both double-registers the same unit
+  with multi-user.target for no reason).
 
-Run: python -m scripts.run_eval_monitor
+Run manually: python -m scripts.run_eval_monitor
 """
 
 import logging
-import time
-from datetime import datetime, timedelta, timezone
 
 from businessflow.outbound.send import send_ops_alert
 from eval import latency_benchmark, reasoning_accuracy, red_team, tool_calling_benchmark, voice_naturalness_benchmark
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
-
-_RUN_HOUR_UTC = 21
-_POLL_INTERVAL_SECONDS = 30 * 60  # wake up at least this often to check
 
 _SUITES = [
     ("tool_calling_benchmark", tool_calling_benchmark.main),
@@ -52,13 +65,6 @@ _SUITES = [
     ("latency_benchmark", latency_benchmark.main),
     ("voice_naturalness_benchmark", voice_naturalness_benchmark.main),
 ]
-
-
-def _next_run_time(now: datetime) -> datetime:
-    candidate = now.replace(hour=_RUN_HOUR_UTC, minute=0, second=0, microsecond=0)
-    if candidate <= now:
-        candidate += timedelta(days=1)
-    return candidate
 
 
 def run_all_suites() -> dict[str, list[str]]:
@@ -86,35 +92,26 @@ def run_all_suites() -> dict[str, list[str]]:
 
 
 def main() -> None:
-    logger.info("eval monitor started -- nightly regression check fires at %02d:00 UTC", _RUN_HOUR_UTC)
-    while True:
-        now = datetime.now(timezone.utc)
-        next_run = _next_run_time(now)
-        time.sleep(max(min((next_run - now).total_seconds(), _POLL_INTERVAL_SECONDS), 1))
+    """Runs every suite exactly once, alerts if anything regressed, then
+    returns -- systemd's timer owns WHEN this runs, not this function.
+    A genuine, unexpected failure here (not an individual suite's own
+    failure, already caught inside run_all_suites) propagates and this
+    process exits non-zero -- visible in `systemctl status`/journalctl
+    for that run, not silently swallowed into "will retry tomorrow" the
+    way the old resident loop's own outer try/except used to."""
+    logger.info("running nightly eval regression check")
+    regressions = run_all_suites()
 
-        if datetime.now(timezone.utc) < next_run:
-            continue  # woke up early for a routine poll, not the actual run time yet
+    if not regressions:
+        logger.info("nightly eval check: no regressions")
+        return
 
-        logger.info("running nightly eval regression check")
-        try:
-            regressions = run_all_suites()
-        except Exception:
-            # Shouldn't happen -- run_all_suites already catches per-suite --
-            # but a long-running process still must not die outright over
-            # something unexpected in the loop itself.
-            logger.exception("nightly eval regression check failed outright -- will retry at the next scheduled run")
-            continue
-
-        if not regressions:
-            logger.info("nightly eval check: no regressions")
-            continue
-
-        message = "BusinessFlow eval regression detected:\n" + "\n".join(
-            f"- {suite}: {', '.join(metrics)}" for suite, metrics in regressions.items()
-        ) + "\n\nCheck eval/results/<suite>_history.jsonl or re-run `python -m eval.<suite>` to investigate."
-        logger.error(message)
-        if not send_ops_alert(message):
-            logger.warning("regression alert could not be delivered via Telegram (OPS_ALERT_TELEGRAM_CHAT_ID unset or delivery failed) -- see the ERROR line above instead")
+    message = "BusinessFlow eval regression detected:\n" + "\n".join(
+        f"- {suite}: {', '.join(metrics)}" for suite, metrics in regressions.items()
+    ) + "\n\nCheck eval/results/<suite>_history.jsonl or re-run `python -m eval.<suite>` to investigate."
+    logger.error(message)
+    if not send_ops_alert(message):
+        logger.warning("regression alert could not be delivered via Telegram (OPS_ALERT_TELEGRAM_CHAT_ID unset or delivery failed) -- see the ERROR line above instead")
 
 
 if __name__ == "__main__":

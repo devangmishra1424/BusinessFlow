@@ -207,6 +207,24 @@ def test_sending_credentials_with_a_wrong_key_does_not_verify(reseed_accounts):
     assert "doesn't match" in response.json()["reply"]
 
 
+@_pg_skip
+def test_resending_credentials_on_an_already_verified_conversation_does_not_reach_the_llm(reseed_accounts):
+    # Found live (Telegram, same underlying gap here): an already-verified
+    # session that gets a redundant "<account_id> <key>" message forwarded
+    # it straight to the LLM as ordinary text -- which pattern-matched the
+    # bare 6-digit number in a financial conversation and hallucinated a
+    # payment intent. Must short-circuit instead, same as verification does.
+    conversation_id = _start_verified_conversation("BF-1001", "482913")
+
+    response = client.post(f"/conversations/{conversation_id}/messages", json={"message": "BF-1001 482913"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "already verified" in body["reply"]
+    assert "BF-1001" in body["reply"]
+    assert body["tool_calls"] == []
+
+
 def test_typing_wrong_credentials_mid_chat_is_rate_limited_same_as_conversation_start(monkeypatch):
     # This is the SECOND real entry point for the same account_id-guessing
     # gap /conversations already guards -- a borrower (or attacker) can

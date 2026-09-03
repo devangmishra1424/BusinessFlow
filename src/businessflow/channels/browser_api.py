@@ -417,6 +417,19 @@ def _process_text_turn(conversation_id: str, session: dict, text: str, client_ip
     conversation's lock (see _get_conversation_lock's comment for the race
     this closes)."""
     with _get_conversation_lock(conversation_id):
+        # Found live (Telegram, same underlying gap here): an already-
+        # verified session that gets a redundant "<account_id> <key>"
+        # message forwarded it straight to the LLM as ordinary text, with
+        # no idea it was ever a credentials pair -- the model pattern-
+        # matched the bare 6-digit number in a financial conversation and
+        # hallucinated a payment intent. Short-circuit before it ever
+        # reaches run_turn_with_memory, same as the verification branch below.
+        if session["account_id"] is not None and looks_like_credentials(text):
+            return SendMessageResponse(
+                reply=f"You're already verified as account {session['account_id']} -- what can I help you with?",
+                tool_calls=[],
+            )
+
         # An anonymous session can still verify mid-conversation by sending
         # "<account_id> <6-digit key>" as a plain message -- the same pattern
         # telegram_bot.py already handles (see channels/credentials.py). Found

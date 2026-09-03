@@ -131,6 +131,61 @@ def test_correct_credentials_verify_session_without_an_llm_call(reseed_accounts)
 
 
 @_pg_skip
+def test_resending_credentials_on_an_already_verified_session_does_not_reach_the_llm(reseed_accounts):
+    # Found live: an already-verified borrower who (redundantly) re-sent
+    # "BF-1001 482913" got it forwarded straight to the LLM as an ordinary
+    # message, with no idea it was ever a credentials pair -- the model
+    # pattern-matched the bare 6-digit number in a financial conversation
+    # and hallucinated a payment intent instead. Must short-circuit here,
+    # exactly like the real verification branch does, and touch neither
+    # the session's account_id nor its message history.
+    chat_id = 900007
+    handle_incoming_message(chat_id, "BF-1001 482913")
+    messages_before = list(_sessions[chat_id]["messages"])
+
+    reply = handle_incoming_message(chat_id, "BF-1001 482913")
+
+    assert "already verified" in reply
+    assert "BF-1001" in reply
+    assert _sessions[chat_id]["account_id"] == "BF-1001"
+    assert _sessions[chat_id]["messages"] == messages_before
+
+
+@_pg_skip
+@_groq_skip
+def test_a_fresh_process_rehydrates_a_previously_verified_chat(reseed_accounts):
+    # Simulates exactly the failure mode found live: the in-memory session
+    # is gone (a deploy restart, or an OOM kill -- chat_id is deliberately
+    # NOT in _sessions here) but the durable telegram_chat_id -> account_id
+    # mapping written at the ORIGINAL verification survives it. An ordinary
+    # follow-up message must resume as BF-1001, not demand re-verification.
+    from businessflow.accounts import store
+
+    chat_id = 900008
+    store.set_telegram_chat_id("BF-1001", chat_id)
+    assert chat_id not in _sessions
+
+    reply = handle_incoming_message(chat_id, "How many months do I have left on my loan?")
+
+    assert reply.startswith("Welcome back -- I've resumed account BF-1001.")
+    assert _sessions[chat_id]["account_id"] == "BF-1001"
+
+
+@_pg_skip
+@_groq_skip
+def test_a_never_verified_chat_id_still_gets_a_genuinely_anonymous_session(reseed_accounts):
+    # No durable mapping exists for this chat_id at all -- must fall back
+    # to today's existing anonymous-chat behavior, unchanged, not treat
+    # "no mapping found" as an error or a false rehydration.
+    chat_id = 900009
+
+    reply = handle_incoming_message(chat_id, "What documents do I need to close out my loan early?")
+
+    assert not reply.startswith("Welcome back")
+    assert _sessions[chat_id]["account_id"] is None
+
+
+@_pg_skip
 def test_correct_credentials_persist_the_telegram_chat_id_on_the_account(reseed_accounts):
     # Durable, unlike _sessions above -- a decision made later on the ops
     # dashboard (approving/rejecting a restructuring request) needs this

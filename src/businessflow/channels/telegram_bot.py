@@ -62,6 +62,7 @@ from businessflow.agent.loop import (
     AccountLockedError,
     run_turn_with_memory,
     start_conversation,
+    start_conversation_with_recap,
     verify_and_start_conversation,
 )
 from businessflow.audio.asr import transcribe
@@ -129,6 +130,17 @@ def handle_incoming_message(chat_id: int, text: str) -> str:
     Switching AWAY from an already-verified account still needs /reset,
     unchanged -- that's a different, deliberate tradeoff, not this bug."""
     session = _sessions.get(chat_id)
+    welcome_back_prefix = ""  # only set (once) by the rehydration branch below
+
+    # Found live: an already-verified borrower who (redundantly) re-sent
+    # "BF-1007 892160" got it forwarded straight to the LLM as an ordinary
+    # message below -- with no idea it was ever a credentials pair, the
+    # model pattern-matched a bare 6-digit number in a financial
+    # conversation and hallucinated a payment intent ("would you like to
+    # make a payment of ₹892,160?"). Caught here, before it ever reaches
+    # run_turn_with_memory, same as the real verification branch below.
+    if session is not None and session.get("account_id") is not None and looks_like_credentials(text):
+        return f"You're already verified as account {session['account_id']} -- what can I help you with?"
 
     if session is None or session.get("account_id") is None:
         if looks_like_credentials(text):
@@ -153,12 +165,29 @@ def handle_incoming_message(chat_id: int, text: str) -> str:
             return f"Verified -- I've pulled up account {account_id}. What can I help you with?"
 
         if session is None:
-            # Anonymous/general chat: create the session, then treat this
-            # message as the real first turn by falling through to the
-            # shared existing-session logic below.
-            language = _language_choice.get(chat_id, "en")
-            conversation = start_conversation(language, account_id=None)
-            _sessions[chat_id] = {"account_id": None, "language": language, "messages": conversation}
+            # A fresh process (a deploy restart, or -- found live -- an
+            # OOM kill) means _sessions has nothing for this chat_id even
+            # though it may have verified before the restart -- the
+            # in-memory session that fact lived in is gone, but the
+            # durable telegram_chat_id -> account_id mapping
+            # (store.set_telegram_chat_id, written once at real
+            # verification time) survives it. Rehydrating from that turns
+            # "please verify again" into "welcome back" for exactly the
+            # failure mode a real OOM kill caused live, mid-conversation,
+            # without re-asking for the access key. Not a new trust
+            # boundary -- see get_account_by_telegram_chat_id's own
+            # docstring for why. Falls back to a genuinely anonymous
+            # session, unchanged, if this chat_id was never verified.
+            rehydrated = store.get_account_by_telegram_chat_id(chat_id)
+            if rehydrated is not None:
+                language = _language_choice.get(chat_id, rehydrated.language_preference)
+                conversation = start_conversation_with_recap(language, rehydrated.account_id)
+                _sessions[chat_id] = {"account_id": rehydrated.account_id, "language": language, "messages": conversation}
+                welcome_back_prefix = f"Welcome back -- I've resumed account {rehydrated.account_id}.\n\n"
+            else:
+                language = _language_choice.get(chat_id, "en")
+                conversation = start_conversation(language, account_id=None)
+                _sessions[chat_id] = {"account_id": None, "language": language, "messages": conversation}
             session = _sessions[chat_id]
         # else: an anonymous session already exists and this message just
         # didn't look like credentials -- keep using it as-is below.
@@ -180,7 +209,7 @@ def handle_incoming_message(chat_id: int, text: str) -> str:
         logger.warning("Groq API error for chat_id=%s: %s", chat_id, e)
         return "The LLM provider had an error on its end -- please try again."
     session["messages"] = updated_conversation
-    return reply
+    return welcome_back_prefix + reply
 
 
 def _decode_and_transcribe_voice_note(raw_bytes: bytes, language: str | None) -> str | None:

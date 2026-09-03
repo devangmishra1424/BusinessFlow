@@ -221,16 +221,34 @@ uvicorn businessflow.ops.api:app --reload --port 8001
 # Outbound reminder scheduler (real, always-on -- fires the daily pass itself)
 python -m scripts.run_outbound_scheduler
 
-# Eval regression monitor (real, always-on -- nightly tool-calling/reasoning/
-# red-team/latency check against real Groq+Postgres+RAG, alerts on regression)
+# Eval regression monitor (one-shot -- tool-calling/reasoning/red-team/latency/
+# voice-naturalness check against real Groq+Postgres+RAG+TTS, alerts on
+# regression; see scripts/run_eval_monitor.py's own docstring for why this is
+# NOT a resident process)
 python -m scripts.run_eval_monitor
 ```
 
-In production (the live links above) these five run as separate systemd
-services on a small Azure VM behind Caddy for automatic HTTPS, with GitHub
-Actions deploying on every push to `main` that passes CI (a forced-command
-SSH key on the VM only ever runs its own fixed pull-and-restart sequence, so
-a leaked deploy key can't run arbitrary commands on the box).
+In production (the live links above) these run as separate systemd units on
+a small Azure VM behind Caddy for automatic HTTPS: four always-on services
+(chat, ops, bot, outbound scheduler) plus the eval monitor as a `systemd`
+**timer** (`businessflow-eval-monitor.timer`, `OnCalendar=*-*-* 21:00:00
+UTC`) firing a one-shot service, not a 5th resident process. Found live: a
+resident 5th process holding the full torch/ASR/TTS/RAG stack in memory
+24/7, on a VM with only 3.8GB total RAM, was a direct contributor to the
+kernel OOM-killing the (unrelated, borrower-facing) Telegram bot mid-
+conversation -- a one-shot timer holds that memory for a few minutes a
+night instead of all day. GitHub Actions deploys on every push to `main`
+that passes CI (a forced-command SSH key on the VM only ever runs its own
+fixed pull-and-restart sequence, so a leaked deploy key can't run arbitrary
+commands on the box).
+
+The Telegram bot's own session state is otherwise still in-memory and not
+immune to being restarted (a deploy, or that same OOM class of event) --
+but it's no longer catastrophic: a borrower who already verified is
+recognized again from the durable `telegram_chat_id` column
+(`accounts.get_account_by_telegram_chat_id`) on their very next message,
+with a "Welcome back" reply, instead of being asked to re-verify from
+scratch.
 
 ## Testing
 

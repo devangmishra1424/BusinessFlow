@@ -68,6 +68,19 @@ def test_set_telegram_chat_id_persists_on_the_real_account_row(reseed_accounts):
     assert store.get_account_or_raise("BF-1001").telegram_chat_id == 900123
 
 
+def test_get_account_by_telegram_chat_id_finds_the_real_account(reseed_accounts):
+    store.set_telegram_chat_id("BF-1001", 900124)
+
+    account = store.get_account_by_telegram_chat_id(900124)
+
+    assert account is not None
+    assert account.account_id == "BF-1001"
+
+
+def test_get_account_by_telegram_chat_id_returns_none_for_an_unmapped_chat(reseed_accounts):
+    assert store.get_account_by_telegram_chat_id(999999999) is None
+
+
 def test_approve_restructuring_applies_the_real_proposed_changes(reseed_accounts):
     from businessflow.tools.escalation_tools import propose_restructuring
 

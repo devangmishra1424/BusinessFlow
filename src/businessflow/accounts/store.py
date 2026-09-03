@@ -576,6 +576,23 @@ def set_telegram_chat_id(account_id: str, chat_id: int) -> None:
     )
 
 
+def get_account_by_telegram_chat_id(chat_id: int) -> Account | None:
+    """The reverse of set_telegram_chat_id -- lets telegram_bot.py
+    recognize "this chat already proved it owns an account" WITHOUT the
+    in-memory session that fact used to live in exclusively. Needed
+    because that in-memory session (_sessions, keyed by chat_id) is wiped
+    on every process restart (a deploy, or -- found live -- an OOM kill),
+    while this column survives one. Not a new trust boundary: this
+    mapping is only ever written once a real access-key check already
+    passed (see set_telegram_chat_id's own docstring), and the ops
+    dashboard already sends real restructuring-decision notifications to
+    whatever chat_id it currently holds with no further re-verification --
+    this just extends that same, already-accepted trust to resuming a
+    text conversation instead of only outbound pushes."""
+    row = get_connection().execute("select * from accounts where telegram_chat_id = %s", (chat_id,)).fetchone()
+    return _row_to_account(row) if row else None
+
+
 class ExtraPaymentDecisionRequiredError(ValueError):
     """Raised when amount doesn't cover what's actually due this cycle and
     the caller didn't say whether to credit it toward the next cycle. See
