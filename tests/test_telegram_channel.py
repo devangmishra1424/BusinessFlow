@@ -159,6 +159,15 @@ def test_a_fresh_process_rehydrates_a_previously_verified_chat(reseed_accounts):
     # NOT in _sessions here) but the durable telegram_chat_id -> account_id
     # mapping written at the ORIGINAL verification survives it. An ordinary
     # follow-up message must resume as BF-1001, not demand re-verification.
+    #
+    # BF-1001 is seeded with language_preference="hinglish" (see
+    # scripts/seed_accounts.py) -- exactly the value that broke this in a
+    # real CI run (KeyError('hinglish') from build_system_prompt, which
+    # only supports "en"/"hi" runtime codes; language_preference is a
+    # separate 3-way business field, not a runtime language code -- see
+    # outbound/compose.py's own comment on the same distinction). Kept on
+    # BF-1001 rather than switched to an "en"/"hi" account so this stays a
+    # real regression test for that exact failure, not just a happy path.
     from businessflow.accounts import store
 
     chat_id = 900008
@@ -169,6 +178,7 @@ def test_a_fresh_process_rehydrates_a_previously_verified_chat(reseed_accounts):
 
     assert reply.startswith("Welcome back -- I've resumed account BF-1001.")
     assert _sessions[chat_id]["account_id"] == "BF-1001"
+    assert _sessions[chat_id]["language"] == "en"  # never "hinglish" -- see comment above
 
 
 @_pg_skip

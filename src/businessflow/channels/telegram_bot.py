@@ -180,7 +180,17 @@ def handle_incoming_message(chat_id: int, text: str) -> str:
             # session, unchanged, if this chat_id was never verified.
             rehydrated = store.get_account_by_telegram_chat_id(chat_id)
             if rehydrated is not None:
-                language = _language_choice.get(chat_id, rehydrated.language_preference)
+                # NOT rehydrated.language_preference -- that account field
+                # is a 3-way business preference ("hi"|"en"|"hinglish",
+                # see accounts/models.py), but the live turn-based
+                # conversation only ever supports "en"/"hi" runtime codes
+                # (agent/client.py's own _LANGUAGE_INSTRUCTIONS has no
+                # "hinglish" entry -- confirmed live via a real CI failure:
+                # KeyError('hinglish') the first time this path actually
+                # ran against a real "hinglish"-preference seeded account).
+                # The real verification branch above never reads this
+                # account field either, for the same reason -- match it.
+                language = _language_choice.get(chat_id, "en")
                 conversation = start_conversation_with_recap(language, rehydrated.account_id)
                 _sessions[chat_id] = {"account_id": rehydrated.account_id, "language": language, "messages": conversation}
                 welcome_back_prefix = f"Welcome back -- I've resumed account {rehydrated.account_id}.\n\n"
