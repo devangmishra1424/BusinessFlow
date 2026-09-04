@@ -23,7 +23,20 @@ from businessflow.tools import mcp
 
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_ROUNDS = 5  # a hard cap -- never loop on tool calls forever
+# A hard cap -- never loop on tool calls forever. Was 5; found live that
+# this is what let ONE confused turn (a badly garbled ASR transcript,
+# which the model never settled an answer for) burn through every
+# configured Groq key's independent per-minute budget by itself -- each
+# round resends the full system prompt + all tool schemas (~5,000+
+# tokens on its own), so 5 rounds plus the MAX_TOOL_ROUNDS-forced final
+# answer is up to 6 full-price completion calls in one turn, enough to
+# exhaust several 8,000-token/minute keys in sequence. Every real logged
+# turn in eval/results/latency_benchmark.json -- including scenarios
+# literally named "multi_tool_settlement" -- made at most 1 tool call
+# (2 rounds) before answering; nothing in this project's actual usage
+# has ever needed more. 3 keeps real headroom above that observed
+# maximum while cutting the worst-case burn nearly in half.
+MAX_TOOL_ROUNDS = 3
 
 # Found live: a long-lived, never-/reset session (70+ real turns on one
 # account across several days, via Telegram) resends its ENTIRE history on
