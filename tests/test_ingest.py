@@ -10,11 +10,15 @@ own ingestion tests already use.
 import os
 import tempfile
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
+from businessflow.accounts.db import get_connection
 from businessflow.rag.ingest import ingest_document, purge_orphaned_chunks, purge_superseded_chunks
-from businessflow.rag.store import backdate_chunks, delete_chunks_for_document, get_chunk_ids_for_document
+from businessflow.rag.store import backdate_chunks, delete_chunks_for_document, get_chunk_ids_for_document, normalize_source_document
+
+_FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("DATABASE_URL"),
@@ -92,3 +96,37 @@ def test_purge_orphaned_chunks_never_touches_a_document_still_on_disk():
     finally:
         delete_chunks_for_document(temp_path)
         os.unlink(temp_path)
+
+
+def test_ingest_document_extracts_text_from_a_scanned_image_only_pdf_via_ocr():
+    """Docling's bundled OCR engine (RapidOCR) actually runs and correctly
+    reads a genuinely image-only PDF -- no embedded text layer at all, the
+    fixture is a plain PIL-rendered image saved as a PDF (a raster image
+    in the content stream, no text operators -- mechanically identical to
+    a real scanned document, not a real-world scan itself).
+
+    Found live while checking whether OCR was a real gap for this project
+    (assumed missing, listed as a Tier 3 item to build): it wasn't --
+    DocumentConverter() already runs with docling's own do_ocr=True default,
+    confirmed both via extract_document_text() and this full ingest_document()
+    path, then cleaned up. This test exists so that fact stays true, not
+    just observed once -- a future docling upgrade or config change that
+    silently disables OCR would otherwise have no test coverage to catch it."""
+    fixture_path = str(_FIXTURES_DIR / "scanned_loan_agreement.pdf")
+    try:
+        chunks_stored = ingest_document(fixture_path, document_type="loan_agreement", account_id="BF-1001")
+        assert chunks_stored == 1
+
+        rows = get_connection().execute(
+            "select document_text from document_chunks where source_document = %s and superseded_at is null",
+            (normalize_source_document(fixture_path),),
+        ).fetchall()
+        assert len(rows) == 1
+        text = rows[0]["document_text"]
+        # Every real figure from the source image -- confirms OCR actually
+        # read the numbers correctly, not just "found some text somewhere".
+        assert "14.75" in text
+        assert "500000" in text
+        assert "36" in text
+    finally:
+        delete_chunks_for_document(fixture_path)

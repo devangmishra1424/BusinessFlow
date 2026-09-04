@@ -56,7 +56,12 @@ per-account uploaded documents (a signed loan agreement, say), backed by
 pgvector on the same Postgres project as every other table rather than a
 side vector store nobody keeps in sync. LLM-based query translation was
 built and measured against this exact KB: recall@1 went 0.61 -> 0.79 on
-Hindi/Hinglish queries once it shipped. Query expansion and a higher
+Hindi/Hinglish queries once it shipped. Document ingestion (Docling)
+handles a genuinely scanned, image-only upload too -- OCR isn't a bolt-on,
+it's Docling's own bundled engine (RapidOCR), confirmed live end-to-end
+(a real image-only PDF, correctly OCR'd, chunked, embedded, and retrievable)
+and locked in by a real regression test (`tests/test_ingest.py`), not just
+assumed to work because a library flag defaults to on. Query expansion and a higher
 reasoning-effort setting were also built and A/B tested against real traffic
 -- both showed no clear win at this scale, so both stayed off by default
 rather than shipped on faith. That earlier round was a manual, run-then-
