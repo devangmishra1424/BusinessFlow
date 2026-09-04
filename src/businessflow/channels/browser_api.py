@@ -34,6 +34,7 @@ share state or a port.
 """
 
 import io
+import logging
 import threading
 import uuid
 from datetime import date, datetime
@@ -73,6 +74,8 @@ from businessflow.tools.escalation_tools import escalate_to_human
 from businessflow.tools.payment_tools import generate_payment_link
 
 _MAX_VOICE_NOTE_SECONDS = 120  # same bound as telegram_bot.py -- an explicit cap on ASR compute, not an unbounded wait
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="BusinessFlow Chat API")
 
@@ -486,6 +489,17 @@ def _process_text_turn(conversation_id: str, session: dict, text: str, client_ip
         except groq.APIStatusError as e:
             session["messages"].pop()
             raise HTTPException(status_code=502, detail=f"upstream LLM provider error: {e.message}") from e
+        except groq.APIConnectionError as e:
+            # A real gap found live: APIConnectionError (network drop, DNS
+            # failure) and its subclass APITimeoutError are siblings of
+            # APIStatusError, not subclasses of it -- groq's own
+            # _exceptions.py confirms this -- so neither except clause
+            # above ever caught them. Left uncaught, this both returned an
+            # unhandled 500 AND skipped the pop() cleanup, stranding the
+            # just-appended user message with no paired reply for every
+            # later turn to inherit.
+            session["messages"].pop()
+            raise HTTPException(status_code=502, detail=f"could not reach the LLM provider: {e}") from e
         session["messages"] = updated_conversation
 
         # Computed from the RETURNED conversation, not a pre-call
@@ -619,8 +633,20 @@ def speech_endpoint(conversation_id: str, req: SpeechRequest):
         raise HTTPException(status_code=400, detail="text must not be empty")
 
     language = session["language"]
-    speech = speak_hindi(verbalize(req.text, language)) if language == "hi" else speak_english(verbalize(req.text, language))
-    return Response(content=encode_ogg_opus(speech), media_type="audio/ogg")
+    # Found live: this had no error handling at all, unlike telegram_bot.py's
+    # _send_spoken_reply -- which wraps the identical speak_hindi/speak_english/
+    # encode_ogg_opus calls in a broad except for exactly this reason (VAD/
+    # TTS/network can all fail in ways worth treating identically here).
+    # Matching that same deliberate, already-established pattern rather than
+    # a narrower catch: an unhandled failure here was a bare 500 with nothing
+    # logged server-side to explain it.
+    try:
+        speech = speak_hindi(verbalize(req.text, language)) if language == "hi" else speak_english(verbalize(req.text, language))
+        audio_bytes = encode_ogg_opus(speech)
+    except Exception as e:
+        logger.warning("TTS synthesis failed for conversation_id=%s: %s", conversation_id, e, exc_info=True)
+        raise HTTPException(status_code=502, detail="text-to-speech is temporarily unavailable -- please try again") from e
+    return Response(content=audio_bytes, media_type="audio/ogg")
 
 
 @app.get("/conversations/{conversation_id}/dashboard", response_model=DashboardResponse)

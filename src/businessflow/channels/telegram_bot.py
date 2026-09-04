@@ -54,6 +54,7 @@ import torch
 import torchaudio
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ChatAction
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from businessflow.accounts import store
@@ -63,6 +64,7 @@ from businessflow.agent.loop import (
     run_turn_with_memory,
     start_conversation,
     start_conversation_with_recap,
+    update_conversation_language,
     verify_and_start_conversation,
 )
 from businessflow.audio.asr import transcribe
@@ -218,6 +220,18 @@ def handle_incoming_message(chat_id: int, text: str) -> str:
         session["messages"].pop()
         logger.warning("Groq API error for chat_id=%s: %s", chat_id, e)
         return "The LLM provider had an error on its end -- please try again."
+    except groq.APIConnectionError as e:
+        # A real gap found live: APIConnectionError (network drop, DNS
+        # failure) and its subclass APITimeoutError are siblings of
+        # APIStatusError, not subclasses of it -- neither except clause
+        # above ever caught them. Left uncaught, this propagated all the
+        # way past python-telegram-bot's own dispatcher (main() registers
+        # no add_error_handler), so the borrower got total silence, and
+        # the pop() cleanup never ran, stranding the just-appended user
+        # message with no paired reply for every later turn to inherit.
+        session["messages"].pop()
+        logger.warning("Groq connection error for chat_id=%s: %s", chat_id, e)
+        return "I'm having trouble reaching the LLM provider right now -- please try again shortly."
     session["messages"] = updated_conversation
     return welcome_back_prefix + reply
 
@@ -366,16 +380,24 @@ async def on_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def _set_language(chat_id: int, language: str) -> None:
     # _language_choice alone only affects a FUTURE session (read once at
-    # start_conversation/verify_and_start_conversation time) -- found live
-    # while wiring /language: if a session already exists, /hindi or
-    # /english appeared to work (replied "set") but silently did nothing
-    # to the conversation actually in progress. Also updating the live
-    # session's own language fixes that for all three entry points
-    # (/hindi, /english, /language) at once.
+    # start_conversation/verify_and_start_conversation time). Found live
+    # this was still genuinely broken even after previously updating
+    # session["language"] here: that only affects OTHER things this file
+    # reads it for (the voice-input language hint, which TTS engine a
+    # spoken reply uses) -- the model itself only ever sees the language
+    # instruction baked into conversation[0]'s system prompt, which this
+    # never touched. So the bot would confirm "Hindi set for this
+    # conversation" and then keep replying in whatever language the
+    # conversation actually started in, while session["language"]
+    # silently desynced from that and corrupted the voice-input/output
+    # paths for a borrower still speaking/expecting the original
+    # language. update_conversation_language actually rewrites
+    # conversation[0] to match.
     _language_choice[chat_id] = language
     session = _sessions.get(chat_id)
     if session is not None:
         session["language"] = language
+        update_conversation_language(session["messages"], language, session["account_id"])
 
 
 async def on_hindi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -632,16 +654,38 @@ async def _send_spoken_reply(update: Update, chat_id: int, reply: str) -> None:
     await update.message.reply_voice(voice=voice_bytes)
 
 
+async def _keep_typing(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
+    """Telegram's own 'typing...' indicator only lasts ~5s per send, but a
+    real turn takes 40-55s end to end (measured, see eval/results/
+    latency_benchmark.json) -- found live that a borrower got total
+    silence for that whole window, easily read mid-demo as the bot having
+    hung or ignored the message. Resent every 4s (comfortably inside
+    Telegram's own ~5s expiry) until the surrounding task is cancelled
+    once the real reply is ready. Best-effort: a failure here should
+    never take down the actual turn, just stop showing the indicator."""
+    while True:
+        try:
+            await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        except Exception:
+            logger.warning("send_chat_action failed for chat_id=%s", chat_id, exc_info=True)
+            return
+        await asyncio.sleep(4)
+
+
 async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
-    # See handle_incoming_voice's comment on the same to_thread call --
-    # handle_incoming_message eventually calls agent.loop.run_turn, which
-    # asyncio.run()s internally, and that can't happen from inside a
-    # coroutine already running on this event loop. The lock serializes
-    # this against any voice turn for the same chat that might still be
-    # in flight -- see _get_session_lock.
-    async with _get_session_lock(chat_id):
-        reply = await asyncio.to_thread(handle_incoming_message, chat_id, update.message.text)
+    typing_task = asyncio.create_task(_keep_typing(context, chat_id))
+    try:
+        # See handle_incoming_voice's comment on the same to_thread call --
+        # handle_incoming_message eventually calls agent.loop.run_turn, which
+        # asyncio.run()s internally, and that can't happen from inside a
+        # coroutine already running on this event loop. The lock serializes
+        # this against any voice turn for the same chat that might still be
+        # in flight -- see _get_session_lock.
+        async with _get_session_lock(chat_id):
+            reply = await asyncio.to_thread(handle_incoming_message, chat_id, update.message.text)
+    finally:
+        typing_task.cancel()
     await update.message.reply_text(reply)
     if _voice_preference.get(chat_id):
         await _send_spoken_reply(update, chat_id, reply)
@@ -667,7 +711,11 @@ async def on_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     telegram_file = await voice.get_file()
     language_hint = _sessions.get(chat_id, {}).get("language") or _language_choice.get(chat_id, "en")
 
-    transcript, reply_text = await handle_incoming_voice(chat_id, telegram_file, voice.duration, language_hint)
+    typing_task = asyncio.create_task(_keep_typing(context, chat_id))
+    try:
+        transcript, reply_text = await handle_incoming_voice(chat_id, telegram_file, voice.duration, language_hint)
+    finally:
+        typing_task.cancel()
 
     if transcript is None:
         # Too-long rejection or VAD found no speech -- nothing to speak back as voice.
@@ -707,6 +755,22 @@ async def _register_commands(application: Application) -> None:
     )
 
 
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Registered via application.add_error_handler -- the backstop for any
+    exception a handler above didn't specifically catch (a real Postgres/
+    Supabase connectivity blip during verification, e.g., or any other
+    genuinely unexpected failure). Found live: with no error handler
+    registered at all, python-telegram-bot's own default behavior for an
+    unhandled handler exception is to log it internally and silently drop
+    the update -- the borrower got zero indication anything failed, and
+    had no reason to send /reset since nothing ever told them to. Logged
+    here with the real traceback (never swallowed), and the borrower gets
+    at least a generic acknowledgment instead of total silence."""
+    logger.error("Unhandled exception while processing an update: %s", update, exc_info=context.error)
+    if isinstance(update, Update) and update.effective_message:
+        await update.effective_message.reply_text("Something went wrong on my end -- please try again in a moment.")
+
+
 def main() -> None:
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
@@ -729,6 +793,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(on_callback_query))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_message))
     application.add_handler(MessageHandler(filters.VOICE, on_voice_message))
+    application.add_error_handler(on_error)
 
     application.run_polling()
 

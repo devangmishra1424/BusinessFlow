@@ -318,6 +318,35 @@ def start_conversation(language: str = "en", account_id: str | None = None) -> l
     return [{"role": "system", "content": build_system_prompt(language, account_id, template)}]
 
 
+def update_conversation_language(conversation: list[dict], language: str, account_id: str | None) -> None:
+    """A mid-conversation language switch (Telegram's /hindi, /english,
+    /language, or the inline lang: callback) needs to actually change
+    what the model is instructed to reply in -- found live that it
+    didn't: those handlers only updated their own channel-side state
+    (e.g. session["language"]) and never touched this, so the model kept
+    replying in whatever language the conversation actually started in,
+    directly contradicting the bot's own "Hindi set for this
+    conversation" confirmation. The language instruction is baked into
+    conversation[0]'s system prompt exactly once, at start_conversation
+    time -- nothing in the turn loop or _trim_to_recent_turns ever
+    revisits or regenerates it, so it has to be done explicitly here.
+
+    Mutates conversation[0] in place; a no-op if conversation is empty or
+    doesn't start with a system message. Re-derives the same prompt-
+    version template a verified account was originally bucketed into
+    (bucket_key is deterministic per account_id, so this doesn't re-roll
+    the A/B assignment or re-log a new one) -- an anonymous session has
+    no stable original bucket_key to recover (never stored, by design,
+    see start_conversation's own comment above), so it gets a fresh coin
+    flip instead; anonymous conversations aren't attributed for A/B
+    purposes either way, so that has no real consequence."""
+    if not conversation or conversation[0].get("role") != "system":
+        return
+    bucket_key = account_id or uuid.uuid4().hex
+    _, template = prompt_versions.choose_prompt_version(bucket_key)
+    conversation[0]["content"] = build_system_prompt(language, account_id, template)
+
+
 _sync_loop: asyncio.AbstractEventLoop | None = None
 
 

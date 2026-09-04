@@ -15,6 +15,7 @@ Run: uvicorn businessflow.ops.api:app --reload --port 8001
 default port 8000 -- run both side by side, they're independent apps).
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -697,7 +698,20 @@ async def upload_account_document(
         raise
 
     try:
-        chunks_stored = ingest_document(str(saved_path), document_type=document_type, account_id=account_id)
+        # Found live: this ran directly on the event loop despite the
+        # route being `async def` -- ingest_document does real CPU-bound
+        # work (docling parsing, local embedding), and the extraction
+        # step below makes a genuinely blocking, synchronous Groq HTTP
+        # call. Either one running in-loop blocks EVERY other request
+        # this single server process is handling (this app has no other
+        # worker to fall back to) until it returns -- confirmed live: a
+        # slow/rate-limited extraction call froze the entire ops API,
+        # including plain GETs, until the process was restarted.
+        # asyncio.to_thread moves the blocking work off the event loop
+        # without changing ingest_document/extract_loan_terms themselves.
+        chunks_stored = await asyncio.to_thread(
+            ingest_document, str(saved_path), document_type=document_type, account_id=account_id
+        )
     except ConversionError as e:
         # The extension passed our allow-list check, but the bytes behind
         # it aren't a real, parseable document of that type (corrupt file,
@@ -725,8 +739,12 @@ async def upload_account_document(
     interest_rate_extracted = False
     if document_type == "loan_agreement":
         try:
-            document_text = extract_document_text(str(saved_path))
-            terms = extract_loan_terms(document_text)
+            # Same reasoning as the ingest_document call above -- this
+            # makes a real, synchronous Groq HTTP call that can block the
+            # whole server process for as long as Groq takes to respond
+            # (including a slow rate-limit retry), not just this request.
+            document_text = await asyncio.to_thread(extract_document_text, str(saved_path))
+            terms = await asyncio.to_thread(extract_loan_terms, document_text)
             rate = terms.get("interest_rate_pct")
             if rate is not None:
                 store.set_interest_rate_pct(account_id, rate)

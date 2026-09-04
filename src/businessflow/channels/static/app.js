@@ -253,6 +253,14 @@ function openChatPanel() {
 }
 
 function closeChatPanel() {
+  // Found live: closing the panel mid-recording never stopped the
+  // MediaRecorder/mic stream -- it kept running in the background (mic
+  // stays live, timer keeps firing), and the NEXT mic tap in a brand new
+  // conversation would see it still "recording" and finalize + upload
+  // that stale, orphaned audio instead of starting a fresh one. Safe to
+  // call unconditionally: stopRecording() itself is a no-op when nothing
+  // is actually recording.
+  stopRecording();
   $chatScreen.classList.remove("open");
   $dashboardScreen.classList.remove("chat-open");
   setTimeout(() => {
@@ -275,6 +283,10 @@ function closeChatPanel() {
 // wherever a borrower is, "start over" means the same thing: forget this
 // conversation and go back to the start screen.
 function restartAll() {
+  // Same reasoning as closeChatPanel's stopRecording() call above -- a
+  // recording still in flight when "Start over" is tapped must not be
+  // left running into the new conversation. Safe unconditionally.
+  stopRecording();
   state.conversationId = null;
   state.accountId = null;
   document.getElementById("message-list").innerHTML = "";
@@ -487,13 +499,24 @@ function setRecordingUi(recording) {
   $micBtn.setAttribute("aria-label", recording ? "Stop recording" : "Record voice message");
 }
 
+// Found live: nothing guarded the window between a click and
+// getUserMedia's permission prompt resolving -- a fast double-tap (most
+// likely once permission is already granted, so it resolves almost
+// immediately) could start two concurrent recordings, each overwriting
+// the shared mediaRecorder/micStream variables and leaking the first
+// stream (mic stays live, orphaned MediaRecorder never stopped).
+let startingRecording = false;
+
 async function startRecording() {
-  if (!state.conversationId || state.sending) return;
+  if (!state.conversationId || state.sending || startingRecording) return;
+  startingRecording = true;
   try {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
   } catch (err) {
     addAssistantMessage("Couldn't access your microphone -- please allow microphone access and try again.", [], true);
     return;
+  } finally {
+    startingRecording = false;
   }
 
   recordedChunks = [];
@@ -596,7 +619,7 @@ async function playSpeech(text, buttonEl) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
     });
-    if (!res.ok) throw new Error(`speech request failed (${res.status})`);
+    if (!res.ok) throw new ApiError(res.status, `speech request failed (${res.status})`);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const audioEl = new Audio(url);
@@ -610,7 +633,18 @@ async function playSpeech(text, buttonEl) {
     buttonEl.classList.add("playing");
     await audioEl.play();
   } catch (err) {
+    // Found live: this silently reverted the button to idle with zero
+    // feedback on ANY failure (backend TTS error, expired conversation,
+    // network drop, or a rejected audioEl.play()) -- a borrower tapping
+    // the speaker icon had no way to tell the feature broke versus their
+    // tap just not registering. Matches the same friendly-error pattern
+    // the text/voice-send paths already use.
     buttonEl.classList.remove("loading", "playing");
+    addAssistantMessage(
+      err instanceof ApiError ? friendlyMessageError(err) : "Couldn't play that reply -- please try again.",
+      [],
+      true,
+    );
   }
 }
 
