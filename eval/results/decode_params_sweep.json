@@ -1,0 +1,74 @@
+{
+  "sample_size": 100,
+  "seed": 42,
+  "results": {
+    "current_production": {
+      "decode_kwargs": {
+        "repetition_penalty": 1.3,
+        "no_repeat_ngram_size": 3,
+        "condition_on_previous_text": false
+      },
+      "wer": 0.5317460317460317,
+      "script_consistency_rate": 0.47,
+      "script_distribution": {
+        "latin": 8,
+        "devanagari": 47,
+        "mixed": 45
+      },
+      "elapsed_seconds": 101.0
+    },
+    "wider_beam": {
+      "decode_kwargs": {
+        "repetition_penalty": 1.3,
+        "no_repeat_ngram_size": 3,
+        "condition_on_previous_text": false,
+        "beam_size": 10,
+        "best_of": 10
+      },
+      "wer": 0.5079365079365079,
+      "script_consistency_rate": 0.46,
+      "script_distribution": {
+        "latin": 10,
+        "devanagari": 46,
+        "mixed": 44
+      },
+      "elapsed_seconds": 130.3
+    },
+    "stricter_fallback": {
+      "decode_kwargs": {
+        "repetition_penalty": 1.3,
+        "no_repeat_ngram_size": 3,
+        "condition_on_previous_text": false,
+        "compression_ratio_threshold": 2.0,
+        "log_prob_threshold": -0.5
+      },
+      "wer": 0.5206349206349207,
+      "script_consistency_rate": 0.45,
+      "script_distribution": {
+        "latin": 9,
+        "devanagari": 45,
+        "mixed": 46
+      },
+      "elapsed_seconds": 140.3
+    },
+    "wider_beam_stricter_fallback": {
+      "decode_kwargs": {
+        "repetition_penalty": 1.3,
+        "no_repeat_ngram_size": 3,
+        "condition_on_previous_text": false,
+        "beam_size": 10,
+        "best_of": 10,
+        "compression_ratio_threshold": 2.0,
+        "log_prob_threshold": -0.5
+      },
+      "wer": 0.5087301587301587,
+      "script_consistency_rate": 0.46,
+      "script_distribution": {
+        "latin": 10,
+        "devanagari": 46,
+        "mixed": 44
+      },
+      "elapsed_seconds": 155.0
+    }
+  }
+}

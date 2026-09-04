@@ -44,6 +44,7 @@ kaggle/training_assets.zip
 kaggle/downloaded_model/
 kaggle/wer-benchmark-kernel/output/
 kaggle/splicing_fuel_assets/
+kaggle/domain_codeswitch_tts_assets/
 
 # The downloaded fine-tuned Whisper checkpoint (CTranslate2 export) --
 # a generated model artifact fetched from Kaggle, not source code.
