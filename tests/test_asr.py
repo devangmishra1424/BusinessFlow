@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from businessflow.audio.asr import _DEFAULT_MODEL_SIZE, transcribe
+from businessflow.audio.asr import _DECODE_KWARGS, _DEFAULT_MODEL_SIZE, transcribe
 from businessflow.audio.io import load_wav_as_tensor
 
 _FIXTURES = Path(__file__).parent / "fixtures"
@@ -25,6 +25,22 @@ def test_default_model_is_the_real_fine_tune_not_a_bare_size_name():
     # back to that.
     assert "/" in _DEFAULT_MODEL_SIZE
     assert _DEFAULT_MODEL_SIZE not in {"tiny", "base", "small", "medium", "large"}
+
+
+def test_decode_kwargs_use_the_confirmed_wider_beam_config():
+    # Regression test for eval/decode_params_sweep.json's confirmed win:
+    # beam_size=10/best_of=10 (faster-whisper's own default is 5/5) cut
+    # WER ~4.5% relative (53.2% -> 50.8%) over the production settings
+    # alone, on the same r32 model and MUCS test set. Nothing pinned this
+    # before -- a future edit to transcribe() could silently drop back to
+    # faster-whisper's plain defaults with nothing to catch it.
+    assert _DECODE_KWARGS["beam_size"] == 10
+    assert _DECODE_KWARGS["best_of"] == 10
+    # And the earlier repetition-loop fix (see asr.py's own comment) must
+    # survive alongside it, not get dropped when the dict was introduced.
+    assert _DECODE_KWARGS["repetition_penalty"] == 1.3
+    assert _DECODE_KWARGS["no_repeat_ngram_size"] == 3
+    assert _DECODE_KWARGS["condition_on_previous_text"] is False
 
 
 @pytest.mark.skipif(
