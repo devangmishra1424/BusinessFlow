@@ -1,7 +1,7 @@
 # --- Audio in ---
 silero-vad          # VAD, ONNX-backed
 faster-whisper      # ASR, int8 CPU (size decided by the small-vs-base test, see eval/)
-onnxruntime
+onnxruntime==1.29.0
 
 # --- Reasoning ---
 groq                # Agent LLM (Llama-3.1-8B), the one deliberate API call
@@ -11,7 +11,18 @@ groq                # Agent LLM (Llama-3.1-8B), the one deliberate API call
 # everything else (see rag/store.py) -- no separate vector-store package.
 sentence-transformers[onnx]  # multilingual-e5-small (bi-encoder) + cross-encoder reranker, ONNX backend
 rank-bm25           # BM25 half of hybrid retrieval
-docling             # document ingestion (PDF/markdown/docx -> heading-aware chunks)
+# Pinned, all five: found live that CI (unpinned) resolved docling-ibm-models
+# 4.0.2 against local's verified-good 3.14.0 (docling itself only moved
+# 2.121.0 -> 2.126.0) -- that jump alone silently degraded RapidOCR's real
+# accuracy on a genuine scanned-document fixture (a correct "500000" became
+# garbled), with nothing in this project's own code at fault. Pinned
+# explicitly rather than trusting docling's own transitive range so this
+# can't drift again the same way.
+docling==2.121.0            # document ingestion (PDF/markdown/docx -> heading-aware chunks)
+docling-core==2.92.0
+docling-ibm-models==3.14.0  # the actual OCR/layout models -- the package that broke
+docling-parse==7.15.0
+docling-slim==2.121.0
 
 # --- Tools ---
 fastmcp
