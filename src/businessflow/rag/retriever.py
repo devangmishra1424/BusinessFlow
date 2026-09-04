@@ -5,6 +5,9 @@ this now serves any ingested document (policy, loan agreements,
 regulatory circulars), not just the hand-written policy KB it started as.
 """
 
+import re
+from pathlib import Path
+
 from rank_bm25 import BM25Okapi
 from sentence_transformers import CrossEncoder
 
@@ -16,6 +19,62 @@ from businessflow.rag.tokenize import dominant_script as _dominant_script
 from businessflow.rag.tokenize import tokenize as _tokenize
 
 _RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"  # English-only -- see _embedding_only_results below
+
+# late_fee_policy.md's own real text: "...grace period (see grace_period.md)
+# is charged..." -- the exact, hand-written convention this project's
+# policy docs already use to cross-reference each other. Extracts the
+# referenced filename fragment, matched case-insensitively against known
+# source_document basenames below.
+_EXPLICIT_REFERENCE_RE = re.compile(r"\(see ([\w./-]+\.\w+)\)", re.IGNORECASE)
+
+_MIN_TITLE_WORDS = 2  # excludes a short, generic single-word title (e.g. "faq") from ever substring-matching
+
+
+def _derive_title(source_document: str) -> str | None:
+    """A human-readable name derived from the file itself, not from its
+    own internal headings -- confirmed live against this project's real
+    uploaded loan agreements that a real per-account document's own
+    chunk_index=0 heading is often just letterhead (a lender's company
+    name), not anything another document would ever reference by name.
+    Filenames are always well-formed and controllable, so they're the
+    reliable source here instead: "data/kb/grace_period.md" -> "grace
+    period"; "sunita_patil_loan_agreement.pdf" -> "sunita patil loan
+    agreement". None for a title too short/generic to safely
+    substring-match against (see _MIN_TITLE_WORDS)."""
+    title = Path(source_document).stem.replace("_", " ").replace("-", " ").strip().lower()
+    return title if len(title.split()) >= _MIN_TITLE_WORDS else None
+
+
+def _find_referenced_documents(text: str, known_titles: dict[str, str], exclude: str) -> set[str]:
+    """source_document values (from known_titles) that text appears to
+    reference -- exact "(see X.md)" citations plus a broader substring
+    check against every OTHER known document's derived title. exclude is
+    the chunk's OWN source_document, so a document never "references"
+    itself just because its own title appears in its own text.
+
+    The substring check is a real, explainable heuristic, not NLP -- it
+    catches "as per the late fee policy" but could miss a paraphrase, or
+    (bounded by _MIN_TITLE_WORDS) very rarely hit a coincidental match on
+    a short title. That's a known, accepted limitation of staying
+    light/explainable rather than reaching for real entity extraction."""
+    lower_text = text.lower()
+    found = set()
+
+    for match in _EXPLICIT_REFERENCE_RE.finditer(text):
+        cited = match.group(1).lower()
+        for source_document in known_titles:
+            if source_document == exclude:
+                continue
+            if Path(source_document).name.lower() == cited or Path(source_document).stem.lower() == Path(cited).stem.lower():
+                found.add(source_document)
+
+    for source_document, title in known_titles.items():
+        if source_document == exclude or source_document in found:
+            continue
+        if title in lower_text:
+            found.add(source_document)
+
+    return found
 
 
 def _min_max_normalize(raw_scores: dict[int, float]) -> dict[int, float]:
@@ -72,9 +131,20 @@ class DocumentRetriever:
             _RERANK_MODEL, backend="onnx", model_kwargs={"file_name": "onnx/model_quint8_avx2.onnx"}
         )
 
+        # Recomputed fresh here, same as everything else this constructor
+        # loads -- picks up any document ingested since the last time a
+        # DocumentRetriever was built, with no separate rebuild/sync step
+        # of its own; see follow_references on retrieve() below.
+        self._document_titles = {
+            m["source_document"]: title
+            for m in self._metadatas
+            if (title := _derive_title(m["source_document"])) is not None
+        }
+
     def retrieve(
         self, query: str, top_k: int = 2, candidate_pool: int = 4,
         account_id: str | None = None, expand: bool = False, document_type: str | None = None,
+        follow_references: bool = False, max_referenced_chunks: int = 2,
     ) -> list[dict]:
         """Up to top_k chunks most relevant to a free-text query, after
         reranking. account_id, if given, restricts results to general
@@ -90,7 +160,22 @@ class DocumentRetriever:
         query (query_llm.expand_query) and pools candidates across all of
         them -- a real extra Groq call, so it's opt-in rather than
         always-on; see eval/retrieval_benchmark.py for the measured effect
-        before deciding whether to default it on for a given caller."""
+        before deciding whether to default it on for a given caller.
+
+        follow_references=True additionally checks each result for a
+        mention of another known document (either the hand-written
+        "(see X.md)" convention, or a broader substring match against
+        every OTHER document's own filename-derived title -- see
+        _find_referenced_documents) and, for up to max_referenced_chunks
+        of them, pulls in that document's own best-matching chunk too --
+        even if it wouldn't have ranked in the original top_k on its own.
+        Found live: a real query at the production top_k=1 default
+        returns ONLY late_fee_policy.md's chunk for a late-fee-amount
+        question, even though that chunk's own text says "(see
+        grace_period.md)" -- the model sees the reference but never the
+        referenced content. Opt-in, same reasoning as expand=True: a real
+        extra embedding query per reference, not free, and not yet
+        measured against real traffic (see eval/retrieval_benchmark.py)."""
         if not self._texts:
             return []
 
@@ -121,12 +206,46 @@ class DocumentRetriever:
             #     embedding search alone had already ranked it correctly.
             # So for this case, skip both BM25 and the reranker, and trust
             # the multilingual embedding ranking as-is.
-            return self._embedding_only_results(query, top_k, candidate_pool, allowed_scopes, document_type)
+            results = self._embedding_only_results(query, top_k, candidate_pool, allowed_scopes, document_type)
+        else:
+            queries = query_llm.expand_query(query) if expand else [query]
+            results = self._hybrid_rerank_results(queries, eligible, top_k, candidate_pool, allowed_scopes, document_type)
 
-        queries = query_llm.expand_query(query) if expand else [query]
-        return self._hybrid_rerank_results(queries, eligible, top_k, candidate_pool, allowed_scopes, document_type)
+        if follow_references and results:
+            results = self._expand_with_references(results, query, allowed_scopes, document_type, max_referenced_chunks)
+        return results
 
-    def _embed_candidates(self, query: str, candidate_pool: int, allowed_scopes: set, document_type: str | None = None) -> dict:
+    def _expand_with_references(
+        self, results: list[dict], query: str, allowed_scopes: set, document_type: str | None, max_referenced_chunks: int,
+    ) -> list[dict]:
+        already_included = {r["source_document"] for r in results}
+        referenced: list[str] = []
+        for r in results:
+            for source_document in _find_referenced_documents(r["text"], self._document_titles, exclude=r["source_document"]):
+                if source_document not in already_included and source_document not in referenced:
+                    referenced.append(source_document)
+
+        for source_document in referenced[:max_referenced_chunks]:
+            distance_by_id = self._embed_candidates(
+                query, candidate_pool=1, allowed_scopes=allowed_scopes,
+                document_type=document_type, source_document_filter=source_document,
+            )
+            if not distance_by_id:
+                continue  # the reference is to a document outside this caller's allowed_scopes/document_type
+            doc_id, distance = next(iter(distance_by_id.items()))
+            i = self._ids.index(doc_id)
+            results.append({
+                "text": self._texts[i],
+                "relevance_score": -distance,
+                "referenced_from": True,  # distinguishes a pulled-in chunk from one the query itself ranked
+                **{k: v for k, v in self._metadatas[i].items()},
+            })
+        return results
+
+    def _embed_candidates(
+        self, query: str, candidate_pool: int, allowed_scopes: set, document_type: str | None = None,
+        source_document_filter: str | None = None,
+    ) -> dict:
         """Runs one embedding query; returns {doc_id: distance} in the
         best-first order the ORDER BY already returns them in.
 
@@ -138,6 +257,11 @@ class DocumentRetriever:
         successor could otherwise occupy one of a small pool's slots ahead
         of a genuinely active candidate, or get returned as a doc_id
         self._ids (active-only) can't look up at all.
+
+        source_document_filter, if given, scopes candidates to one
+        specific document -- used by _expand_with_references to find that
+        REFERENCED document's own best-matching chunk for the query,
+        rather than competing against the whole corpus for a top_k slot.
         """
         params: list = [embedding_literal(embed_query(query))]
         where = "account_id = any(%s) and superseded_at is null"
@@ -145,6 +269,9 @@ class DocumentRetriever:
         if document_type is not None:
             where += " and document_type = %s"
             params.append(document_type)
+        if source_document_filter is not None:
+            where += " and source_document = %s"
+            params.append(source_document_filter)
         params.append(candidate_pool)
         rows = self._conn.execute(
             f"select id, embedding <=> %s::vector as distance from document_chunks "

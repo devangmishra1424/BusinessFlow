@@ -61,6 +61,45 @@ def test_document_type_filter_excludes_a_non_matching_type(retriever):
     assert non_matching == []
 
 
+def test_follow_references_pulls_in_a_cross_referenced_document_the_top_k_would_otherwise_exclude(retriever):
+    # Confirmed live before writing this: at the production top_k=1
+    # default, this exact query returns ONLY late_fee_policy.md -- even
+    # though that chunk's own text says "(see grace_period.md)" and
+    # "(see dispute_handling.md)". Without follow_references, the model
+    # sees the reference but never the referenced content.
+    query = "is there a flat charge of 500 rupees for a late payment"
+
+    without_references = retriever.retrieve(query, top_k=1)
+    assert [r["headings"] for r in without_references] == ["Late fee policy"]
+
+    with_references = retriever.retrieve(query, top_k=1, follow_references=True)
+    headings = {r["headings"] for r in with_references}
+    assert "Late fee policy" in headings
+    assert "Grace period policy" in headings
+    assert "Dispute handling policy" in headings
+    # The primary result is never itself marked as a pulled-in reference.
+    primary = next(r for r in with_references if r["headings"] == "Late fee policy")
+    assert not primary.get("referenced_from")
+    referenced = [r for r in with_references if r["headings"] != "Late fee policy"]
+    assert all(r["referenced_from"] for r in referenced)
+
+
+def test_follow_references_respects_max_referenced_chunks(retriever):
+    query = "is there a flat charge of 500 rupees for a late payment"
+
+    results = retriever.retrieve(query, top_k=1, follow_references=True, max_referenced_chunks=1)
+
+    assert len(results) == 2  # the primary result plus exactly one referenced chunk, not both
+
+
+def test_follow_references_is_off_by_default(retriever):
+    query = "is there a flat charge of 500 rupees for a late payment"
+
+    results = retriever.retrieve(query, top_k=1)
+
+    assert len(results) == 1
+
+
 def test_general_docs_are_visible_regardless_of_account_id():
     retriever = DocumentRetriever()
     results = retriever.retrieve("can I get a few more days to pay", top_k=1, account_id="BF-1001")
