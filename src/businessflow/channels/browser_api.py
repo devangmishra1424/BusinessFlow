@@ -56,6 +56,7 @@ from businessflow.agent.loop import (
     AccessDeniedError,
     AccountLockedError,
     extract_new_tool_calls,
+    index_of_last_user_message,
     run_turn_with_memory,
     start_conversation,
     verify_and_start_conversation,
@@ -473,7 +474,6 @@ def _process_text_turn(conversation_id: str, session: dict, text: str, client_ip
                 verified_account_id=account_id,
             )
 
-        turn_start = len(session["messages"])
         session["messages"].append({"role": "user", "content": text})
         try:
             updated_conversation, reply = run_turn_with_memory(session["messages"], session["account_id"])
@@ -488,6 +488,12 @@ def _process_text_turn(conversation_id: str, session: dict, text: str, client_ip
             raise HTTPException(status_code=502, detail=f"upstream LLM provider error: {e.message}") from e
         session["messages"] = updated_conversation
 
+        # Computed from the RETURNED conversation, not a pre-call
+        # len(session["messages"]) snapshot -- that snapshot goes stale
+        # the moment _run_turn_async trims older turns off the front
+        # (see agent/loop.py's _trim_to_recent_turns), silently
+        # mis-slicing this into the wrong turn's messages.
+        turn_start = index_of_last_user_message(updated_conversation)
         tool_calls = extract_new_tool_calls(updated_conversation, turn_start)
         return SendMessageResponse(
             reply=reply,

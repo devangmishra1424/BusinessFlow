@@ -25,6 +25,23 @@ logger = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 5  # a hard cap -- never loop on tool calls forever
 
+# Found live: a long-lived, never-/reset session (70+ real turns on one
+# account across several days, via Telegram) resends its ENTIRE history on
+# every single completion call within a turn -- including once per tool-
+# calling round, not just once per turn -- and that's what actually burst
+# a real conversation past Groq's per-minute token cap (8,000, much
+# smaller and easier to hit than the 200k/day one), not sustained
+# exhaustion. Safe to trim: every message and tool call is already
+# durably persisted independently of this in-memory list (accounts.store.
+# log_event for tool calls, memory/conversation_memory.log_turn for
+# messages, both keyed to the account) -- this list's only job is being
+# the model's own working context, not the system of record. 20 is
+# comfortably above any real demo or eval conversation's real length
+# (every scripted benchmark scenario is a handful of turns), so this
+# never fires in normal use -- it only kicks in for a session that's
+# actually run away unbounded, exactly the failure mode found live.
+_MAX_CONVERSATION_TURNS = 20
+
 # openai/gpt-oss-20b occasionally leaks its internal "harmony" format channel
 # tags (e.g. "<|channel|>commentary") into the tool name it emits, which Groq
 # rejects outright with a 400 before we ever see a tool_calls response --
@@ -129,11 +146,46 @@ async def _execute_tool_call(tool_call, verified_account_id: str | None = None) 
     return json.dumps(result.structured_content, ensure_ascii=False)
 
 
-def _index_of_last_user_message(conversation: list[dict]) -> int:
+def index_of_last_user_message(conversation: list[dict]) -> int:
+    """Public (not _-prefixed) so a caller that needs "where did the turn
+    I just ran actually start" -- browser_api.py's tool-call extraction,
+    specifically -- can recompute it from the RETURNED conversation
+    instead of snapshotting len(session["messages"]) before the call.
+    That snapshot goes stale the moment _run_turn_async trims older
+    turns off the front (see _trim_to_recent_turns): the index it
+    captured no longer points to the same position in the shorter list
+    that comes back, which would silently mis-slice extract_new_tool_
+    calls's turn_start. This function is always correct regardless,
+    since it's relative to whatever list it's actually given."""
     for i in range(len(conversation) - 1, -1, -1):
         if conversation[i].get("role") == "user":
             return i
     return 0
+
+
+def _trim_to_recent_turns(conversation: list[dict], max_turns: int) -> list[dict]:
+    """Keeps every system message (always at/near the start -- the base
+    prompt, plus the recap start_conversation_with_recap appends) plus
+    only the most recent max_turns real turns, dropping older ones
+    outright rather than letting the list grow forever (see
+    _MAX_CONVERSATION_TURNS above for why this exists).
+
+    Operates in whole-turn units, never mid-turn: a turn is "a user
+    message, plus everything up to (not including) the next one" --
+    trimming anywhere else would split an assistant message's tool_calls
+    from its paired "tool" result messages, which the API rejects
+    outright as a malformed request. Never trims the CURRENT turn being
+    processed either, since its user message is always the last one
+    found -- this only ever removes turns strictly older than that."""
+    system_messages = [m for m in conversation if m.get("role") == "system"]
+    rest = [m for m in conversation if m.get("role") != "system"]
+
+    user_indices = [i for i, m in enumerate(rest) if m.get("role") == "user"]
+    if len(user_indices) <= max_turns:
+        return conversation
+
+    cutoff = user_indices[-max_turns]
+    return system_messages + rest[cutoff:]
 
 
 def _finalize_reply(conversation: list[dict], verified_account_id: str | None) -> tuple[list[dict], str]:
@@ -166,7 +218,7 @@ def _finalize_reply(conversation: list[dict], verified_account_id: str | None) -
         failure = grounding.check_unapplied_restructuring_claim(reply_text)
 
     if not failure:
-        turn_start = _index_of_last_user_message(conversation)
+        turn_start = index_of_last_user_message(conversation)
         user_message = conversation[turn_start].get("content") or ""
         tools_called_this_turn = {name for name, _ in extract_new_tool_calls(conversation, turn_start)}
         failure = check_unverified_restructuring_claim(user_message, tools_called_this_turn)
@@ -203,6 +255,7 @@ async def _run_turn_async(
     expand_query found (see README.md's "Status and known gaps"
     section). Left unset for that reason; kept as an opt-in parameter
     rather than removed, same as expand_query."""
+    conversation = _trim_to_recent_turns(conversation, _MAX_CONVERSATION_TURNS)
     tools = await _tool_specs()
     reasoning_kwargs = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
 

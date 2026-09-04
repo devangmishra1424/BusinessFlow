@@ -675,10 +675,15 @@ async def on_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     await update.message.reply_text(_transcript_echo(transcript))
-
-    language = _sessions.get(chat_id, {}).get("language") or _language_choice.get(chat_id, "en")
-    speech = speak_hindi(verbalize(reply_text, language)) if language == "hi" else speak_english(verbalize(reply_text, language))
-    await update.message.reply_voice(voice=encode_ogg_opus(speech))
+    # Found live: the actual answer was only ever synthesized as speech
+    # here, never sent as text -- a borrower who wanted to glance at (or
+    # copy) a figure or link had to play an audio file for it, and a TTS
+    # failure had no text fallback at all, unlike _send_spoken_reply's
+    # already-existing best-effort handling on the text-input path.
+    # Voice in still gets voice out (matches the modality), but the text
+    # answer is no longer voice-only.
+    await update.message.reply_text(reply_text)
+    await _send_spoken_reply(update, chat_id, reply_text)
 
 
 async def _register_commands(application: Application) -> None:
