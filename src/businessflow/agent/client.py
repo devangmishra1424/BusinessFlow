@@ -15,20 +15,38 @@ MODEL = "openai/gpt-oss-20b"
 
 # Advances through as many fallback keys as are actually configured
 # (ALTERNATE_GROQ_KEY, then ALTERNATE_GROQ_KEY2, ALTERNATE_GROQ_KEY3, ...),
-# and reverts back to the primary on its own after _FALLBACK_COOLDOWN_SECONDS
-# -- Groq's quota here is a daily (tokens-per-day) limit, so a fixed 24h
-# cooldown before retrying the primary matches when it actually has a real
-# chance of having cleared. Originally this was a one-way, permanent-for-
-# the-process switch to a single hardcoded fallback; for a long-running
-# server that's a real bug, not just an inefficiency -- it would stay on
-# the fallback forever even after the primary's quota reset the next day,
-# and it had nowhere to go once that one fallback also got rate-limited.
+# and reverts back to the primary on its own after _FALLBACK_COOLDOWN_SECONDS.
+# Originally this was a one-way, permanent-for-the-process switch to a
+# single hardcoded fallback; for a long-running server that's a real bug,
+# not just an inefficiency -- it would stay on the fallback forever even
+# after the primary's quota reset, and it had nowhere to go once that one
+# fallback also got rate-limited.
+#
+# _FALLBACK_COOLDOWN_SECONDS was originally 24h, on the assumption that
+# Groq's only real limit here is the daily (tokens-per-day) one. Found
+# live this was the wrong model entirely: every real rate-limit hit this
+# project actually saw was the much smaller, much faster per-MINUTE cap
+# (8,000 tokens/min per key, confirmed via real completion calls -- and
+# confirmed the 5 configured keys are genuinely independent buckets, not
+# one shared org-level limit, by burning real tokens on one and watching
+# the others' remaining-token headers stay untouched). That cap clears in
+# well under two minutes every time it was checked live. With a 24h
+# cooldown, once ANY one bad turn cycled through every configured
+# fallback, the process stayed pinned to the LAST one for the rest of the
+# day -- concentrating all subsequent traffic onto a single key (with the
+# other 4 sitting completely idle) instead of giving the earlier keys the
+# ~60-90 seconds they actually needed to recover. 150s comfortably clears
+# that real recovery window without waiting anywhere near a full day.
+# Deliberately still short is fine even in an actual daily-exhaustion
+# case: reverting to a still-exhausted primary just wastes one fast-
+# failing retry before cycling through the same fallbacks again, not a
+# new failure mode.
 _FALLBACK_KEY_ENV_VAR = "ALTERNATE_GROQ_KEY"
 _MAX_FALLBACK_KEY_SUFFIX = 20  # ALTERNATE_GROQ_KEY2..20 -- generous headroom; adding one more needs no code change
 
 _current_key_index = 0  # 0 = primary (GROQ_API_KEY); N>0 = the Nth configured fallback
 _switched_at: float | None = None
-_FALLBACK_COOLDOWN_SECONDS = 24 * 60 * 60
+_FALLBACK_COOLDOWN_SECONDS = 150
 
 
 def _fallback_env_var_names() -> list[str]:
