@@ -164,6 +164,14 @@ def test_run_daily_outbound_pass_does_not_resend_the_same_reminder_twice_in_one_
 
     assert len(first_pass) == 1
     assert first_pass[0]["account_id"] == target
+    # Real bug found live: send_reminder's actual delivery result (did
+    # this reach the borrower over Telegram, or just get logged with
+    # nowhere to deliver to) was computed but silently discarded before
+    # it ever reached the caller -- an operator clicking "send reminders"
+    # had no way to tell a real delivery apart from a no-op. BF-1002/1004
+    # have no linked telegram_chat_id after a reseed, so this is the real
+    # logged-fallback path, not a mocked assumption.
+    assert first_pass[0]["delivered_via_telegram"] is False
     assert second_pass == []  # same day, same kind -- already sent, must not resend
 
 

@@ -69,8 +69,21 @@ def run_daily_outbound_pass(account_ids: list[str] | None = None) -> list[dict]:
         # reminder (accounts.store.create_payment_token) -- never reused
         # across sends, so an old reminder's link can't outlive this one.
         link = generate_payment_link(reminder.account_id, account.emi_amount)
-        send_reminder(reminder.account_id, reminder.kind, message, link["payment_link"], account.emi_amount)
-        sent.append({"account_id": reminder.account_id, "kind": reminder.kind, "days": reminder.days, "message": message})
+        # Found live: send_reminder's real return value (did this actually
+        # reach the borrower over Telegram, or just get logged with nowhere
+        # to deliver to) was silently discarded here -- it was already
+        # being written into the reminder_sent event's own details
+        # (accounts/store.py), just never propagated back up to the API
+        # response or the ops dashboard, which had no way to distinguish a
+        # real delivery from a no-op. From an operator's chair, clicking
+        # "send reminders" and having every account come back undelivered
+        # (no linked Telegram chat) looked identical to the button doing
+        # nothing at all.
+        delivered = send_reminder(reminder.account_id, reminder.kind, message, link["payment_link"], account.emi_amount)
+        sent.append({
+            "account_id": reminder.account_id, "kind": reminder.kind, "days": reminder.days,
+            "message": message, "delivered_via_telegram": delivered,
+        })
     return sent
 
 

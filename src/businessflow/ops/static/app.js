@@ -640,7 +640,26 @@ document.getElementById("send-reminders-btn").addEventListener("click", async ()
   btn.textContent = "Sending…";
   try {
     const result = await triggerOutboundRun(targets);
-    toast(`${result.reminders_sent.length} reminder(s) sent, ${result.escalated_for_broken_promises} escalated.`);
+    // Found live: this used to report only a raw count, with no way to
+    // tell "sent and actually reached someone" apart from "logged, but
+    // nobody was ever going to see it" (no Telegram chat linked to that
+    // account). In a real environment where most demo accounts have
+    // never verified over Telegram, that made every real click read as
+    // "0 reminder(s) sent" or a silent no-op -- the button was working
+    // correctly the whole time, the feedback just didn't say so.
+    const total = result.reminders_sent.length;
+    const delivered = result.reminders_sent.filter((r) => r.delivered_via_telegram).length;
+    const loggedOnly = total - delivered;
+    let message;
+    if (total === 0) {
+      message = "No accounts are currently due for a reminder.";
+    } else if (loggedOnly === 0) {
+      message = `${total} reminder(s) sent and delivered via Telegram.`;
+    } else {
+      message = `${total} reminder(s) processed -- ${delivered} delivered via Telegram, ${loggedOnly} logged only (no Telegram linked).`;
+    }
+    if (result.escalated_for_broken_promises) message += ` ${result.escalated_for_broken_promises} escalated.`;
+    toast(message);
     await loadAll();
   } catch (err) {
     toast(err.message, true);
