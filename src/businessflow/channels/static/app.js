@@ -114,8 +114,8 @@ const $chatBackBtn = document.getElementById("chat-back-btn");
 const $startForm = document.getElementById("start-form");
 const $startError = document.getElementById("start-error");
 const $verifiedFields = document.getElementById("verified-fields");
-const $opsFields = document.getElementById("ops-fields");
 const $langField = document.getElementById("lang-field");
+const $submitBtn = document.getElementById("start-submit-btn");
 
 // The ops dashboard lives on its own subdomain (see the "Ops team" tab
 // below) -- separate apps, separate asset paths, avoids the path-prefix
@@ -123,14 +123,32 @@ const $langField = document.getElementById("lang-field");
 // since it's the only cross-service coupling point in this file.
 const OPS_DASHBOARD_URL = "https://businessflowai-ops.duckdns.org";
 
+// Deliberately embedded, not typed in by whoever's demoing -- a one-click
+// "Login" straight into the ops dashboard instead of an API-key prompt.
+// This means the key is public the moment this file is served (this repo
+// is public too), not just visible to whoever opens the demo -- a
+// conscious tradeoff for a project that isn't handling real financial
+// data, not an accidental leak.
+const _OPS_DEMO_LOGIN_KEY = "Hm5eYlNVIwqNbl8U78slihAKfLDcibxe";
+
+const _SUBMIT_BTN_LABELS = {
+  verified: 'Start chatting<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  anonymous: 'Start chatting<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  ops: 'Login<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+};
+
+function _resetSubmitBtnLabel() {
+  $submitBtn.innerHTML = _SUBMIT_BTN_LABELS[state.mode] || _SUBMIT_BTN_LABELS.verified;
+}
+
 document.querySelectorAll(".start-tab").forEach((tab) =>
   tab.addEventListener("click", () => {
     document.querySelectorAll(".start-tab").forEach((t) => t.classList.remove("active"));
     tab.classList.add("active");
     state.mode = tab.dataset.mode;
     $verifiedFields.hidden = state.mode !== "verified";
-    $opsFields.hidden = state.mode !== "ops";
     $langField.hidden = state.mode === "ops";
+    _resetSubmitBtnLabel();
   })
 );
 
@@ -147,16 +165,10 @@ $startForm.addEventListener("submit", async (e) => {
   $startError.hidden = true;
 
   if (state.mode === "ops") {
-    const opsKey = document.getElementById("start-ops-key").value.trim();
-    if (!opsKey) {
-      $startError.textContent = "Enter the ops API key.";
-      $startError.hidden = false;
-      return;
-    }
     // A URL fragment, not a query param -- never sent to (or logged by)
     // any server, just read client-side by the ops app's own init() once
     // it loads. See ops/static/app.js's init() for the other half of this.
-    window.location.href = `${OPS_DASHBOARD_URL}/#key=${encodeURIComponent(opsKey)}`;
+    window.location.href = `${OPS_DASHBOARD_URL}/#key=${encodeURIComponent(_OPS_DEMO_LOGIN_KEY)}`;
     return;
   }
 
@@ -173,9 +185,8 @@ $startForm.addEventListener("submit", async (e) => {
     payload.access_key = accessKey;
   }
 
-  const submitBtn = document.getElementById("start-submit-btn");
-  submitBtn.disabled = true;
-  submitBtn.textContent = "Starting…";
+  $submitBtn.disabled = true;
+  $submitBtn.textContent = "Starting…";
   try {
     const result = await startConversation(payload);
     state.conversationId = result.conversation_id;
@@ -189,8 +200,8 @@ $startForm.addEventListener("submit", async (e) => {
     $startError.textContent = friendlyStartError(err);
     $startError.hidden = false;
   } finally {
-    submitBtn.disabled = false;
-    submitBtn.innerHTML = 'Start chatting<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    $submitBtn.disabled = false;
+    _resetSubmitBtnLabel();
   }
 });
 
