@@ -116,6 +116,33 @@ const $startError = document.getElementById("start-error");
 const $verifiedFields = document.getElementById("verified-fields");
 const $langField = document.getElementById("lang-field");
 const $submitBtn = document.getElementById("start-submit-btn");
+const $accountPicker = document.getElementById("start-account-picker");
+
+// Deliberately embedded, same tradeoff and reasoning as _OPS_DEMO_LOGIN_KEY
+// below -- a one-click "choose a borrower" list instead of typing an
+// account ID + 6-digit key from memory. account_id/access_key still go
+// through the exact same POST /conversations verification the typed form
+// always used; this only fills the two fields for whoever's demoing
+// instead of asking them to remember or look up a real key.
+const _DEMO_ACCOUNTS = [
+  { id: "BF-1001", name: "Priya Sharma", business: "Cotton Threads Boutique", key: "482913" },
+  { id: "BF-1002", name: "Arjun Mehta", business: "Mehta Hardware & Electricals", key: "716044" },
+  { id: "BF-1003", name: "Fatima Khan", business: "Khan Textiles Wholesale", key: "930571" },
+  { id: "BF-1004", name: "Ravi Iyer", business: "Iyer Auto Spares", key: "205839" },
+  { id: "BF-1005", name: "Sunita Patil", business: "Patil Dairy & Kirana Store", key: "128143" },
+  { id: "BF-1006", name: "Rajesh Kumar Yadav", business: "Yadav Welding & Fabrication Works", key: "738570" },
+  { id: "BF-1007", name: "Meera Nair", business: "Nair Spices & Provisions", key: "584558" },
+  { id: "BF-1008", name: "Harpreet Singh Sodhi", business: "Sodhi Auto Care Garage", key: "778854" },
+  { id: "BF-1009", name: "Anjali Deshmukh", business: "Deshmukh Boutique & Tailoring", key: "511301" },
+  { id: "BF-1010", name: "Devang Mishra", business: "AI Start-Up", key: "844488" },
+];
+
+for (const acct of _DEMO_ACCOUNTS) {
+  const opt = document.createElement("option");
+  opt.value = acct.id;
+  opt.textContent = `${acct.name} — ${acct.business} (${acct.id})`;
+  $accountPicker.appendChild(opt);
+}
 
 // The ops dashboard lives on its own subdomain (see the "Ops team" tab
 // below) -- separate apps, separate asset paths, avoids the path-prefix
@@ -174,15 +201,14 @@ $startForm.addEventListener("submit", async (e) => {
 
   const payload = { language: state.language };
   if (state.mode === "verified") {
-    const accountId = document.getElementById("start-account-id").value.trim();
-    const accessKey = document.getElementById("start-access-key").value.trim();
-    if (!accountId || !accessKey) {
-      $startError.textContent = "Enter both your account ID and access key.";
+    const selected = _DEMO_ACCOUNTS.find((a) => a.id === $accountPicker.value);
+    if (!selected) {
+      $startError.textContent = "Choose an account to continue.";
       $startError.hidden = false;
       return;
     }
-    payload.account_id = accountId;
-    payload.access_key = accessKey;
+    payload.account_id = selected.id;
+    payload.access_key = selected.key;
   }
 
   $submitBtn.disabled = true;
@@ -301,7 +327,7 @@ function restartAll() {
   state.conversationId = null;
   state.accountId = null;
   document.getElementById("message-list").innerHTML = "";
-  document.getElementById("start-access-key").value = "";
+  $accountPicker.value = "";
   $chatScreen.hidden = true;
   $chatScreen.classList.remove("as-panel", "open");
   $dashboardScreen.classList.remove("chat-open");

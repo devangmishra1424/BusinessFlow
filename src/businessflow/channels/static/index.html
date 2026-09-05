@@ -28,10 +28,10 @@
 
     <form id="start-form" autocomplete="off">
       <div id="verified-fields">
-        <label class="field-label" for="start-account-id">Account ID</label>
-        <input id="start-account-id" type="text" placeholder="BF-1001" autocomplete="off" />
-        <label class="field-label" for="start-access-key">Access key</label>
-        <input id="start-access-key" type="password" placeholder="6-digit key" autocomplete="off" inputmode="numeric" />
+        <label class="field-label" for="start-account-picker">Choose an account</label>
+        <select id="start-account-picker">
+          <option value="" selected disabled>Select a borrower…</option>
+        </select>
       </div>
 
       <div id="lang-field">
@@ -233,6 +233,6 @@
   </form>
 </div>
 
-<script src="/static/app.js?v=6"></script>
+<script src="/static/app.js?v=7"></script>
 </body>
 </html>
