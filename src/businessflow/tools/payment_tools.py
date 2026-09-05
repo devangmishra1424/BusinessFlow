@@ -45,7 +45,14 @@ def _chat_app_base_url() -> str:
     return os.environ.get("CHAT_APP_BASE_URL", "http://localhost:8000")
 
 
-@mcp.tool
+@mcp.tool(
+    description=(
+        "Generate a real, single-use payment link for the given amount. Confirming it on "
+        "the page it points to actually records the payment and moves the account "
+        "forward -- there's no real bank/card processor behind it, but the recorded "
+        "effect is genuine."
+    )
+)
 def generate_payment_link(account_id: str, amount: float) -> dict:
     """Generate a payment link for the given amount -- a real, single-use,
     expiring link (see accounts.store.create_payment_token) that actually
@@ -63,7 +70,14 @@ def generate_payment_link(account_id: str, amount: float) -> dict:
     }
 
 
-@mcp.tool
+@mcp.tool(
+    description=(
+        "Check whether a reduced payment for this cycle is within policy, and if so, "
+        "record it as accepted. Rejects anything below the policy minimum, and refuses "
+        "to make an automated offer at all on accounts that need a human (open dispute "
+        "or a pattern of broken promises)."
+    )
+)
 def propose_partial_payment(account_id: str, proposed_amount: float) -> dict:
     """Check whether a reduced payment for this cycle is within policy, and
     if so, record it as accepted. Rejects anything below the policy minimum,
@@ -95,7 +109,16 @@ def propose_partial_payment(account_id: str, proposed_amount: float) -> dict:
     }
 
 
-@mcp.tool
+@mcp.tool(
+    description=(
+        "Calculate what a restructuring option would look like without committing to "
+        "it. restructuring_type is 'extend_tenure' (pass extra_months, capped by policy) "
+        "or 'one_time_settlement' (a discounted lump sum that closes the loan early). "
+        "Remaining principal is approximated as emi_amount * months_remaining -- a "
+        "simplification, not a real amortization schedule. This never changes the "
+        "account; it only quotes numbers."
+    )
+)
 def calculate_hypothetical(account_id: str, restructuring_type: str, extra_months: int | None = None) -> dict:
     """Calculate what a restructuring option would look like without
     committing to it. restructuring_type is 'extend_tenure' (pass
@@ -187,7 +210,20 @@ def _safe_eval_arithmetic(node: ast.AST) -> float:
     raise ValueError(f"expression contains something other than plain arithmetic: {ast.dump(node)}")
 
 
-@mcp.tool
+@mcp.tool(
+    description=(
+        "Evaluate a plain arithmetic expression (numbers and + - * / ( ) only) and "
+        "return the exact result to state verbatim. Call this whenever you need to "
+        "state a number DERIVED from other real figures already established this "
+        "conversation (a percentage of a real balance, a sum, a difference) that no "
+        "other tool already returns directly. Never do this arithmetic yourself in your "
+        "reply text -- the grounding guardrail only trusts a number that came from a "
+        "real tool result, and will block your own mental math even when it's correct. "
+        "Example: outstanding balance is 1084741.92 and the borrower asks about a 5% "
+        "discount -- call compute(\"1084741.92 * 0.95\") and state ITS result. Raises "
+        "ValueError for anything besides plain arithmetic."
+    )
+)
 def compute(expression: str) -> dict:
     """Evaluate a plain arithmetic expression -- numbers and + - * / ( )
     only -- and return the exact result to state verbatim. Call this

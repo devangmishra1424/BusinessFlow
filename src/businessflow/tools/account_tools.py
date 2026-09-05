@@ -18,7 +18,19 @@ from businessflow.tools.server import mcp
 _MAX_PAYMENT_HISTORY_LIMIT = 20
 
 
-@mcp.tool
+@mcp.tool(
+    description=(
+        "Look up a borrower's current payment status: loan amount, EMI due date, days "
+        "past due, months remaining, approximate outstanding balance, NACH mandate "
+        "status, late fee applicability, and dispute status. outstanding_balance_approx "
+        "is an approximation (emi_amount * months_remaining), not a real amortization "
+        "schedule. interest_rate_pct is often None -- if so, say you don't have it "
+        "rather than guessing one. nach_mandate_active only reflects current status, not "
+        "why a debit failed -- for 'why did my auto-debit fail', combine this with "
+        "check_policy on NACH troubleshooting, don't guess. late_fee_amount is set only "
+        "when late_fee_applicable is true."
+    )
+)
 def get_payment_status(account_id: str) -> dict:
     """Look up a borrower's current payment status: original loan amount,
     EMI due date, days past due, months of EMIs remaining, an approximate
@@ -76,7 +88,16 @@ def get_payment_status(account_id: str) -> dict:
     }
 
 
-@mcp.tool
+@mcp.tool(
+    description=(
+        "Look up a borrower's recent payments: date, amount, on-time flag, and kind, "
+        "most recent first. kind is 'regular' for a normal EMI payment, "
+        "'extra_unapplied'/'extra_applied' for an off-cycle payment not credited/credited "
+        "toward the next EMI, or 'overpayment_applied' when a payment exceeded what was "
+        "due that cycle (excess credited to the next one). limit is clamped to a safe "
+        "range rather than erroring on an odd value."
+    )
+)
 def get_payment_history(account_id: str, limit: int = 5) -> dict:
     """Look up a borrower's most recent payment history: date, amount,
     whether it was on time, and what kind of payment it was, most recent
@@ -103,7 +124,14 @@ def get_payment_history(account_id: str, limit: int = 5) -> dict:
     }
 
 
-@mcp.tool
+@mcp.tool(
+    description=(
+        "Record a borrower's promise to pay a specific amount by a specific date "
+        "(promised_date as YYYY-MM-DD). Whether the promise was kept is judged later, "
+        "once that date passes, against a few days' tolerance either side -- not the "
+        "exact date."
+    )
+)
 def log_promise_to_pay(account_id: str, promised_date: str, promised_amount: float) -> dict:
     """Record a borrower's promise to pay a specific amount by a specific
     date. promised_date is an ISO date string (YYYY-MM-DD). Whether the
@@ -124,7 +152,12 @@ def log_promise_to_pay(account_id: str, promised_date: str, promised_amount: flo
     }
 
 
-@mcp.tool
+@mcp.tool(
+    description=(
+        "Open a dispute flag on the account so no further automated collection action is "
+        "taken on it until a human reviews the reason given."
+    )
+)
 def flag_dispute(account_id: str, reason: str) -> dict:
     """Open a dispute flag on the account so no further automated collection
     action is taken on it until a human reviews the reason given."""

@@ -47,7 +47,16 @@ def _retriever() -> DocumentRetriever:
     return _cached_retriever
 
 
-@mcp.tool
+@mcp.tool(
+    description=(
+        "Look up the written policy relevant to a free-text question, e.g. 'can I get "
+        "more time to pay' or 'what does my loan agreement say about prepayment'. Pass "
+        "account_id to also search that borrower's own uploaded documents (their loan "
+        "agreement), not just general policy. Ground any statement made to a borrower in "
+        "the returned text, rather than stating a policy number or contract term from "
+        "memory."
+    )
+)
 def check_policy(query: str, account_id: str | None = None) -> dict:
     """Look up the written policy relevant to a free-text question, e.g.
     'can I get more time to pay' or 'what does my loan agreement say about

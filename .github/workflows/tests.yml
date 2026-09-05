@@ -40,16 +40,20 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
-      # Every one of these is optional: tests that need it are gated by
-      # their own pytest.mark.skipif and simply skip if it's unset,
-      # exactly like running locally without a filled-in .env. Add the
-      # real secrets under Settings -> Secrets and variables -> Actions
-      # for the Groq-gated tests to actually run here instead of skipping.
-      # DATABASE_URL is NOT a secret -- it's this job's own disposable
-      # postgres service above, same on every run, nothing production
-      # ever touches.
-      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-      ALTERNATE_GROQ_KEY: ${{ secrets.ALTERNATE_GROQ_KEY }}
+      # GROQ_API_KEY/ALTERNATE_GROQ_KEY are deliberately NOT set here.
+      # Found live: this repo's only Groq keys are the same ones the
+      # deployed bot uses in production, both capped at a shared 200,000
+      # tokens/day (TPD) per model+org, not per key -- previously wiring
+      # them in as CI secrets meant a single full test run (hundreds of
+      # real, unmocked Groq-calling tests) could burn nearly the entire
+      # daily budget by itself, so the live bot ran out mid-demo right
+      # after any push. Every Groq-gated test already has its own
+      # pytest.mark.skipif(not GROQ_API_KEY) and skips cleanly without
+      # it -- exactly like a fresh clone with no .env filled in -- so
+      # leaving this unset here is what keeps CI from ever competing with
+      # production for the same quota. DATABASE_URL is NOT a secret --
+      # it's this job's own disposable postgres service above, same on
+      # every run, nothing production ever touches.
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/businessflow_ci
       OPS_API_KEY: ${{ secrets.OPS_API_KEY }}
     steps:

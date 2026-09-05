@@ -9,7 +9,13 @@ from businessflow.tools.server import mcp
 logger = logging.getLogger(__name__)
 
 
-@mcp.tool
+@mcp.tool(
+    description=(
+        "Hand this account off to a human agent, with the reason so they don't start "
+        "cold. Used whenever policy requires a human (open dispute, repeated broken "
+        "promises) or the agent is otherwise unsure."
+    )
+)
 def escalate_to_human(account_id: str, reason: str) -> dict:
     """Hand this account off to a human agent, with the reason so they don't
     start cold. Used whenever policy requires a human (open dispute,
@@ -40,7 +46,15 @@ _CLOSURE_CERTIFICATE_REASON = (
 )
 
 
-@mcp.tool
+@mcp.tool(
+    description=(
+        "A borrower asking for a loan closure certificate / NOC / proof their loan is "
+        "fully paid off. If months_remaining is 0 (fully repaid), queues a human to "
+        "issue the actual document and returns eligible=True -- this system cannot "
+        "generate or send the certificate itself. If months_remaining is still > 0, "
+        "returns eligible=False with the real value and does not escalate."
+    )
+)
 def request_closure_certificate(account_id: str) -> dict:
     """A borrower asking for a loan closure certificate / NOC / proof their
     loan is fully paid off. Checks the account's real months_remaining:
@@ -84,7 +98,16 @@ def request_closure_certificate(account_id: str) -> dict:
 # POST /escalations/{id}/approve|reject). Its return is always
 # "pending_approval", never "done" -- so a reply built honestly from this
 # result can't repeat that bug.
-@mcp.tool
+@mcp.tool(
+    description=(
+        "Once a borrower has explicitly agreed to a SPECIFIC extend-tenure proposal (the "
+        "exact extra_months they were just quoted via calculate_hypothetical), call this "
+        "to queue it for a human to approve. This tool itself never changes the account "
+        "-- only a human approving it in the ops dashboard does. Returns status "
+        "'pending_approval' with the real proposed terms if eligible, or the same "
+        "ineligibility shape calculate_hypothetical returns if blocked."
+    )
+)
 def propose_restructuring(account_id: str, extra_months: int) -> dict:
     """Once a borrower has explicitly agreed to a SPECIFIC extend-tenure
     proposal (the exact extra_months they were just quoted via
