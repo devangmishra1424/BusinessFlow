@@ -76,7 +76,7 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "and brief -- this is a spoken conversation, not a written one. "
     "{commitment_discipline} {dispute_handling} {read_only_tools} {ground_account_facts} "
     "{untracked_account_data} {no_fabricated_links} {no_fabricated_actions} "
-    "{ground_policy_claims} {check_dispute_block_first} {out_of_domain_legal} "
+    "{ground_policy_claims} {late_fee_amount_vs_status} {check_dispute_block_first} {out_of_domain_legal} "
     "{ground_nach_failures} {fraud_or_identity_claim} {due_date_change_requests} "
     "{cibil_credit_score} {discount_firmness} {restructuring_approval_flow} "
     "{payment_history_requests} {closure_certificate_requests} {grievance_redressal} "
@@ -280,6 +280,27 @@ _GROUND_POLICY_CLAIMS = (
     "actually returns; if it doesn't have an answer, say you're not "
     "sure and will find out, rather than giving a plausible-sounding "
     "number."
+)
+
+# Found live: a borrower asked "is there a fine if I fail to pay my EMI on
+# time" (a policy question -- what the fee IS) and the model called only
+# get_payment_status, saw late_fee_applicable=false (this account isn't
+# CURRENTLY past due), and treated that as the whole answer -- looping "no
+# fee right now, we'll let you know later" across three rephrasings
+# without ever calling check_policy for the real flat amount the
+# borrower's own loan agreement states. late_fee_applicable/late_fee_amount
+# only answer "does this account owe it right now"; they say nothing about
+# what the policy figure is when it doesn't currently apply, and
+# _GROUND_ACCOUNT_FACTS above being about THIS account's live fields made
+# it look like a complete answer to a different, policy-shaped question.
+_LATE_FEE_AMOUNT_VS_STATUS = (
+    "get_payment_status's late_fee_applicable/late_fee_amount fields only "
+    "answer whether THIS account owes a late fee right now -- "
+    "late_fee_amount being null means it isn't currently due, not that no "
+    "late fee policy exists. A borrower asking what the late fee IS, or "
+    "what it would be if they're late, is asking a policy question -- call "
+    "check_policy for the real flat amount rather than treating "
+    "late_fee_applicable=false as a complete answer."
 )
 
 # Found via eval/red_team.py's out_of_domain_legal scenario: asked
@@ -589,6 +610,7 @@ def build_system_prompt(language: str = "en", account_id: str | None = None, tem
         no_fabricated_links=_NO_FABRICATED_LINKS,
         no_fabricated_actions=_NO_FABRICATED_ACTIONS,
         ground_policy_claims=_GROUND_POLICY_CLAIMS,
+        late_fee_amount_vs_status=_LATE_FEE_AMOUNT_VS_STATUS,
         check_dispute_block_first=_CHECK_DISPUTE_BLOCK_FIRST,
         out_of_domain_legal=_OUT_OF_DOMAIN_LEGAL,
         ground_nach_failures=_GROUND_NACH_FAILURES,
