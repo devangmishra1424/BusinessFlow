@@ -41,16 +41,23 @@ from datetime import date, datetime
 from pathlib import Path
 
 import groq
+import psycopg
 import soundfile as sf
 import torch
 import torchaudio
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from businessflow.accounts import store
+from businessflow.accounts.db import check_database
+from businessflow.accounts.dues import late_fee_due
+from businessflow.accounts.escalation_kinds import (
+    CALLBACK, CLOSURE, FRAUD, RESTRUCTURING, SYSTEM, classify_escalation,
+)
+from businessflow.accounts.policy import GRACE_PERIOD_DAYS
 from businessflow.accounts.documents import list_documents_for_account, resolve_document_path
 from businessflow.accounts.models import Account
 from businessflow.agent.loop import (
@@ -112,6 +119,9 @@ _conversation_locks: dict[str, threading.Lock] = {}
 
 
 def _get_conversation_lock(conversation_id: str) -> threading.Lock:
+    if len(_conversation_locks) > 2000:
+        for k in list(_conversation_locks.keys())[:1000]:
+            _conversation_locks.pop(k, None)
     return _conversation_locks.setdefault(conversation_id, threading.Lock())
 
 
@@ -171,6 +181,9 @@ class AccountSnapshotOut(BaseModel):
     nach_mandate_active: bool
     late_fee_applicable: bool
     late_fee_amount: float | None
+    # What the borrower owes right now (EMI less credit, plus the late fee once it
+    # applies) -- the one number the Pay button, reminders and Telegram agree on.
+    amount_due_now: float
     dispute_open: bool
     risk_tier: str
     broken_promise_count: int
@@ -187,12 +200,22 @@ class TimelineEntryOut(BaseModel):
     label: str
 
 
-class DashboardEscalationOut(BaseModel):
-    escalation_id: str
-    reason: str
-    status: str
+class RequestOut(BaseModel):
+    """One thing the borrower asked for or raised, in the borrower's own
+    terms. Never the raw escalation reason: that is staff-facing text (and
+    for system-raised tickets -- a guardrail block, a chronic-delinquency
+    notice -- it was previously printed verbatim on the borrower's screen).
+    """
+
+    id: str
+    kind: str  # restructuring | closure | callback | request | fraud | dispute
+    title: str
+    detail: str | None = None
+    status: str  # open | done | declined (css hook)
+    status_label: str
+    outcome: str | None = None  # the human's own words on how it ended, when they gave any
     created_at: datetime
-    resolved_at: datetime | None
+    resolved_at: datetime | None = None
 
 
 class DocumentOut(BaseModel):
@@ -210,13 +233,14 @@ class MessageOut(BaseModel):
     message: str
     delivered_via_telegram: bool
     created_at: datetime
+    kind: str = "message"  # message | decision | dispute | reminder
 
 
 class DashboardResponse(BaseModel):
     account: AccountSnapshotOut
     timeline: list[TimelineEntryOut]
     warnings: list[WarningOut]
-    escalations: list[DashboardEscalationOut]
+    requests: list[RequestOut]
     documents: list[DocumentOut]
     messages: list[MessageOut]
 
@@ -289,6 +313,10 @@ def _build_emi_timeline(account: Account, days_past_due: int) -> list[dict]:
             return {"date": r.date.isoformat(), "amount": r.amount, "status": "extra-applied", "label": "Extra payment (credited to next EMI)"}
         if r.kind == "overpayment_applied":
             return {"date": r.date.isoformat(), "amount": r.amount, "status": "paid-on-time" if r.on_time else "paid-late", "label": f"{base_label} + extra credited"}
+        if r.kind == "principal_prepayment_reduce_emi":
+            return {"date": r.date.isoformat(), "amount": r.amount, "status": "paid-on-time" if r.on_time else "paid-late", "label": f"{base_label} + extra paid off the loan (EMI lowered)"}
+        if r.kind == "principal_prepayment_reduce_tenure":
+            return {"date": r.date.isoformat(), "amount": r.amount, "status": "paid-on-time" if r.on_time else "paid-late", "label": f"{base_label} + extra paid off the loan (loan shortened)"}
         return {"date": r.date.isoformat(), "amount": r.amount, "status": "paid-on-time" if r.on_time else "paid-late", "label": base_label}
 
     past = [_entry(r) for r in account.payment_history]
@@ -303,7 +331,14 @@ def _build_emi_timeline(account: Account, days_past_due: int) -> list[dict]:
             # earlier off-cycle payment (see record_payment) -- every
             # projection after that is a plain, full emi_amount.
             amount_due = round(account.emi_amount - account.pending_emi_credit, 2) if is_next_due else account.emi_amount
-            label = f"Overdue -- {days_past_due}d past due" if overdue else "Scheduled"
+            if not overdue:
+                label = "Scheduled"
+            elif days_past_due > GRACE_PERIOD_DAYS:
+                label = f"Overdue — {days_past_due}d past due"
+            else:
+                # Past the due date but inside the grace period: no late fee
+                # and no warning banner yet, so don't paint it as "Overdue".
+                label = f"Due {days_past_due}d ago — within the grace period"
             if is_next_due and account.pending_emi_credit > 0.01:
                 label += f" (₹{account.pending_emi_credit:,.2f} credited)"
             upcoming.append(
@@ -344,16 +379,24 @@ def _build_warnings(flags: list[Flag], payment_status: dict) -> list[dict]:
         if flag.label == "overdue":
             days = payment_status["days_past_due"]
             if payment_status["late_fee_applicable"]:
+                # The fee ALREADY applies at this point (late_fee_applicable
+                # is days_past_due > the grace period, the same condition
+                # that raises this flag) -- so don't say "pay soon to avoid"
+                # a fee the borrower has already been charged.
                 text = (
-                    f"Your EMI is {days} days overdue -- pay soon to avoid a late fee of "
-                    f"₹{payment_status['late_fee_amount']:,.2f}."
+                    f"Your EMI is {days} days overdue, and a late fee of "
+                    f"₹{payment_status['late_fee_amount']:,.0f} has been added."
                 )
             else:
-                text = f"Your EMI is {days} days overdue -- pay soon."
+                text = f"Your EMI is {days} days overdue."
         elif flag.label == "disputed":
-            text = "You have an open dispute -- our team is reviewing it."
+            text = "You have an open dispute — our team is reviewing it."
         elif flag.label == "broken_promises":
-            text = f"You have {payment_status['broken_promise_count']} missed payment promises on record."
+            n = payment_status["broken_promise_count"]
+            text = (
+                f"{n} earlier payment promises weren't completed — talk to us and we'll "
+                "agree a plan that works for you."
+            )
         else:
             # Defensive only: no flag label besides the three above exists
             # today (see ops/flags.py's compute_flags). Falling back to the
@@ -365,9 +408,79 @@ def _build_warnings(flags: list[Flag], payment_status: dict) -> list[dict]:
     return warnings
 
 
+def _request_title(kind: str, proposed_changes: dict | None) -> tuple[str, str | None]:
+    if kind == RESTRUCTURING:
+        detail = None
+        if proposed_changes and proposed_changes.get("type") == "extend_tenure":
+            detail = (
+                f"Extend by {proposed_changes['extra_months']} month(s) · new EMI "
+                f"₹{float(proposed_changes['new_emi_amount']):,.2f} over "
+                f"{proposed_changes['new_months_remaining']} months"
+            )
+        return "Request for more time on your EMI", detail
+    if kind == CLOSURE:
+        return "Loan closure certificate", None
+    if kind == CALLBACK:
+        return "Call-back request", None
+    if kind == FRAUD:
+        return "Your concern about this loan", None
+    return "Request to our team", None
+
+
+def _build_requests(escalations: list, disputes: list[dict]) -> list[dict]:
+    """The borrower's own view of what they've asked for -- escalations the
+    borrower (or the agent on their behalf) raised, plus their disputes --
+    newest first. Tickets the system or staff raised (guardrail blocks,
+    chronic-delinquency notices, broken-promise patterns, call-log nudges)
+    are internal and never shown: before this, the borrower read
+    "Guardrail blocked a reply: amount(s) not from any real tool result ... [12500.0]"
+    under "Your requests", and their actual dispute wasn't listed at all.
+    Statuses are in borrower terms: an Approve on a plain hand-off just means
+    staff closed it, so it reads "Closed", not "Approved"."""
+    items = []
+    for e in escalations:
+        kind = classify_escalation(e.reason, e.proposed_changes)
+        if kind == SYSTEM:
+            continue
+        title, detail = _request_title(kind, e.proposed_changes)
+        if e.status == "queued_for_human":
+            status, label = "open", "In progress"
+        elif e.status == "rejected":
+            status, label = "declined", "Not approved"
+        else:
+            status, label = "done", ("Approved" if kind in (RESTRUCTURING, CLOSURE) else "Closed")
+        items.append({
+            "id": e.escalation_id, "kind": kind, "title": title, "detail": detail,
+            "status": status, "status_label": label, "outcome": e.resolution_reason,
+            "created_at": e.created_at, "resolved_at": e.resolved_at,
+        })
+    for d in disputes:
+        is_open = d["status"] == "open"
+        items.append({
+            "id": f"dispute-{d['opened_at'].isoformat()}", "kind": "dispute",
+            "title": "Your question about a charge",
+            "detail": (d["reason"] or "")[:200] or None,
+            "status": "open" if is_open else "done",
+            "status_label": "Under review" if is_open else "Resolved",
+            "outcome": d.get("resolution_note"),
+            "created_at": d["opened_at"], "resolved_at": d.get("resolved_at"),
+        })
+    items.sort(key=lambda item: item["created_at"], reverse=True)
+    return items
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    # 503 (not 200) when the database is unreachable: a health check that
+    # only proves the process is alive kept saying "ok" while every real
+    # request took ~36 s to fail. The body names the failing dependency
+    # but never the error text, which can carry the host/user.
+    try:
+        check_database()
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.error("health check failed: database unreachable (%s) -- check the Supabase project isn't paused and DATABASE_URL is right", type(exc).__name__)
+        return JSONResponse(status_code=503, content={"status": "degraded", "database": "unreachable"})
+    return {"status": "ok", "database": "ok"}
 
 
 # AccessDeniedError's own AccountLockedError (repeated wrong keys against
@@ -407,6 +520,9 @@ def start_conversation_endpoint(request: Request, req: StartConversationRequest)
         "language": req.language,
         "messages": conversation,
     }
+    if len(_conversations) > 2000:
+        for k in list(_conversations.keys())[:1000]:
+            _conversations.pop(k, None)
     return StartConversationResponse(conversation_id=conversation_id, account_id=req.account_id, language=req.language)
 
 
@@ -481,25 +597,17 @@ def _process_text_turn(conversation_id: str, session: dict, text: str, client_ip
         try:
             updated_conversation, reply = run_turn_with_memory(session["messages"], session["account_id"])
         except groq.RateLimitError as e:
-            # Something the frontend can actually act on (show "try again in a
-            # bit", maybe auto-retry) -- not the same as a real bug, so it
-            # shouldn't come back as an opaque 500.
-            session["messages"].pop()  # don't leave a user message with no reply appended
-            raise HTTPException(status_code=503, detail=f"Groq rate limit reached: {e.message}") from e
+            msg = f"Groq rate limit reached: {e.message}"
+            session["messages"].append({"role": "assistant", "content": "I am currently rate limited, please try again shortly."})
+            raise HTTPException(status_code=503, detail=msg) from e
         except groq.APIStatusError as e:
-            session["messages"].pop()
-            raise HTTPException(status_code=502, detail=f"upstream LLM provider error: {e.message}") from e
+            msg = f"upstream LLM provider error: {e.message}"
+            session["messages"].append({"role": "assistant", "content": "I encountered an API error, please try again."})
+            raise HTTPException(status_code=502, detail=msg) from e
         except groq.APIConnectionError as e:
-            # A real gap found live: APIConnectionError (network drop, DNS
-            # failure) and its subclass APITimeoutError are siblings of
-            # APIStatusError, not subclasses of it -- groq's own
-            # _exceptions.py confirms this -- so neither except clause
-            # above ever caught them. Left uncaught, this both returned an
-            # unhandled 500 AND skipped the pop() cleanup, stranding the
-            # just-appended user message with no paired reply for every
-            # later turn to inherit.
-            session["messages"].pop()
-            raise HTTPException(status_code=502, detail=f"could not reach the LLM provider: {e}") from e
+            msg = f"could not reach the LLM provider: {e}"
+            session["messages"].append({"role": "assistant", "content": "I am having trouble connecting to the network, please try again."})
+            raise HTTPException(status_code=502, detail=msg) from e
         session["messages"] = updated_conversation
 
         # Computed from the RETURNED conversation, not a pre-call
@@ -665,27 +773,23 @@ def get_dashboard_endpoint(conversation_id: str):
     account = store.get_account_or_raise(account_id)
     flags = compute_flags(account)
     escalations = store.get_escalations_for_account(account_id)
+    disputes = store.get_disputes_for_account(account_id)
     documents = list_documents_for_account(account_id)
 
     return DashboardResponse(
         account=AccountSnapshotOut(**payment_status),
         timeline=[TimelineEntryOut(**entry) for entry in _build_emi_timeline(account, payment_status["days_past_due"])],
         warnings=[WarningOut(**w) for w in _build_warnings(flags, payment_status)],
-        escalations=[
-            DashboardEscalationOut(
-                escalation_id=e.escalation_id, reason=e.reason, status=e.status,
-                created_at=e.created_at, resolved_at=e.resolved_at,
-            )
-            for e in escalations
-        ],
+        requests=[RequestOut(**r) for r in _build_requests(escalations, disputes)],
         documents=[DocumentOut(**d) for d in documents],
-        # A clarification request is a real message from ops about this
-        # account's flags -- previously visible to the borrower ONLY if
-        # Telegram was linked and delivery succeeded; otherwise it was
-        # silently lost to them (still logged, but nowhere they'd ever
-        # see it). Surfacing the same real history here means it's never
-        # lost, regardless of Telegram.
-        messages=[MessageOut(**m) for m in store.get_clarification_requests(account_id)],
+        # Everything sent to this borrower -- staff messages, restructuring
+        # decisions, dispute outcomes and reminders -- previously visible to
+        # them ONLY if Telegram was linked and delivery succeeded (and even
+        # then, only clarification requests were ever shown here). The page
+        # promises nothing sent to them is only visible on Telegram; this is
+        # what makes that true, and makes this page a real channel for a
+        # borrower who never linked Telegram.
+        messages=[MessageOut(**m) for m in store.get_borrower_messages(account_id)],
     )
 
 
@@ -751,66 +855,52 @@ class PaymentTokenInfoOut(BaseModel):
     # clicks confirm. None for a used/expired token (no live account math
     # worth showing at that point).
     emi_amount_due: float | None = None
+    # The late fee that applies right now (0 when none). A link for exactly
+    # emi_amount_due + late_fee_due is a plain payment of what's owed -- the
+    # pay page must not treat the fee as an "extra" to be applied somewhere.
+    late_fee_due: float | None = None
 
 
 class PaymentConfirmRequest(BaseModel):
-    # Only meaningful when amount < emi_amount_due; see store.record_payment's
-    # docstring for the full decision table. Left None for a normal payment
-    # that fully covers what's due -- store.record_payment never asks for
-    # it in that case.
     apply_extra_to_next: bool | None = None
+    payment_scheme: str | None = None  # "credit_next_emi" | "reduce_emi" | "reduce_tenure"
 
 
 class PaymentConfirmOut(BaseModel):
     amount: float
-    kind: str  # "regular" | "extra_unapplied" | "extra_applied" | "overpayment_applied"
+    kind: str
     months_remaining: int
     next_emi_due_date: str
     pending_emi_credit: float
+    principal_amount: float | None = None
+    emi_amount: float | None = None
+    late_fee_paid: float = 0.0  # >0 when the amount included the late fee (not a prepayment)
 
 
 @app.get("/pay/{token}/info", response_model=PaymentTokenInfoOut)
 def payment_token_info_endpoint(token: str):
-    """Read-only -- what the confirm PAGE calls on load to render "Confirm
-    ₹X for [business]" before anything is actually redeemed. A genuinely
-    unknown token is the only 404 case here; an expired or already-used
-    one still returns its real status (see store.get_payment_token_info)
-    so the page can tell the borrower WHY it can't be paid, not just that
-    it can't."""
     info = store.get_payment_token_info(token)
     if info is None:
         raise HTTPException(status_code=404, detail=f"no payment link found for token={token!r}")
     if info["status"] == "pending":
         account = store.get_account_or_raise(info["account_id"])
         info["emi_amount_due"] = round(account.emi_amount - account.pending_emi_credit, 2)
+        info["late_fee_due"] = late_fee_due(account, store.current_date())
     return PaymentTokenInfoOut(**info)
 
 
-# Unlike the two limiters above, this one is NOT scoped to failures only --
-# a payment token is a single guessable string with no separate password,
-# so unlike an account_id+key pair, volume itself is the risk (someone
-# scanning many token guesses from one IP looking for a live one). A real
-# borrower only ever calls this once per link, so a generous per-IP volume
-# cap here costs normal use nothing.
 _payment_confirm_rate_limiter = RateLimiter(max_requests=20, window_seconds=300)
 
 
 @app.post("/pay/{token}/confirm", response_model=PaymentConfirmOut)
 def payment_confirm_endpoint(request: Request, token: str, req: PaymentConfirmRequest | None = None):
-    """The only endpoint that can actually move an account forward from a
-    payment link -- store.redeem_payment_token re-checks used_at/
-    expires_at itself rather than trusting this endpoint already did (a
-    double-submit from a slow network or an impatient double-tap must
-    never record two payments for one token). req is optional so a plain
-    POST with no body (a full payment, matching what's due) still works --
-    the frontend only ever sends apply_extra_to_next when it actually has
-    an answer to send."""
     client_ip = request.client.host if request.client else "unknown"
     if not _payment_confirm_rate_limiter.check(client_ip):
         raise HTTPException(status_code=429, detail="Too many payment attempts from this location -- please wait a few minutes.")
     apply_extra_to_next = req.apply_extra_to_next if req is not None else None
+    payment_scheme = req.payment_scheme if req is not None else None
     try:
-        result = store.redeem_payment_token(token, apply_extra_to_next=apply_extra_to_next)
+        result = store.redeem_payment_token(token, apply_extra_to_next=apply_extra_to_next, payment_scheme=payment_scheme)
     except store.PaymentTokenNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except store.PaymentTokenAlreadyUsedError as e:
@@ -821,7 +911,7 @@ def payment_confirm_endpoint(request: Request, token: str, req: PaymentConfirmRe
         raise HTTPException(status_code=422, detail=str(e)) from e
     store.log_event(
         result["account_id"], "tool_called",
-        {"tool": "record_payment", "arguments": {"token": token, "apply_extra_to_next": apply_extra_to_next}, "result": result},
+        {"tool": "record_payment", "arguments": {"token": token, "apply_extra_to_next": apply_extra_to_next, "payment_scheme": payment_scheme}, "result": result},
     )
     return PaymentConfirmOut(
         amount=result["amount"],
@@ -829,6 +919,9 @@ def payment_confirm_endpoint(request: Request, token: str, req: PaymentConfirmRe
         months_remaining=result["months_remaining"],
         next_emi_due_date=result["next_emi_due_date"],
         pending_emi_credit=result["pending_emi_credit"],
+        principal_amount=result.get("principal_amount"),
+        emi_amount=result.get("emi_amount"),
+        late_fee_paid=result.get("late_fee_paid", 0.0),
     )
 
 

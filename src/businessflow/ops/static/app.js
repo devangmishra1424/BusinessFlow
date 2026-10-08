@@ -26,6 +26,25 @@ const FLAG_LABELS = {
 
 const LANGUAGE_LABELS = { hi: "Hindi", en: "English", hinglish: "Hinglish" };
 
+// Mirrors accounts/policy.py -- used only for display wording.
+const GRACE_PERIOD_DAYS = 3;
+
+// What an escalation IS (the API's `kind`, from accounts/escalation_kinds.py).
+// Before, a fraud claim, a guardrail artifact, a chronic-delinquency notice and a
+// borrower's call-back request were indistinguishable cards with the same
+// Approve/Reject pair.
+const KIND_LABELS = {
+  fraud: "Urgent \u00b7 identity / fraud claim",
+  request: "Request",
+  restructuring: "Restructuring",
+  callback: "Call-back request",
+  closure: "Closure certificate",
+  system: "System notice",
+};
+// Triage order, lowest first (mirrors escalation_kinds.URGENCY_RANK): a fraud
+// claim must not sit at the bottom of an oldest-first list just because it is new.
+const KIND_URGENCY = { fraud: 0, request: 1, restructuring: 2, callback: 2, closure: 3, system: 4 };
+
 const CALL_OUTCOME_LABELS = {
   reached: "Reached",
   no_answer: "No answer",
@@ -856,7 +875,11 @@ function renderSlaBuckets() {
 
 function renderEscalationList() {
   renderSlaBuckets();
-  const list = state.escalations.slice().sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  // Most urgent kind first, then oldest first within a kind.
+  const list = state.escalations.slice().sort(
+    (a, b) =>
+      (KIND_URGENCY[a.kind] ?? 1) - (KIND_URGENCY[b.kind] ?? 1) || new Date(a.created_at) - new Date(b.created_at)
+  );
   const container = document.getElementById("escalation-list");
   document.getElementById("escalation-empty").hidden = list.length !== 0;
   container.innerHTML = list.map((e) => escalationCardHtml(e, { withAccountLink: true })).join("");
@@ -888,14 +911,28 @@ function proposedTermsHtml(pc) {
 
 function escalationCardHtml(e, { withAccountLink }) {
   const isOpen = e.status === "queued_for_human";
+  const kind = e.kind || "request";
+  const acct = state.accounts.find((a) => a.account_id === e.account_id);
+  // Who and how much, right on the card -- an operator triaging the queue
+  // shouldn't have to open every account to learn who it is and how late.
+  const who = acct
+    ? `${acct.borrower_name} \u00b7 ${fmtInr(acct.emi_amount)} EMI${acct.days_past_due > 0 ? ` \u00b7 ${acct.days_past_due}d past due` : ""}`
+    : "";
+  // Only a restructuring or a closure certificate is something to approve or
+  // reject. Everything else is "handled"; a system notice is just acknowledged
+  // (and never messages the borrower).
+  const canReject = kind === "restructuring" || kind === "closure";
+  const approveLabel = kind === "system" ? "Acknowledge" : canReject ? "Approve" : "Mark handled";
   return `
-  <div class="escalation-card" data-escalation-id="${e.escalation_id}">
+  <div class="escalation-card${kind === "fraud" ? " urgent" : ""}" data-escalation-id="${e.escalation_id}" data-kind="${escapeHtml(kind)}">
     <div class="escalation-main">
       <div class="escalation-top">
         ${withAccountLink ? `<span class="escalation-account" data-id="${e.account_id}">${e.account_id}</span>` : ""}
+        <span class="kind-pill ${escapeHtml(kind)}">${escapeHtml(KIND_LABELS[kind] || kind)}</span>
         <span class="status-pill ${e.status}">${e.status.replace(/_/g, " ")}</span>
         <span class="escalation-time">${relativeTime(e.created_at)}</span>
       </div>
+      ${withAccountLink && who ? `<div class="escalation-who">${escapeHtml(who)}</div>` : ""}
       <div class="escalation-reason">${escapeHtml(e.reason)}</div>
       ${proposedTermsHtml(e.proposed_changes)}
       ${e.resolution_reason ? `<div class="escalation-reason" style="margin-top:6px;color:var(--text-3)">Reason given: ${escapeHtml(e.resolution_reason)}</div>` : ""}
@@ -907,12 +944,22 @@ function escalationCardHtml(e, { withAccountLink }) {
     ${
       isOpen
         ? `<div class="escalation-actions">
-            <button class="btn btn-approve" data-action="approve" data-id="${e.escalation_id}">Approve</button>
-            <button class="btn btn-reject" data-action="reject" data-id="${e.escalation_id}">Reject</button>
+            <button class="btn btn-approve" data-action="approve" data-id="${e.escalation_id}">${approveLabel}</button>
+            ${canReject ? `<button class="btn btn-reject" data-action="reject" data-id="${e.escalation_id}">Reject</button>` : ""}
           </div>`
         : ""
     }
   </div>`;
+}
+
+// What the operator is told happened to the BORROWER's side of an approve /
+// reject: the toast used to say "borrower notified" every time, including when
+// nothing was sent at all and when the borrower has no linked Telegram.
+function decisionToast(verb, result) {
+  if (result.kind === "system") return `${verb} \u2014 internal notice, nothing sent to the borrower.`;
+  if (result.borrower_notified === true) return `${verb} \u2014 borrower notified on Telegram.`;
+  if (result.borrower_notified === false) return `${verb} \u2014 no linked Telegram, so it's logged and shown on the borrower's dashboard.`;
+  return `${verb}.`;
 }
 
 function wireEscalationActions(root, onDone) {
@@ -920,8 +967,8 @@ function wireEscalationActions(root, onDone) {
     btn.addEventListener("click", async () => {
       btn.disabled = true;
       try {
-        await approveEscalation(btn.dataset.id);
-        toast("Escalation approved — borrower notified.");
+        const result = await approveEscalation(btn.dataset.id);
+        toast(decisionToast(result.kind === "restructuring" || result.kind === "closure" ? "Approved" : "Closed", result));
         await onDone();
       } catch (e) {
         toast(e.message, true);
@@ -940,8 +987,8 @@ function wireEscalationActions(root, onDone) {
       const reason = document.getElementById(`reject-input-${id}`).value.trim();
       btn.disabled = true;
       try {
-        await rejectEscalation(id, reason);
-        toast("Escalation rejected — borrower notified.");
+        const result = await rejectEscalation(id, reason);
+        toast(decisionToast("Rejected", result));
         await onDone();
       } catch (e) {
         toast(e.message, true);
@@ -1291,7 +1338,7 @@ function buildAccountDigest(a) {
   const stats = [
     `${a.loan_type} — ${fmtInr(a.principal_amount)} principal`,
     `${fmtInr(a.emi_amount)} EMI, next due ${fmtShortDate(a.emi_due_date)}`,
-    `${a.tenure_months - a.months_remaining} of ${a.tenure_months} months paid down`,
+    `${Math.max(0, a.tenure_months - a.months_remaining)} of ${a.tenure_months} months paid down`,
     `NACH mandate ${a.nach_mandate_active ? "active" : "inactive"}`,
     `Prefers ${LANGUAGE_LABELS[a.language_preference] || a.language_preference}`,
   ];
@@ -1374,7 +1421,8 @@ function renderDetail(a, documents, conversation = []) {
       : `<p class="no-data">No documents uploaded yet.</p>`;
     wireDocumentDownloads(container);
   }
-  const paidOffFraction = a.tenure_months > 0 ? (a.tenure_months - a.months_remaining) / a.tenure_months : 0;
+  const monthsPaidDown = Math.max(0, a.tenure_months - a.months_remaining); // months_remaining can exceed tenure after an extension
+  const paidOffFraction = a.tenure_months > 0 ? monthsPaidDown / a.tenure_months : 0;
   const ringColor = a.risk_tier === "high" ? "var(--danger)" : a.risk_tier === "medium" ? "var(--warning)" : "var(--success)";
   const digest = buildAccountDigest(a);
 
@@ -1458,6 +1506,8 @@ function renderDetail(a, documents, conversation = []) {
       if (p.kind === "extra_unapplied") return { date: p.date, amount: p.amount, status: "extra-unapplied", label: "Extra payment (not applied)" };
       if (p.kind === "extra_applied") return { date: p.date, amount: p.amount, status: "extra-applied", label: "Extra payment (credited to next EMI)" };
       if (p.kind === "overpayment_applied") return { date: p.date, amount: p.amount, status: p.on_time ? "paid-on-time" : "paid-late", label: `${baseLabel} + extra credited` };
+      if (p.kind === "principal_prepayment_reduce_emi") return { date: p.date, amount: p.amount, status: p.on_time ? "paid-on-time" : "paid-late", label: `${baseLabel} + extra paid off the loan (EMI lowered)` };
+      if (p.kind === "principal_prepayment_reduce_tenure") return { date: p.date, amount: p.amount, status: p.on_time ? "paid-on-time" : "paid-late", label: `${baseLabel} + extra paid off the loan (loan shortened)` };
       return { date: p.date, amount: p.amount, status: p.on_time ? "paid-on-time" : "paid-late", label: baseLabel };
     });
 
@@ -1468,7 +1518,11 @@ function renderDetail(a, documents, conversation = []) {
       for (let i = 0; i < account.months_remaining; i++) {
         const isNextDue = i === 0;
         const overdue = isNextDue && account.days_past_due > 0;
-        let label = overdue ? `Overdue — ${account.days_past_due}d past due` : "Scheduled";
+        let label = !overdue
+          ? "Scheduled"
+          : account.days_past_due > GRACE_PERIOD_DAYS
+            ? `Overdue — ${account.days_past_due}d past due`
+            : `Due ${account.days_past_due}d ago — within the grace period`;
         if (isNextDue && credit > 0.01) label += ` (${fmtInr(credit)} credited)`;
         upcoming.push({
           date: toLocalIsoDate(cursor),
@@ -1639,7 +1693,7 @@ function renderDetail(a, documents, conversation = []) {
             </div>
             <div class="ring-legend">
               <div><b>${Math.round(paidOffFraction * 100)}%</b> of the ${a.tenure_months}-month term elapsed</div>
-              <div>${a.tenure_months - a.months_remaining} of ${a.tenure_months} months paid down</div>
+              <div>${monthsPaidDown} of ${a.tenure_months} months paid down</div>
             </div>
           </div>
         </div>
@@ -1658,7 +1712,7 @@ function renderDetail(a, documents, conversation = []) {
 
       <div class="detail-sectors">
         <div class="detail-sector">
-          <p class="sector-heading">Issues &amp; actions</p>
+          <p class="sector-heading">Flags &amp; outreach</p>
 
           <div class="section-block">
             <p class="section-title">Flags <span class="count">${a.flags.length}</span></p>
@@ -1724,7 +1778,29 @@ function renderDetail(a, documents, conversation = []) {
         </div>
 
         <div class="detail-sector">
-          <p class="sector-heading">History &amp; activity</p>
+          <p class="sector-heading">Case activity</p>
+
+          <div class="section-block">
+            <p class="section-title">Escalations <span class="count">${a.escalations.length}</span></p>
+            <p class="section-subtitle">Requests handed off to a human — a restructuring proposal, or anything the agent couldn't resolve on its own.</p>
+            ${escalationsHtml}
+          </div>
+
+          <div class="section-block">
+            <p class="section-title">Disputes <span class="count">${a.disputes.length}</span></p>
+            <p class="section-subtitle">The borrower's own stated reason for each dispute -- including one raised via "Contest" on their dashboard.</p>
+            ${disputesHtml}
+          </div>
+
+          <div class="section-block">
+            <p class="section-title">Conversation <span class="count">${conversation.length}</span></p>
+            <p class="section-subtitle">What the AI agent actually said to this borrower, and what it did on their behalf — not just messages ops itself sent.</p>
+            <div class="convo-list">${
+              conversation.length
+                ? conversation.map(conversationEntryHtml).join("")
+                : `<p class="no-data">No AI conversation on record for this account yet.</p>`
+            }</div>
+          </div>
 
           <div class="section-block">
             <p class="section-title">Payment history <span class="count">last ${payments.length}</span></p>
@@ -1747,12 +1823,6 @@ function renderDetail(a, documents, conversation = []) {
           </div>
 
           <div class="section-block">
-            <p class="section-title">EMI timeline <span class="count">${timeline.length}</span></p>
-            <p class="section-subtitle">Every real past payment, plus every EMI still scheduled ahead — projected monthly from the next due date.</p>
-            <div class="timeline-list">${timelineHtml}</div>
-          </div>
-
-          <div class="section-block">
             <p class="section-title">Promises to pay <span class="count">${a.promises.length}</span></p>
             <p class="section-subtitle">Commitments the borrower made to pay by a specific date — kept, broken, or still pending.</p>
             ${promisesHtml}
@@ -1765,12 +1835,6 @@ function renderDetail(a, documents, conversation = []) {
               <p class="mini-form-error" id="log-promise-error" hidden></p>
               <p class="upload-result" id="log-promise-result" hidden></p>
             </form>
-          </div>
-
-          <div class="section-block">
-            <p class="section-title">Disputes <span class="count">${a.disputes.length}</span></p>
-            <p class="section-subtitle">The borrower's own stated reason for each dispute -- including one raised via "Contest" on their dashboard.</p>
-            ${disputesHtml}
           </div>
 
           <div class="section-block">
@@ -1799,19 +1863,9 @@ function renderDetail(a, documents, conversation = []) {
           </div>
 
           <div class="section-block">
-            <p class="section-title">Escalations <span class="count">${a.escalations.length}</span></p>
-            <p class="section-subtitle">Requests handed off to a human — a restructuring proposal, or anything the agent couldn't resolve on its own.</p>
-            ${escalationsHtml}
-          </div>
-
-          <div class="section-block">
-            <p class="section-title">Conversation <span class="count">${conversation.length}</span></p>
-            <p class="section-subtitle">What the AI agent actually said to this borrower, and what it did on their behalf — not just messages ops itself sent.</p>
-            <div class="convo-list">${
-              conversation.length
-                ? conversation.map(conversationEntryHtml).join("")
-                : `<p class="no-data">No AI conversation on record for this account yet.</p>`
-            }</div>
+            <p class="section-title">EMI timeline <span class="count">${timeline.length}</span></p>
+            <p class="section-subtitle">Every real past payment, plus every EMI still scheduled ahead — projected monthly from the next due date.</p>
+            <div class="timeline-list">${timelineHtml}</div>
           </div>
 
           <div class="section-block">
@@ -1990,7 +2044,7 @@ function renderDetail(a, documents, conversation = []) {
       const payload = { amount, payment_date: paymentDate };
       if (applyExtraToNext !== null) payload.apply_extra_to_next = applyExtraToNext;
       const result = await recordPayment(a.account_id, payload);
-      toast(`Payment recorded — ${result.kind.replace(/_/g, " ")}.`);
+      toast(`Payment recorded — ${result.kind.replace(/_/g, " ")}${result.late_fee_paid > 0 ? `, including the ${fmtInr(result.late_fee_paid)} late fee` : ""}.`);
       await refreshAfterAction();
     } catch (err) {
       // A 422 means store.record_payment needs the apply-to-next-EMI
@@ -2091,8 +2145,12 @@ function renderDetail(a, documents, conversation = []) {
       btn.disabled = true;
       btn.textContent = "Resolving…";
       try {
-        await resolveDispute(a.account_id, note);
-        toast("Dispute resolved.");
+        const resolved = await resolveDispute(a.account_id, note);
+        toast(
+          resolved.borrower_notified === true
+            ? "Dispute resolved — borrower notified on Telegram."
+            : "Dispute resolved — no linked Telegram; the outcome is shown on the borrower's dashboard."
+        );
         await refreshAfterAction();
       } catch (err) {
         toast(err.message, true);

@@ -19,27 +19,27 @@ const state = {
 // mapped to a plain-language chip so a borrower sees WHAT was checked,
 // never the raw function/argument names. Grounded, not decorative: this
 // only shows for a tool call that actually happened this turn.
+// The chip is chosen by tool NAME alone (the API doesn't send results), so each
+// label may only claim what was certainly done by calling that tool -- e.g.
+// propose_partial_payment only CHECKS an amount against policy and records
+// nothing, and request_closure_certificate does nothing when the loan isn't
+// fully repaid yet. (They used to read "Submitted your partial payment
+// request" / "Requested your closure certificate".)
 const TOOL_LABELS = {
   get_payment_status: "Checked your account",
   get_payment_history: "Looked up your payment history",
-  log_promise_to_pay: "Logged your promise to pay",
-  flag_dispute: "Flagged your dispute",
-  escalate_to_human: "Connecting you with our team",
-  request_closure_certificate: "Requested your closure certificate",
-  propose_restructuring: "Submitted your restructuring request",
-  generate_payment_link: "Generated a payment link",
-  propose_partial_payment: "Submitted your partial payment request",
+  log_promise_to_pay: "Noted your promise to pay",
+  flag_dispute: "Recorded your dispute",
+  escalate_to_human: "Passed this to our team",
+  request_closure_certificate: "Checked your loan closure status",
+  propose_restructuring: "Reviewed your request for more time",
+  generate_payment_link: "Prepared a payment link",
+  propose_partial_payment: "Checked your partial-payment option",
   calculate_hypothetical: "Calculated your options",
   check_policy: "Checked our policy",
+  compute: "Worked out the figures",
 };
 
-// Escalation status -> borrower-facing label (the API's own status strings
-// are fine as CSS class names but "queued_for_human" isn't fit to print).
-const STATUS_LABELS = {
-  queued_for_human: "Pending",
-  approved: "Approved",
-  rejected: "Rejected",
-};
 
 /* ============================================================
    API layer
@@ -385,16 +385,16 @@ function addAssistantMessage(text, toolCalls = [], isError = false) {
   const chipsHtml = toolCalls.length
     ? `<div class="tool-chips">${toolCalls.map((t) => `<span class="tool-chip">✓ ${escapeHtml(TOOL_LABELS[t.tool] || t.tool)}</span>`).join("")}</div>`
     : "";
-  // No speaker button on an error bubble -- there's nothing real to speak,
-  // and playSpeech would just re-send the friendly error text as if it
-  // were part of the conversation.
   const speakHtml = isError ? "" : `<button type="button" class="speak-btn" title="Listen to this reply" aria-label="Listen to this reply">${SPEAKER_ICON}</button>`;
   row.innerHTML = `<div class="msg-bubble-row"><div class="msg-bubble">${escapeHtml(text)}</div>${speakHtml}</div>${chipsHtml}`;
+  let speakBtn = null;
   if (!isError) {
-    row.querySelector(".speak-btn").addEventListener("click", (e) => playSpeech(text, e.currentTarget));
+    speakBtn = row.querySelector(".speak-btn");
+    speakBtn.addEventListener("click", (e) => playSpeech(text, e.currentTarget));
   }
   $messageList.appendChild(row);
   scrollToBottom();
+  return speakBtn;
 }
 
 function showTyping() {
@@ -609,7 +609,8 @@ async function handleRecordingStopped() {
     const result = await res.json();
     hideTyping();
     if (result.transcript) addUserMessage(result.transcript);
-    addAssistantMessage(result.reply, result.tool_calls);
+    const speakBtn = addAssistantMessage(result.reply, result.tool_calls);
+    if (speakBtn) playSpeech(result.reply, speakBtn);
     if (result.tool_calls && result.tool_calls.length) state.dashboardStale = true;
     if (result.verified_account_id) {
       state.accountId = result.verified_account_id;
@@ -765,35 +766,69 @@ const CHEVRON_ICON =
 const DOC_ICON =
   '<svg class="doc-icon" width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M14 2v6h6" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>';
 
+// Opens the payment page in a NEW TAB in one click: the blank tab is opened
+// synchronously inside the click (so pop-up blockers allow it) and pointed at
+// the link once it exists. Before, the borrower got a plain URL printed in a
+// green box and had to click that too -- five interactions to pay an overdue
+// EMI. If the browser blocks the tab, a real button is shown instead.
+async function startPayment(amount, $result) {
+  const tab = window.open("about:blank", "_blank");
+  if (tab) tab.opener = null;
+  try {
+    const result = await postPaymentLink(state.conversationId, amount);
+    if (tab) {
+      tab.location.href = result.payment_link;
+      showActionResult(
+        $result,
+        `Payment page opened in a new tab for ${escapeHtml(fmtInr(result.amount))}. <a href="${escapeHtml(result.payment_link)}" target="_blank" rel="noopener noreferrer">Open it again</a>`,
+        true
+      );
+    } else {
+      showActionResult(
+        $result,
+        `<a class="pay-link-btn" href="${escapeHtml(result.payment_link)}" target="_blank" rel="noopener noreferrer">Pay ${escapeHtml(fmtInr(result.amount))} &rarr;</a>`,
+        true
+      );
+    }
+    return result;
+  } catch (err) {
+    if (tab) tab.close();
+    showActionResult($result, friendlyActionError(err), false);
+    return null;
+  }
+}
+
 // Which warning labels can be acted on, and what each button really does
 // -- wired to the exact same quick-action endpoints as the Quick Actions
 // cards below, never a separate/fake code path. "disputed" is deliberately
-// NOT in this map: it's already an active claim under review (raised via
-// one of these same "Contest" buttons, or by ops directly), so its
+// NOT in this map: it's already an active claim under review, so its
 // expanded body shows a plain note instead of buttons -- see ops/flags.py
 // and _build_warnings in browser_api.py for the label contract.
+//
+// "This isn't right" (contestPrefix) used to raise a dispute in ONE tap with
+// the banner's own sentence as its "reason" -- information-free for ops, easy
+// to hit by accident right next to the Pay button, and it froze the account's
+// reminders. It now asks what isn't right first.
 const WARNING_ACTIONS = {
   overdue: {
-    resolveLabel: "Get a payment link",
-    resolve: (account) =>
-      postPaymentLink(state.conversationId, account.emi_amount + (account.late_fee_applicable ? account.late_fee_amount : 0)),
-    resolveResultHtml: (result) =>
-      `Payment link for ${escapeHtml(fmtInr(result.amount))}:<br><a href="${escapeHtml(result.payment_link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(result.payment_link)}</a>`,
-    // A link alone doesn't move any account field until it's actually
-    // paid -- same reasoning as the Quick Actions "Get a payment link"
-    // card, which also never refreshes the dashboard after generating one.
+    resolveLabel: (account) => `Pay ${fmtInr(account.amount_due_now)} now`,
+    resolve: (account, $result) => startPayment(account.amount_due_now, $result),
     refreshAfterResolve: false,
-    contestReason: (text) => `Contesting overdue status: ${text}`,
+    contestPrefix: "Disputing the overdue status",
   },
   broken_promises: {
-    resolveLabel: "Talk to a human",
-    resolve: () => postAgent(state.conversationId, "Following up on the missed payment promises flagged on my account"),
-    resolveResultHtml: (result) =>
-      escapeHtml(`Request sent — our team has been notified (status: ${STATUS_LABELS[result.status] || result.status}).`),
-    refreshAfterResolve: true, // a new escalation just appeared in "Your requests"
-    contestReason: (text) => `Contesting missed payment promises: ${text}`,
+    resolveLabel: "Talk to our team",
+    resolve: async () => {
+      await postAgent(state.conversationId, "Following up on the earlier payment promises on my account");
+      return "Request sent \u2014 our team will pick it up. You can follow it under Your requests.";
+    },
+    refreshAfterResolve: true, // a new request just appeared in "Your requests"
+    contestPrefix: "Disputing the missed-promise count",
   },
 };
+
+// Only money owed is red. A dispute is information; a promise history is a notice.
+const WARNING_STYLE = { overdue: "", disputed: "info", broken_promises: "notice" };
 
 // Set fresh by every renderDashboard call below -- the warning-action
 // click handler (wired once, outside renderDashboard) reads these at
@@ -802,24 +837,87 @@ const WARNING_ACTIONS = {
 let _lastWarnings = [];
 let _lastAccount = null;
 
+const MESSAGE_KIND_LABELS = {
+  message: "Message from our team",
+  decision: "Decision on your request",
+  dispute: "Update on your dispute",
+  reminder: "Reminder",
+};
+
+// "Due now": the one number (account.amount_due_now -- EMI less credit, plus
+// the late fee once it applies; the same figure reminders and Telegram's /pay
+// use) and one button. Neutral unless money is actually overdue.
+function renderDueCard(account) {
+  const $card = document.getElementById("due-card");
+  const credit = account.pending_emi_credit || 0;
+  let left;
+  let cta = "";
+  if (account.months_remaining <= 0) {
+    left = `<div><p class="due-card-label">Loan status</p><p class="due-card-amount">Fully repaid</p><p class="due-card-sub">Nothing is due on this loan. Ask in chat if you need your closure certificate.</p></div>`;
+  } else if (account.amount_due_now <= 0) {
+    left = `<div><p class="due-card-label">Due now</p><p class="due-card-amount">${fmtInr(0)}</p><p class="due-card-sub">This month's EMI is already covered by your earlier extra payment. Next EMI of ${fmtInr(account.emi_amount)} is due ${fmtDate(account.emi_due_date)}.</p></div>`;
+  } else {
+    const overdue = account.days_past_due > 0;
+    const composition = account.late_fee_applicable
+      ? `EMI ${fmtInr(account.amount_due_now - account.late_fee_amount)} + late fee ${fmtInr(account.late_fee_amount)}`
+      : credit > 0.01
+        ? `EMI ${fmtInr(account.emi_amount)} less ${fmtInr(credit)} already credited`
+        : "This month's EMI";
+    const when = overdue
+      ? `was due ${fmtDate(account.emi_due_date)} (${account.days_past_due} day${account.days_past_due === 1 ? "" : "s"} ago)${account.late_fee_applicable ? "" : " \u2014 no late fee yet"}`
+      : `due ${fmtDate(account.emi_due_date)}`;
+    left = `<div><p class="due-card-label">Due now</p><p class="due-card-amount${account.late_fee_applicable ? " overdue" : ""}">${fmtInr(account.amount_due_now)}</p><p class="due-card-sub">${escapeHtml(composition)} \u00b7 ${escapeHtml(when)}</p></div>`;
+    cta = `<div class="due-card-cta"><button type="button" class="btn-primary" id="due-pay-btn">Pay ${escapeHtml(fmtInr(account.amount_due_now))}</button><button type="button" class="due-card-alt" id="due-other-btn">Pay a different amount</button></div>`;
+  }
+  $card.innerHTML = `${left}${cta}<div class="action-result" id="due-result" style="flex-basis:100%" hidden></div>`;
+  $card.hidden = false;
+  const $pay = document.getElementById("due-pay-btn");
+  if ($pay) {
+    $pay.addEventListener("click", async () => {
+      $pay.disabled = true;
+      try {
+        await startPayment(account.amount_due_now, document.getElementById("due-result"));
+      } finally {
+        $pay.disabled = false;
+      }
+    });
+    document.getElementById("due-other-btn").addEventListener("click", () => {
+      const $btn = document.getElementById("action-payment-btn");
+      $btn.click();
+      $btn.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }
+}
+
 function renderDashboard(data) {
-  const { account, timeline, warnings, escalations, documents, messages } = data;
+  const { account, timeline, warnings, requests, documents, messages } = data;
   _lastWarnings = warnings;
   _lastAccount = account;
 
+  renderDueCard(account);
+
   // Warnings -- text is rendered exactly as the backend wrote it, never
   // re-worded; label decides which action(s) (if any) the expanded body
-  // offers. Collapsed by default, same as escalations/documents below.
+  // offers. Collapsed by default, same as requests/documents below.
   document.getElementById("dash-warnings").innerHTML = warnings
     .map((w, i) => {
       const cfg = WARNING_ACTIONS[w.label];
+      const resolveLabel = cfg ? (typeof cfg.resolveLabel === "function" ? cfg.resolveLabel(account) : cfg.resolveLabel) : "";
       const body = cfg
         ? `<div class="dash-warning-actions">
-             <button type="button" class="btn-primary" data-warning-action="resolve" data-warning-idx="${i}">${escapeHtml(cfg.resolveLabel)}</button>
-             <button type="button" class="btn-cancel" data-warning-action="contest" data-warning-idx="${i}">Contest this</button>
-           </div>`
-        : `<p class="dash-warning-note">This is already an open claim -- our team is reviewing it, no further action needed here.</p>`;
-      return `<div class="dash-warning">
+             <button type="button" class="btn-primary" data-warning-action="resolve" data-warning-idx="${i}">${escapeHtml(resolveLabel)}</button>
+             <button type="button" class="btn-cancel" data-warning-action="contest" data-warning-idx="${i}">This isn't right</button>
+           </div>
+           <form class="contest-form" id="contest-form-${i}" data-warning-idx="${i}" hidden>
+             <label class="field-label" for="contest-reason-${i}">What isn't right?</label>
+             <textarea id="contest-reason-${i}" rows="2" placeholder="e.g. I already paid this EMI on the 3rd"></textarea>
+             <div class="action-form-row">
+               <button type="submit" class="btn-primary">Send to our team</button>
+               <button type="button" class="btn-cancel" data-warning-action="contest-cancel" data-warning-idx="${i}">Cancel</button>
+             </div>
+           </form>`
+        : `<p class="dash-warning-note">This is already an open claim \u2014 our team is reviewing it and nothing more is needed from you here. The outcome will appear under Messages from us.</p>`;
+      return `<div class="dash-warning ${WARNING_STYLE[w.label] || ""}">
         <button type="button" class="dash-warning-head" data-warning-toggle="${i}">
           ${WARNING_ICON}<span>${escapeHtml(w.text)}</span>${CHEVRON_ICON}
         </button>
@@ -828,31 +926,28 @@ function renderDashboard(data) {
     })
     .join("");
 
-  // Messages from ops -- same list regardless of Telegram delivery, so a
-  // clarification request is never lost just because Telegram wasn't
-  // linked or delivery failed (see MessageOut's docstring in browser_api.py).
+  // Everything we've sent this borrower -- staff messages, decisions, dispute
+  // outcomes, reminders -- whether or not Telegram delivered it.
   document.getElementById("dash-messages").innerHTML = messages.length
     ? messages
         .map(
           (m) =>
-            `<div class="dash-msg-card"><div><p class="dash-msg-text">${escapeHtml(m.message)}</p><p class="dash-msg-meta">${fmtDateTime(m.created_at)}</p></div><span class="dash-msg-badge ${m.delivered_via_telegram ? "yes" : "no"}">${m.delivered_via_telegram ? "Sent via Telegram" : "Telegram not linked"}</span></div>`
+            `<div class="dash-msg-card"><div><p class="dash-msg-kind">${escapeHtml(MESSAGE_KIND_LABELS[m.kind] || "Message")}</p><p class="dash-msg-text">${escapeHtml(m.message)}</p><p class="dash-msg-meta">${fmtDateTime(m.created_at)}</p></div>${m.delivered_via_telegram ? `<span class="dash-msg-badge yes">Also sent on Telegram</span>` : ""}</div>`
         )
         .join("")
     : `<p class="dash-no-data">No messages from us yet.</p>`;
 
-  // Hero identity
+  // Hero identity (no risk label: it described the borrower, not the loan)
   document.getElementById("dash-avatar").textContent = initials(account.borrower_name);
   document.getElementById("dash-borrower-name").textContent = account.borrower_name;
-  document.getElementById("dash-business-name").textContent = `${account.business_name} · ${account.account_id}`;
-  const $risk = document.getElementById("dash-risk-chip");
-  $risk.textContent = `${account.risk_tier} risk`;
-  $risk.className = `risk-chip ${account.risk_tier}`;
+  document.getElementById("dash-business-name").textContent = `${account.business_name} \u00b7 ${account.account_id}`;
 
-  // Progress ring -- fraction of the loan term elapsed so far.
-  const fraction = account.tenure_months > 0 ? (account.tenure_months - account.months_remaining) / account.tenure_months : 0;
-  const ringColor =
-    account.risk_tier === "high" ? "var(--danger)" : account.risk_tier === "medium" ? "var(--warning)" : "var(--success)";
-  document.getElementById("dash-ring-stack").innerHTML = ringChartSvg(fraction, ringColor);
+  // Progress ring -- fraction of the loan term elapsed so far. Neutral colour:
+  // progress is not danger, whatever the account's state. Clamped at 0: after
+  // a tenure extension months_remaining can exceed tenure_months.
+  const elapsed = account.tenure_months - account.months_remaining;
+  const fraction = account.tenure_months > 0 ? Math.max(0, elapsed) / account.tenure_months : 0;
+  document.getElementById("dash-ring-stack").innerHTML = ringChartSvg(fraction, "var(--accent)");
   document.getElementById("dash-ring-value").textContent = account.months_remaining;
   document.getElementById("dash-tenure").textContent = account.tenure_months;
 
@@ -860,13 +955,16 @@ function renderDashboard(data) {
   // backend actually sent a value for them (interest_rate_pct is null
   // until a signed agreement is parsed; late_fee_amount is null unless
   // late_fee_applicable is true).
+  const overdue = account.days_past_due > 0;
   const stats = [
     ["Principal", fmtInr(account.principal_amount)],
     ["EMI amount", fmtInr(account.emi_amount)],
-    ["Next due", fmtDate(account.emi_due_date)],
-    ["Outstanding", fmtInr(account.outstanding_balance_approx)],
-    ["Days past due", String(account.days_past_due), account.days_past_due > 0 ? "flagged" : "ok"],
-    ["NACH mandate", account.nach_mandate_active ? "Active" : "Inactive", account.nach_mandate_active ? "ok" : "flagged"],
+    [overdue ? "EMI was due" : "Next due", fmtDate(account.emi_due_date)],
+    // outstanding_balance_approx is EMI x months left (all remaining EMIs,
+    // interest included) -- not a payoff figure, so don't label it one.
+    ["EMIs left to pay", fmtInr(account.outstanding_balance_approx)],
+    ["Days past due", String(account.days_past_due), overdue ? "flagged" : "ok"],
+    ["Auto-debit (NACH)", account.nach_mandate_active ? "Active" : "Inactive", account.nach_mandate_active ? "ok" : "flagged"],
   ];
   if (account.interest_rate_pct != null) stats.push(["Interest rate", `${account.interest_rate_pct}% p.a.`]);
   if (account.late_fee_applicable) stats.push(["Late fee", fmtInr(account.late_fee_amount), "flagged"]);
@@ -882,27 +980,28 @@ function renderDashboard(data) {
     ? timeline
         .map(
           (t) =>
-            `<div class="dtl-row"><div class="dtl-dot ${t.status}"></div><div class="dtl-info"><b>${fmtInr(t.amount)}</b> — ${escapeHtml(t.label)}<div class="dtl-meta">${fmtDate(t.date)}</div></div></div>`
+            `<div class="dtl-row"><div class="dtl-dot ${t.status}"></div><div class="dtl-info"><b>${fmtInr(t.amount)}</b> \u2014 ${escapeHtml(t.label)}<div class="dtl-meta">${fmtDate(t.date)}</div></div></div>`
         )
         .join("")
     : `<p class="dash-no-data">No payment history and no scheduled EMIs.</p>`;
 
-  // This account's own escalation history, newest first (server order).
-  document.getElementById("dash-escalations").innerHTML = escalations.length
-    ? escalations
+  // The borrower's own requests and disputes, in their terms (the server never
+  // sends internal system tickets or raw staff wording -- see _build_requests).
+  document.getElementById("dash-escalations").innerHTML = requests.length
+    ? requests
         .map(
-          (e) =>
-            `<div class="esc-card"><div><p class="esc-reason">${escapeHtml(e.reason)}</p><p class="esc-meta">Requested ${fmtDateTime(e.created_at)}${e.resolved_at ? ` · resolved ${fmtDateTime(e.resolved_at)}` : ""}</p></div><span class="esc-status ${e.status}">${escapeHtml(STATUS_LABELS[e.status] || e.status)}</span></div>`
+          (r) =>
+            `<div class="esc-card"><div><p class="esc-title">${escapeHtml(r.title)}</p>${r.detail ? `<p class="esc-detail">${escapeHtml(r.detail)}</p>` : ""}<p class="esc-meta">Requested ${fmtDateTime(r.created_at)}${r.resolved_at ? ` \u00b7 closed ${fmtDateTime(r.resolved_at)}` : ""}</p>${r.outcome ? `<p class="esc-outcome"><b>From our team:</b> ${escapeHtml(r.outcome)}</p>` : ""}</div><span class="esc-status ${escapeHtml(r.status)}">${escapeHtml(r.status_label)}</span></div>`
         )
         .join("")
-    : `<p class="dash-no-data">No requests raised yet.</p>`;
+    : `<p class="dash-no-data">Nothing yet. If you ask our team for something, you can follow it here.</p>`;
 
   // Documents -- real download links, scoped to this conversation's verified account.
   document.getElementById("dash-documents").innerHTML = documents.length
     ? documents
         .map(
           (d) =>
-            `<div class="doc-row">${DOC_ICON}<div class="doc-info"><div class="doc-name">${escapeHtml(d.filename)}</div><div class="doc-meta">${fmtFileSize(d.size_bytes)} · uploaded ${fmtDateTime(d.uploaded_at)}</div></div><a class="doc-download" href="/conversations/${state.conversationId}/documents/${encodeURIComponent(d.filename)}" download>Download</a></div>`
+            `<div class="doc-row">${DOC_ICON}<div class="doc-info"><div class="doc-name">${escapeHtml(d.filename)}</div><div class="doc-meta">${fmtFileSize(d.size_bytes)} \u00b7 uploaded ${fmtDateTime(d.uploaded_at)}</div></div><a class="doc-download" href="/conversations/${state.conversationId}/documents/${encodeURIComponent(d.filename)}" download>Download</a></div>`
         )
         .join("")
     : `<p class="dash-no-data">No documents uploaded yet.</p>`;
@@ -926,33 +1025,75 @@ document.getElementById("dash-warnings").addEventListener("click", async (e) => 
 
   const actionBtn = e.target.closest("[data-warning-action]");
   if (!actionBtn) return;
-  const warning = _lastWarnings[Number(actionBtn.dataset.warningIdx)];
+  const idx = Number(actionBtn.dataset.warningIdx);
+  const warning = _lastWarnings[idx];
   const cfg = warning && WARNING_ACTIONS[warning.label];
   if (!cfg) return;
+  const action = actionBtn.dataset.warningAction;
+  const $form = document.getElementById(`contest-form-${idx}`);
+
+  if (action === "contest") {
+    $form.hidden = !$form.hidden;
+    if (!$form.hidden) $form.querySelector("textarea").focus();
+    return;
+  }
+  if (action === "contest-cancel") {
+    $form.hidden = true;
+    return;
+  }
+
   const $result = document.getElementById("warnings-action-result");
   actionBtn.disabled = true;
   try {
-    if (actionBtn.dataset.warningAction === "resolve") {
-      const result = await cfg.resolve(_lastAccount);
-      showActionResult($result, cfg.resolveResultHtml(result), true);
-      if (cfg.refreshAfterResolve) loadDashboard();
+    if (warning.label === "overdue") {
+      await cfg.resolve(_lastAccount, $result); // opens the payment page itself and reports its own result
     } else {
-      const result = await postDispute(state.conversationId, cfg.contestReason(warning.text));
-      showActionResult(
-        $result,
-        escapeHtml(
-          result.already_open
-            ? "You already have an open dispute — our team is reviewing it."
-            : "Dispute raised — our team will review it."
-        ),
-        true
-      );
-      loadDashboard(); // a "disputed" warning + a new entry in the ops-side Disputes section just appeared
+      const html = await cfg.resolve(_lastAccount);
+      showActionResult($result, escapeHtml(html), true);
+      if (cfg.refreshAfterResolve) loadDashboard();
     }
   } catch (err) {
     showActionResult($result, friendlyActionError(err), false);
   } finally {
     actionBtn.disabled = false;
+  }
+});
+
+// "This isn't right": a reason is required, and it is the borrower's own
+// words that reach ops (prefixed with which warning it's about).
+document.getElementById("dash-warnings").addEventListener("submit", async (e) => {
+  const form = e.target.closest(".contest-form");
+  if (!form) return;
+  e.preventDefault();
+  const idx = Number(form.dataset.warningIdx);
+  const warning = _lastWarnings[idx];
+  const cfg = warning && WARNING_ACTIONS[warning.label];
+  if (!cfg) return;
+  const $result = document.getElementById("warnings-action-result");
+  const text = form.querySelector("textarea").value.trim();
+  if (!text) {
+    showActionResult($result, "Tell us what isn't right first.", false);
+    form.querySelector("textarea").focus();
+    return;
+  }
+  const $submit = form.querySelector('button[type="submit"]');
+  $submit.disabled = true;
+  try {
+    const result = await postDispute(state.conversationId, `${cfg.contestPrefix}: ${text}`);
+    showActionResult(
+      $result,
+      escapeHtml(
+        result.already_open
+          ? "You already have an open dispute \u2014 our team is reviewing it."
+          : "Thanks \u2014 our team will review this and we'll post the outcome here."
+      ),
+      true
+    );
+    loadDashboard(); // a "disputed" warning + a new entry under Your requests just appeared
+  } catch (err) {
+    showActionResult($result, friendlyActionError(err), false);
+  } finally {
+    $submit.disabled = false;
   }
 });
 
@@ -1034,7 +1175,7 @@ $disputeForm.addEventListener("submit", async (e) => {
       escapeHtml(
         result.already_open
           ? "You already have an open dispute — our team is reviewing it."
-          : "Dispute raised — our team will review it."
+          : "Thanks — our team will review this and we'll post the outcome here."
       ),
       true
     );
@@ -1060,7 +1201,7 @@ $agentForm.addEventListener("submit", async (e) => {
     const result = await postAgent(state.conversationId, reason);
     showActionResult(
       $agentResult,
-      escapeHtml(`Request sent — our team has been notified (status: ${STATUS_LABELS[result.status] || result.status}).`),
+      escapeHtml("Request sent — our team will pick it up. You can follow it under Your requests."),
       true
     );
     $agentForm.hidden = true;
@@ -1086,16 +1227,9 @@ $paymentForm.addEventListener("submit", async (e) => {
   const $btn = document.getElementById("payment-submit-btn");
   $btn.disabled = true;
   try {
-    const result = await postPaymentLink(state.conversationId, amount);
-    showActionResult(
-      $paymentResult,
-      `Payment link for ${escapeHtml(fmtInr(result.amount))}:<br><a href="${escapeHtml(result.payment_link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(result.payment_link)}</a>`,
-      true
-    );
-    // No account/escalation/document field changes as a result of this
-    // action (see browser_api.py) -- nothing on the dashboard to refresh.
-  } catch (err) {
-    showActionResult($paymentResult, friendlyActionError(err), false);
+    // No account/request/document field changes as a result of this action
+    // (see browser_api.py) -- nothing on the dashboard to refresh.
+    await startPayment(amount, $paymentResult);
   } finally {
     $btn.disabled = false;
   }

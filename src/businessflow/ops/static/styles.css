@@ -38,7 +38,7 @@
   --text-0: #0c1c32;
   --text-1: #26324a;
   --text-2: #52607a;
-  --text-3: #838fa3;
+  --text-3: #5f6b82; /* was #838fa3 (3.27:1 on white); AA needs 4.5:1 */
 
   --accent: #005da8;
   --accent-strong: #004884;
@@ -362,6 +362,11 @@ button, input, select { font-family: inherit; }
 .status-pill.queued_for_human { background: var(--warning-solid-dim); color: var(--warning); }
 .status-pill.approved { background: var(--success-solid-dim); color: var(--success); }
 .status-pill.rejected { background: var(--danger-solid-dim); color: var(--danger); }
+.kind-pill { font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: var(--radius-pill); background: var(--surface-strong); color: var(--text-1); }
+.kind-pill.fraud { background: var(--danger-solid-dim); color: var(--danger); }
+.kind-pill.system { background: transparent; color: var(--text-2); border: 1px dashed var(--border-strong); }
+.escalation-card.urgent { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger); }
+.escalation-who { font-size: 12.5px; font-weight: 600; color: var(--text-1); margin: 0 0 4px; }
 
 .btn { border: none; cursor: pointer; font-weight: 700; font-size: 12.5px; padding: 9px 16px; border-radius: var(--radius-sm); transition: all 0.18s var(--ease); }
 a.btn { display: inline-block; text-decoration: none; text-align: center; }

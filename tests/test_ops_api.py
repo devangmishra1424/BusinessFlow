@@ -47,14 +47,26 @@ _groq_skip = pytest.mark.skipif(
 )
 
 
+def _future_due_date() -> str:
+    """A due date comfortably in the future, relative to today -- these tests
+    create brand-new accounts and assert they start clean, which a fixed
+    calendar date (2026-09-15, once) stops being true of the day it passes."""
+    from datetime import timedelta
+
+    from businessflow.accounts import store
+
+    return (store.current_date() + timedelta(days=30)).isoformat()
+
+
 def _auth() -> dict[str, str]:
     return {"X-API-Key": os.environ["OPS_API_KEY"]}
 
 
-def test_health():
+@_pg_skip
+def test_health_reports_ok_when_the_database_is_reachable():
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    assert response.json() == {"status": "ok", "database": "ok"}
 
 
 @_ops_key_skip
@@ -142,7 +154,7 @@ def test_create_account_endpoint_opens_a_real_new_account(reseed_accounts):
         "principal_amount": 100_000,
         "emi_amount": 8_500,
         "tenure_months": 12,
-        "emi_due_date": "2026-09-15",
+        "emi_due_date": _future_due_date(),
         "nach_mandate_active": True,
         "risk_tier": "low",
     }
@@ -176,7 +188,7 @@ def test_create_account_endpoint_reports_telegram_reachability(reseed_accounts):
         "borrower_name": "Test Borrower Two", "business_name": "Test Business Two",
         "phone_number": "+919800011133", "language_preference": "en", "loan_type": "Working Capital Loan",
         "principal_amount": 100_000, "emi_amount": 8_500, "tenure_months": 12,
-        "emi_due_date": "2026-09-15", "nach_mandate_active": True, "risk_tier": "low",
+        "emi_due_date": _future_due_date(), "nach_mandate_active": True, "risk_tier": "low",
     }
     response = client.post("/accounts", json=payload, headers=_auth())
     account_id = response.json()["account"]["account_id"] if response.status_code == 201 else None
@@ -335,7 +347,7 @@ def test_create_account_endpoint_rejects_an_invalid_phone_number():
     payload = {
         "borrower_name": "Test Borrower", "business_name": "Test Business", "phone_number": "9800011122",
         "language_preference": "en", "loan_type": "Working Capital Loan", "principal_amount": 100_000,
-        "emi_amount": 8_500, "tenure_months": 12, "emi_due_date": "2026-09-15",
+        "emi_amount": 8_500, "tenure_months": 12, "emi_due_date": _future_due_date(),
     }
     response = client.post("/accounts", json=payload, headers=_auth())
     assert response.status_code == 422
@@ -1274,3 +1286,105 @@ def test_upload_loan_agreement_with_a_stated_rate_extracts_and_persists_interest
         store.get_connection().execute(
             "update accounts set interest_rate_pct = null where account_id = %s", ("BF-1002",)
         )
+
+
+@_pg_skip
+@_ops_key_skip
+def test_list_open_escalations_reports_each_ones_kind(reseed_accounts):
+    from businessflow.accounts import store
+    from businessflow.accounts.escalation_kinds import CHRONIC_DELINQUENCY_REASON
+
+    system_id = store.create_escalation("BF-1001", CHRONIC_DELINQUENCY_REASON)
+    fraud_id = store.create_escalation("BF-1002", "SUSPECTED FRAUD/IDENTITY CLAIM -- says the loan isn't theirs")
+    plain_id = store.create_escalation("BF-1004", "customer asked for a human directly")
+
+    kinds = {e["escalation_id"]: e["kind"] for e in client.get("/escalations", headers=_auth()).json()}
+
+    assert kinds[system_id] == "system"
+    assert kinds[fraud_id] == "fraud"
+    assert kinds[plain_id] == "request"
+
+
+@_pg_skip
+@_ops_key_skip
+def test_acknowledging_a_system_ticket_sends_the_borrower_nothing(reseed_accounts):
+    # A chronic-delinquency notice has no borrower request behind it, but "Approve" used to send
+    # "Good news -- your recent request has been approved" for it anyway.
+    from businessflow.accounts import store
+    from businessflow.accounts.escalation_kinds import CHRONIC_DELINQUENCY_REASON
+
+    escalation_id = store.create_escalation("BF-1001", CHRONIC_DELINQUENCY_REASON)
+
+    response = client.post(f"/escalations/{escalation_id}/approve", headers=_auth())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["kind"] == "system" and body["status"] == "approved" and body["borrower_notified"] is None
+    sent = store.get_connection().execute(
+        "select count(*) as n from events where account_id = %s and event_type = 'restructuring_decision_notified'",
+        ("BF-1001",),
+    ).fetchone()["n"]
+    assert sent == 0
+
+
+@_pg_skip
+@_ops_key_skip
+def test_closing_a_plain_request_sends_a_neutral_message_not_good_news(reseed_accounts):
+    # Live: a Hindi grievance was approved and the borrower was sent "Good news -- your recent request
+    # has been approved."
+    from businessflow.accounts import store
+    from businessflow.tools.escalation_tools import escalate_to_human
+
+    escalation = escalate_to_human(account_id="BF-1001", reason="\u0917\u094d\u0930\u0947\u0935\u0947\u0902\u0938: \u0938\u0947\u0935\u093e \u0915\u0947 \u092c\u093e\u0930\u0947 \u092e\u0947\u0902 \u0905\u0938\u0902\u0924\u094b\u0937")
+
+    response = client.post(f"/escalations/{escalation['escalation_id']}/approve", headers=_auth())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["kind"] == "request"
+    assert body["borrower_notified"] is False  # BF-1001 has no linked Telegram after a reseed: logged, not delivered
+    message = store.get_connection().execute(
+        "select details->>'message' as message from events where account_id = %s and event_type = 'restructuring_decision_notified' "
+        "order by created_at desc limit 1",
+        ("BF-1001",),
+    ).fetchone()["message"]
+    assert "Good news" not in message and "approved" not in message
+    assert "reviewed your request" in message
+
+
+@_pg_skip
+@_ops_key_skip
+def test_approved_restructuring_tells_the_borrower_the_new_terms(reseed_accounts):
+    from businessflow.accounts import store
+    from businessflow.tools.escalation_tools import propose_restructuring
+
+    proposal = propose_restructuring(account_id="BF-1001", extra_months=3)
+
+    response = client.post(f"/escalations/{proposal['escalation_id']}/approve", headers=_auth())
+
+    assert response.status_code == 200 and response.json()["kind"] == "restructuring"
+    message = store.get_connection().execute(
+        "select details->>'message' as message from events where account_id = %s and event_type = 'restructuring_decision_notified' "
+        "order by created_at desc limit 1",
+        ("BF-1001",),
+    ).fetchone()["message"]
+    assert message.startswith("Good news")
+    assert "17 months remaining" in message and "10,294.12" in message
+
+
+@_pg_skip
+@_ops_key_skip
+def test_resolving_a_dispute_tells_the_borrower_how_it_ended(reseed_accounts):
+    from businessflow.accounts import store
+
+    response = client.post(
+        "/accounts/BF-1003/disputes/resolve", headers=_auth(), json={"resolution_note": "Fee reviewed and removed."}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["borrower_notified"] is False  # logged and shown on their dashboard; no Telegram linked
+    message = store.get_connection().execute(
+        "select details->>'message' as message from events where account_id = %s and event_type = 'dispute_resolution_notified'",
+        ("BF-1003",),
+    ).fetchone()["message"]
+    assert "reviewed it and closed it" in message and "Fee reviewed and removed." in message
