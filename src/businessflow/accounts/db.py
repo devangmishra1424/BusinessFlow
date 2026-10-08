@@ -16,6 +16,7 @@ before returning -- rather than holding one connection open forever.
 import os
 from functools import lru_cache
 
+import psycopg
 from dotenv import load_dotenv
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
@@ -72,6 +73,31 @@ class _PooledExecutor:
             # buffer, and calling fetchall() on those raises.
             rows = cursor.fetchall() if cursor.description is not None else None
             return _BufferedCursor(rows)
+
+
+def check_database(timeout_seconds: int = 5) -> None:
+    """Raises if the database can't be reached and queried within
+    timeout_seconds -- psycopg.Error for an unreachable/refusing database,
+    RuntimeError if DATABASE_URL isn't configured at all. For /health.
+
+    Opens its own short-lived connection instead of borrowing from the pool,
+    on purpose: the pool's own first-use wait is 30 s, so a dead database
+    would make a health check hang for half a minute instead of failing in
+    seconds -- and a health ping must never take a pooled connection away
+    from a real request (the Session Pooler caps this project at 15).
+    5 s, not tighter: a healthy check measured ~2.2-2.4 s from a laptop in
+    India to the Sydney pooler (TLS + auth round trips), so 3 s would raise
+    false alarms on a merely slow link.
+
+    Found live: a free-tier Supabase project paused after sitting idle while
+    the VM was off, every database-backed request then took ~36 s to return
+    a 500 -- and the old /health, which never touched the database, kept
+    answering 200 "ok" the whole time."""
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError("DATABASE_URL is not set -- copy .env.example to .env and fill it in")
+    with psycopg.connect(database_url, connect_timeout=timeout_seconds, autocommit=True) as conn:
+        conn.execute("select 1")
 
 
 @lru_cache(maxsize=1)

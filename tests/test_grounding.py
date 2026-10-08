@@ -257,3 +257,126 @@ def test_unapplied_restructuring_does_not_flag_a_correctly_hedged_reply():
         "I've sent this for approval and you'll hear back once it's reviewed."
     )
     assert not check_unapplied_restructuring_claim("Your EMI is ₹12,500, due on the 18th.")
+
+
+# --- currency markers other than "₹" ---------------------------------------
+#
+# The check used to recognize only "₹". A reply that wrote the same invented
+# figure as "Rs. 5,00,000" or "500000 rupees" or in Hindi therefore bypassed
+# it completely. These pin down every spelling people and models actually use.
+
+_SETTLEMENT_CONVERSATION = [
+    {"role": "user", "content": "how much to settle"},
+    {"role": "tool", "content": '{"settlement_amount": 418000.0, "emi_amount": 28000.0}'},
+]
+
+
+def test_extract_rupee_amounts_understands_rs_inr_rupees_and_hindi_markers():
+    cases = {
+        "Pay Rs. 50,000 today": {50000.0},
+        "Pay Rs 50000 today": {50000.0},
+        "Pay rs.1,25,000 today": {125000.0},
+        "Pay INR 1,25,000 today": {125000.0},
+        "Pay 50,000 rupees today": {50000.0},
+        "Pay 5 rupees today": {5.0},
+        "Pay 500 Rs. today": {500.0},
+        "आपको 50,000 रुपये देने हैं": {50000.0},
+        "आपको ५०,००० रुपए देने हैं": {50000.0},
+        "रु. 500 बकाया है": {500.0},
+        "Pay ₹1,40,000 and ₹500.": {140000.0, 500.0},
+    }
+    for text, expected in cases.items():
+        assert extract_rupee_amounts(text) == expected, text
+
+
+def test_extract_rupee_amounts_ignores_words_that_merely_end_in_rs_or_contain_ru():
+    # "rs" at the end of "hours"/"doctors", and "रु" at the start of "रुक",
+    # are not currency markers; treating them as such would invent amounts.
+    assert extract_rupee_amounts("wait 5 hours or ask doctors 3 times") == set()
+    assert extract_rupee_amounts("५ मिनट रुक कर देखें") == set()
+
+
+def test_fabricated_amount_written_with_rs_is_caught():
+    failure = check_grounding("You'd need to pay Rs. 5,00,000 to settle in full.", _SETTLEMENT_CONVERSATION)
+
+    assert failure
+    assert 500000.0 in failure.ungrounded_amounts
+
+
+def test_fabricated_amount_written_as_number_then_rupees_is_caught():
+    failure = check_grounding("To settle you need to pay 500000 rupees.", _SETTLEMENT_CONVERSATION)
+
+    assert failure
+    assert 500000.0 in failure.ungrounded_amounts
+
+
+def test_fabricated_amount_written_in_hindi_is_caught():
+    failure = check_grounding("पूरा निपटान करने के लिए आपको 5,00,000 रुपये देने होंगे।", _SETTLEMENT_CONVERSATION)
+
+    assert failure
+    assert 500000.0 in failure.ungrounded_amounts
+
+
+def test_grounded_amount_written_with_rs_or_rupees_still_passes():
+    # The widened check must not start blocking correct replies.
+    for reply in (
+        "Your EMI is Rs. 28,000.",
+        "Your EMI is INR 28,000.",
+        "Your EMI is 28000 rupees.",
+        "आपकी EMI 28,000 रुपये है।",
+        "Settling costs Rs 4,18,000 in full.",
+    ):
+        assert not check_grounding(reply, _SETTLEMENT_CONVERSATION), reply
+
+
+def test_borrowers_own_rs_amount_grounds_the_agents_restatement():
+    conversation = [{"role": "user", "content": "can i pay Rs 15000 instead"}]
+
+    assert not check_grounding("Will you be able to pay ₹15,000 by the 20th?", conversation)
+
+
+def test_no_break_spaces_inside_an_amount_do_not_split_it():
+    # The model emits U+202F / U+00A0 between digit groups. Read as just "5",
+    # a correct Hindi reply was blocked as an invented amount of Rs 5.
+    for sep in (" ", " ", " ", " "):
+        assert extract_rupee_amounts(f"₹5{sep}56,738.07") == {556738.07}, repr(sep)
+
+
+def test_a_correct_hindi_reply_with_no_break_spaces_is_not_blocked():
+    conversation = [
+        {"role": "user", "content": "poora loan settle karna hai"},
+        {"role": "tool", "content": '{"settlement_amount": 556738.07, "outstanding": 586040.07}'},
+    ]
+    reply = "आपको ₹5 56,738.07 का भुगतान करना होगा, जो ₹5 86,040.07 पर 5 % की छूट के बाद है।"
+
+    assert not check_grounding(reply, conversation)
+
+
+def test_lakh_and_crore_words_after_an_amount_are_read_as_the_real_figure():
+    cases = {
+        "₹5.56 लाख": {556000.0},
+        "₹5 lakh": {500000.0},
+        "Rs. 4.18 lakh": {418000.0},
+        "5 लाख रुपये": {500000.0},
+        "1.5 crore rupees": {15000000.0},
+        "₹2 हज़ार": {2000.0},
+    }
+    for text, expected in cases.items():
+        assert extract_rupee_amounts(text) == expected, text
+
+
+def test_lakh_without_a_currency_marker_is_not_money():
+    assert extract_rupee_amounts("5 लाख लोग और 3 lakh visitors") == set()
+
+
+def test_a_made_up_amount_written_in_lakh_is_caught_and_a_correct_one_is_not():
+    # "5 lakh" (= 500,000) used to be read as nothing at all, so an invented
+    # figure phrased this way slipped through; "₹4.18 lakh" for a real 418,000
+    # used to be read as 4.18 and blocked a correct reply.
+    assert check_grounding("To settle you need to pay 5 lakh rupees.", _SETTLEMENT_CONVERSATION)
+    assert not check_grounding("Settling costs ₹4.18 lakh in full.", _SETTLEMENT_CONVERSATION)
+
+
+def test_descriptive_numbers_are_still_never_treated_as_money():
+    for reply in ("It is 3 days past due.", "That is a 5% discount.", "You have 17 months left."):
+        assert not check_grounding(reply, _SETTLEMENT_CONVERSATION), reply

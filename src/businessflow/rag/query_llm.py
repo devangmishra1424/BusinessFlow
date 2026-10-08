@@ -22,7 +22,7 @@ import logging
 
 import groq
 
-from businessflow.agent.client import MODEL, client
+from businessflow.agent.client import MODEL, groq_client
 from businessflow.rag.tokenize import tokenize as _tokenize
 
 logger = logging.getLogger(__name__)
@@ -78,7 +78,7 @@ def translate_to_english(query: str) -> str:
     is a distinct failure point from an actual Groq API error but needs
     the exact same graceful fallback."""
     try:
-        completion = client().chat.completions.create(
+        completion = groq_client().chat.completions.create(
             model=MODEL,
             temperature=0,
             messages=[
@@ -119,7 +119,7 @@ def expand_query(query: str, n_variants: int = 2) -> list[str]:
     only expand when the top result's own score is ambiguous (near a
     threshold), rather than always-on or always-off."""
     try:
-        completion = client().chat.completions.create(
+        completion = groq_client().chat.completions.create(
             model=MODEL,
             temperature=0.7,
             messages=[

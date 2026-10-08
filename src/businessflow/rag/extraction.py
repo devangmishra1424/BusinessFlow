@@ -12,7 +12,7 @@ the extraction step, wired in by ops/api.py's upload_account_document.
 import json
 import logging
 
-from businessflow.agent.client import MODEL, client
+from businessflow.agent.client import MODEL, groq_client
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ def extract_loan_terms(document_text: str) -> dict:
     _UNTRACKED_ACCOUNT_DATA prompt behavior -- never crash the upload
     endpoint or silently fabricate a plausible-looking rate.
     """
-    completion = client().chat.completions.create(
+    completion = groq_client().chat.completions.create(
         model=MODEL,
         temperature=0,
         response_format={"type": "json_object"},
