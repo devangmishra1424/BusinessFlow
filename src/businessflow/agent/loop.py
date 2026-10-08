@@ -7,6 +7,8 @@ which just talks without checking anything against real data.
 import asyncio
 import json
 import logging
+import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -14,8 +16,9 @@ import groq
 import langfuse
 
 from businessflow.accounts import store
+from businessflow.accounts.escalation_kinds import GUARDRAIL_REASON_PREFIX
 from businessflow.agent import prompt_versions
-from businessflow.agent.client import MODEL, build_system_prompt, client, switch_to_fallback_key
+from businessflow.agent.client import MODEL, build_system_prompt, client, reset_to_primary_key, switch_to_fallback_key
 from businessflow.guardrail import grounding
 from businessflow.guardrail.unverified_restructuring import check_unverified_restructuring_claim
 from businessflow.memory import conversation_memory
@@ -67,27 +70,84 @@ _MAX_CONVERSATION_TURNS = 20
 # client-side errors.
 _MALFORMED_TOOL_CALL_RETRIES = 2
 
+# The SDK's own retrying is switched off for this path (client(fail_fast=
+# True), see its docstring: on a 429 the SDK slept for Retry-After before
+# the key rotation below could run). That also drops its automatic retry of
+# genuinely transient failures -- a dropped connection, a timeout, a 5xx --
+# so those get a small, bounded budget of their own here instead.
+_TRANSIENT_ERROR_RETRIES = 2
+_TRANSIENT_ERROR_BACKOFF_SECONDS = 0.5
+
+# Rotating to another key is instant, but when EVERY configured key is out of
+# its per-minute tokens at once (measured: 8,000 tokens/min each, and a tool
+# turn spends ~11k) there is nothing left to rotate to and the only thing
+# that helps is waiting for a bucket to refill. The SDK used to do that wait
+# for us, up to 60 s per attempt, before any rotation could happen; now the
+# wait happens only in this saturated case, only for as long as the server
+# says (Retry-After, capped), and only a bounded number of times.
+_RATE_LIMIT_WAIT_ROUNDS = 2
+_RATE_LIMIT_DEFAULT_WAIT_SECONDS = 10.0  # when a 429 carries no usable Retry-After
+_RATE_LIMIT_MAX_WAIT_SECONDS = 30.0
+
+
+def _retry_after_seconds(error: "groq.RateLimitError") -> float:
+    """The server's own Retry-After from the 429 (seconds), clamped to
+    [1, _RATE_LIMIT_MAX_WAIT_SECONDS]; a default when it is absent or isn't
+    a plain number."""
+    headers = error.response.headers if error.response is not None else {}
+    try:
+        seconds = float(headers.get("retry-after"))
+    except (TypeError, ValueError):
+        seconds = _RATE_LIMIT_DEFAULT_WAIT_SECONDS
+    return min(max(seconds, 1.0), _RATE_LIMIT_MAX_WAIT_SECONDS)
+
 
 @langfuse.observe(name="groq_completion", as_type="generation")
 def _create_completion(**kwargs):
-    # Two independent retry budgets, deliberately not sharing one counter:
-    # rate-limit switching is bounded by however many real fallback keys
+    # Four independent retry budgets, deliberately not sharing one counter:
+    # rotating through keys is bounded by however many real fallback keys
     # are configured (switch_to_fallback_key() itself returns False once
-    # they're all tried -- no separate cap needed here), while malformed-
-    # tool-call retries are capped at _MALFORMED_TOOL_CALL_RETRIES
-    # regardless of how many keys got switched through along the way.
+    # they're all tried), waiting out a fully saturated round is capped at
+    # _RATE_LIMIT_WAIT_ROUNDS, while malformed-tool-call retries and
+    # transient-error retries are each capped regardless of how many keys
+    # got switched through along the way.
     malformed_tool_call_attempts = 0
+    transient_error_attempts = 0
+    rate_limit_waits = 0
     while True:
-        groq_client = client()  # re-fetched each attempt -- picks up whichever key is currently active
+        groq_client, current_key_index = client(fail_fast=True)  # re-fetched each attempt -- picks up whichever key is currently active
         try:
             return groq_client.chat.completions.create(**kwargs)
-        except groq.RateLimitError:
-            # This key's daily quota is exhausted (this is exactly what we
-            # hit repeatedly during eval runs this session) -- advance to
-            # the next configured fallback key, if any are left untried.
-            if not switch_to_fallback_key():
+        except (groq.APIConnectionError, groq.InternalServerError) as e:
+            # APITimeoutError is a subclass of APIConnectionError. Same
+            # key, short backoff -- a rate limit would be RateLimitError,
+            # not these.
+            if transient_error_attempts >= _TRANSIENT_ERROR_RETRIES:
                 raise
-            logger.warning("Groq key rate-limited -- switched to the next configured fallback key")
+            transient_error_attempts += 1
+            logger.warning(
+                "transient Groq error (%s) -- retrying (attempt %d of %d)",
+                type(e).__name__, transient_error_attempts, _TRANSIENT_ERROR_RETRIES,
+            )
+            time.sleep(_TRANSIENT_ERROR_BACKOFF_SECONDS * transient_error_attempts)
+        except groq.RateLimitError as e:
+            # This key is out of tokens for now -- advance to the next
+            # configured fallback key, if any are left untried this round.
+            if switch_to_fallback_key(current_key_index):
+                logger.warning("Groq key rate-limited -- switched to the next configured fallback key")
+                continue
+            # Every configured key has been tried: wait for a bucket to
+            # refill (bounded), then start over from the primary key.
+            if rate_limit_waits >= _RATE_LIMIT_WAIT_ROUNDS:
+                raise
+            rate_limit_waits += 1
+            wait_seconds = _retry_after_seconds(e)
+            logger.warning(
+                "every configured Groq key is rate-limited -- waiting %.0fs for one to refill (round %d of %d)",
+                wait_seconds, rate_limit_waits, _RATE_LIMIT_WAIT_ROUNDS,
+            )
+            time.sleep(wait_seconds)
+            reset_to_primary_key()
         except groq.BadRequestError as e:
             code = (e.body or {}).get("error", {}).get("code") if isinstance(e.body, dict) else None
             if code != "tool_use_failed" or malformed_tool_call_attempts >= _MALFORMED_TOOL_CALL_RETRIES:
@@ -242,7 +302,7 @@ def _finalize_reply(conversation: list[dict], verified_account_id: str | None) -
     logger.warning("guardrail: blocked a reply -- %s", failure.describe())
     store.log_event(verified_account_id, "guardrail_failed", {"reply": reply_text, "reason": failure.describe()})
     if verified_account_id:
-        store.create_escalation(verified_account_id, f"Guardrail blocked a reply: {failure.describe()}")
+        store.create_escalation(verified_account_id, f"{GUARDRAIL_REASON_PREFIX} {failure.describe()}")
 
     safe_reply = "Let me connect you with someone who can confirm those exact details before we go further."
     conversation[-1]["content"] = safe_reply
@@ -347,11 +407,11 @@ def update_conversation_language(conversation: list[dict], language: str, accoun
     conversation[0]["content"] = build_system_prompt(language, account_id, template)
 
 
-_sync_loop: asyncio.AbstractEventLoop | None = None
+_local = threading.local()
 
 
 def _get_sync_loop() -> asyncio.AbstractEventLoop:
-    """One event loop, reused for the life of the process, instead of a
+    """One event loop, reused for the life of the thread, instead of a
     fresh asyncio.run() per call. Found live: calling run_turn()
     repeatedly in one process (exactly what a long-running caller like
     channels/telegram_bot.py or a benchmark loop does) degraded badly
@@ -362,11 +422,11 @@ def _get_sync_loop() -> asyncio.AbstractEventLoop:
     turn depends on (most likely langfuse's own async client, which
     holds real connections/background tasks) doesn't tolerate having its
     loop pulled out from under it and rebuilt repeatedly. Keeping one
-    loop alive for the whole process avoids that churn entirely."""
-    global _sync_loop
-    if _sync_loop is None or _sync_loop.is_closed():
-        _sync_loop = asyncio.new_event_loop()
-    return _sync_loop
+    loop alive for the thread avoids that churn entirely, while being
+    thread-local makes it safe for concurrent API requests."""
+    if not hasattr(_local, "loop") or _local.loop.is_closed():
+        _local.loop = asyncio.new_event_loop()
+    return _local.loop
 
 
 def run_turn(

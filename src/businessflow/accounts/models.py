@@ -93,6 +93,13 @@ class Account:
     promises: list[PromiseToPay] = field(default_factory=list)
 
     def days_past_due(self, as_of: date) -> int:
+        # A fully repaid loan (months_remaining == 0) has nothing left to be
+        # late on. record_payment still rolls emi_due_date forward a month on
+        # the final EMI, so without this guard that phantom date eventually
+        # turned into reminders, an "overdue" flag and a late fee for a
+        # borrower who owes nothing.
+        if self.months_remaining <= 0:
+            return 0
         delta = (as_of - self.emi_due_date).days
         return max(delta, 0)
 

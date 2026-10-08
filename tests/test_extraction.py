@@ -51,13 +51,13 @@ def test_extract_loan_terms_returns_none_on_unparseable_json(monkeypatch):
     # The model failing to follow the strict-JSON instruction must
     # degrade to "no rate found," not raise and take the upload endpoint
     # down with it.
-    monkeypatch.setattr(extraction, "client", lambda: _fake_client_returning("not json at all"))
+    monkeypatch.setattr(extraction, "groq_client", lambda: _fake_client_returning("not json at all"))
 
     assert extract_loan_terms("irrelevant document text") == {"interest_rate_pct": None}
 
 
 def test_extract_loan_terms_returns_none_when_the_key_is_missing(monkeypatch):
-    monkeypatch.setattr(extraction, "client", lambda: _fake_client_returning('{"some_other_field": 1}'))
+    monkeypatch.setattr(extraction, "groq_client", lambda: _fake_client_returning('{"some_other_field": 1}'))
 
     assert extract_loan_terms("irrelevant document text") == {"interest_rate_pct": None}
 
@@ -65,19 +65,19 @@ def test_extract_loan_terms_returns_none_when_the_key_is_missing(monkeypatch):
 def test_extract_loan_terms_returns_none_on_a_non_numeric_rate(monkeypatch):
     # A string, a bool, or anything else that isn't a real number must
     # be discarded rather than written to a numeric DB column.
-    monkeypatch.setattr(extraction, "client", lambda: _fake_client_returning('{"interest_rate_pct": "high"}'))
+    monkeypatch.setattr(extraction, "groq_client", lambda: _fake_client_returning('{"interest_rate_pct": "high"}'))
 
     assert extract_loan_terms("irrelevant document text") == {"interest_rate_pct": None}
 
 
 def test_extract_loan_terms_passes_through_a_null_rate(monkeypatch):
-    monkeypatch.setattr(extraction, "client", lambda: _fake_client_returning('{"interest_rate_pct": null}'))
+    monkeypatch.setattr(extraction, "groq_client", lambda: _fake_client_returning('{"interest_rate_pct": null}'))
 
     assert extract_loan_terms("a document that never mentions an interest rate") == {"interest_rate_pct": None}
 
 
 def test_extract_loan_terms_parses_a_real_looking_numeric_response(monkeypatch):
-    monkeypatch.setattr(extraction, "client", lambda: _fake_client_returning('{"interest_rate_pct": 14.5}'))
+    monkeypatch.setattr(extraction, "groq_client", lambda: _fake_client_returning('{"interest_rate_pct": 14.5}'))
 
     result = extract_loan_terms("the interest rate is 14.5% per annum")
 

@@ -97,6 +97,16 @@ async def notify_restructuring_decision(account_id: str, approved: bool, message
     return await _deliver_and_log(account_id, message, "restructuring_decision_notified", {"approved": approved})
 
 
+async def notify_dispute_resolved(account_id: str, message: str) -> bool:
+    """Called from ops/api.py right after staff resolve a dispute -- the
+    borrower's account stopped being frozen and their banner disappeared, but
+    nothing ever told them the outcome. Same real-or-logged delivery as every
+    other notification here; the dashboard's "Messages from us" shows it
+    either way. Returns True if the borrower was actually reached over
+    Telegram."""
+    return await _deliver_and_log(account_id, message, "dispute_resolution_notified", {})
+
+
 async def notify_clarification_request(account_id: str, message: str) -> bool:
     """Called from ops/api.py right after an operator sends a
     clarification request about an account's flags -- message is the

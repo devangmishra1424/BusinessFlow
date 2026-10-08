@@ -58,6 +58,7 @@ from telegram.constants import ChatAction
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from businessflow.accounts import store
+from businessflow.accounts.dues import amount_due_now
 from businessflow.agent.loop import (
     AccessDeniedError,
     AccountLockedError,
@@ -102,8 +103,30 @@ _voice_preference: dict[int, bool] = {}  # chat_id -> True if text replies shoul
 # different locks for the same brand-new chat_id.
 _session_locks: dict[int, asyncio.Lock] = {}
 
+# accounts.language_preference is a 3-way business field ("hi" | "en" |
+# "hinglish") but the live conversation only supports "en"/"hi" (see
+# agent/client.py's _LANGUAGE_INSTRUCTIONS) -- so hinglish maps to English for
+# now (a deliberate default, not a decision about how Hinglish should sound).
+# Outbound reminders already honour the full preference; without this the bot
+# answered a Hindi-preference borrower in English even though the reminder that
+# brought them here was in Hindi.
+_RUNTIME_LANGUAGE_FOR_PREFERENCE = {"hi": "hi", "en": "en", "hinglish": "en"}
+
+
+def _language_for(chat_id: int, account_id: str | None) -> str:
+    """An explicit /hindi, /english or language-button choice always wins;
+    otherwise the account's own preference; otherwise English."""
+    explicit = _language_choice.get(chat_id)
+    if explicit:
+        return explicit
+    account = store.get_account(account_id) if account_id else None
+    return _RUNTIME_LANGUAGE_FOR_PREFERENCE.get(account.language_preference, "en") if account else "en"
+
 
 def _get_session_lock(chat_id: int) -> asyncio.Lock:
+    if len(_session_locks) > 2000:
+        for k in list(_session_locks.keys())[:1000]:
+            _session_locks.pop(k, None)
     lock = _session_locks.get(chat_id)
     if lock is None:
         lock = _session_locks[chat_id] = asyncio.Lock()
@@ -147,7 +170,7 @@ def handle_incoming_message(chat_id: int, text: str) -> str:
     if session is None or session.get("account_id") is None:
         if looks_like_credentials(text):
             account_id, access_key = parse_credentials(text)
-            language = session["language"] if session else _language_choice.get(chat_id, "en")
+            language = _language_for(chat_id, account_id)
             try:
                 conversation = verify_and_start_conversation(language, account_id, access_key)
             except AccessDeniedError:
@@ -192,7 +215,7 @@ def handle_incoming_message(chat_id: int, text: str) -> str:
                 # ran against a real "hinglish"-preference seeded account).
                 # The real verification branch above never reads this
                 # account field either, for the same reason -- match it.
-                language = _language_choice.get(chat_id, "en")
+                language = _language_for(chat_id, rehydrated.account_id)
                 conversation = start_conversation_with_recap(language, rehydrated.account_id)
                 _sessions[chat_id] = {"account_id": rehydrated.account_id, "language": language, "messages": conversation}
                 welcome_back_prefix = f"Welcome back -- I've resumed account {rehydrated.account_id}.\n\n"
@@ -205,31 +228,23 @@ def handle_incoming_message(chat_id: int, text: str) -> str:
         # didn't look like credentials -- keep using it as-is below.
 
     session["messages"].append({"role": "user", "content": text})
+    
+    if len(_sessions) > 2000:
+        for k in list(_sessions.keys())[:1000]:
+            _sessions.pop(k, None)
+            
     try:
         updated_conversation, reply = run_turn_with_memory(session["messages"], session["account_id"])
     except groq.RateLimitError as e:
-        # Deliberately not including e.message in the reply -- it's Groq's raw
-        # error body (org ID, exact token counts, an "upgrade to Dev
-        # Tier" link), never meant for a borrower to see. Logged instead,
-        # same as browser_api.py's equivalent path already does at the
-        # HTTP layer (its frontend just never renders the raw detail).
-        session["messages"].pop()  # don't leave a user message with no reply appended
+        session["messages"].append({"role": "assistant", "content": "I am currently rate limited, please try again shortly."})
         logger.warning("Groq rate limit hit for chat_id=%s: %s", chat_id, e)
         return "I'm getting rate-limited by the LLM provider right now -- please try again shortly."
     except groq.APIStatusError as e:
-        session["messages"].pop()
+        session["messages"].append({"role": "assistant", "content": "I encountered an API error, please try again."})
         logger.warning("Groq API error for chat_id=%s: %s", chat_id, e)
         return "The LLM provider had an error on its end -- please try again."
     except groq.APIConnectionError as e:
-        # A real gap found live: APIConnectionError (network drop, DNS
-        # failure) and its subclass APITimeoutError are siblings of
-        # APIStatusError, not subclasses of it -- neither except clause
-        # above ever caught them. Left uncaught, this propagated all the
-        # way past python-telegram-bot's own dispatcher (main() registers
-        # no add_error_handler), so the borrower got total silence, and
-        # the pop() cleanup never ran, stranding the just-appended user
-        # message with no paired reply for every later turn to inherit.
-        session["messages"].pop()
+        session["messages"].append({"role": "assistant", "content": "I am having trouble connecting to the network, please try again."})
         logger.warning("Groq connection error for chat_id=%s: %s", chat_id, e)
         return "I'm having trouble reaching the LLM provider right now -- please try again shortly."
     session["messages"] = updated_conversation
@@ -451,6 +466,8 @@ async def _run_status(chat_id: int) -> str:
         f"{result['months_remaining']} of {result['tenure_months']} months remaining",
         f"Outstanding (approx): ₹{result['outstanding_balance_approx']:,.2f}",
     ]
+    if result["amount_due_now"] > 0:
+        lines.append(f"Due now: ₹{result['amount_due_now']:,.2f}")
     if result["days_past_due"] > 0:
         due_line = f"{result['days_past_due']} days past due"
         if result["late_fee_applicable"]:
@@ -480,13 +497,20 @@ async def _run_pay(chat_id: int, args: list[str] | None) -> str:
     if account_id is None:
         return _NOT_VERIFIED_MESSAGE
     if not args:
-        return "Usage: /pay <amount> -- e.g. /pay 5000"
-    try:
-        amount = float(args[0])
-    except ValueError:
-        return "That doesn't look like a number -- usage: /pay <amount>, e.g. /pay 5000"
-    if amount <= 0:
-        return "Amount must be greater than zero."
+        # No amount typed: pay what's due now (EMI less credit, plus the late
+        # fee once it applies) -- the same figure the dashboard and reminders
+        # use -- instead of making the borrower work it out and type it.
+        due = amount_due_now(store.get_account_or_raise(account_id), store.current_date())
+        if due <= 0:
+            return "Nothing is due on your account right now. To pay a different amount, send /pay <amount>, e.g. /pay 5000"
+        amount = due
+    else:
+        try:
+            amount = float(args[0])
+        except ValueError:
+            return "That doesn't look like a number -- usage: /pay <amount>, e.g. /pay 5000"
+        if amount <= 0:
+            return "Amount must be greater than zero."
     result = generate_payment_link(account_id, amount)
     _log_tool_call(account_id, "generate_payment_link", {"account_id": account_id, "amount": amount}, result)
     return (
@@ -583,7 +607,7 @@ async def on_voice_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 _MENU_ITEMS = [
     ("status", "📊 Check my status"),
     ("history", "📜 Payment history"),
-    ("pay", "💳 Get a payment link"),
+    ("pay", "💳 Pay what's due"),
     ("dispute", "⚠️ Flag a dispute"),
     ("agent", "🧑 Talk to a human"),
     ("closure", "📄 Closure certificate"),
@@ -625,7 +649,7 @@ async def on_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     elif cmd == "closure":
         text = await _run_closure(chat_id)
     elif cmd == "pay":
-        text = "Send /pay <amount> to get a payment link -- e.g. /pay 5000"
+        text = await _run_pay(chat_id, None)
     elif cmd == "dispute":
         text = "Send /dispute <what happened> -- e.g. /dispute I already paid this via UPI on the 3rd"
     elif cmd == "voice":
@@ -743,7 +767,7 @@ async def _register_commands(application: Application) -> None:
             ("start", "Begin or verify your account"),
             ("status", "Check your EMI, due date, and balance"),
             ("history", "See your recent payments"),
-            ("pay", "Get a payment link -- /pay <amount>"),
+            ("pay", "Pay what's due (or /pay <amount>)"),
             ("dispute", "Flag a dispute -- /dispute <what happened>"),
             ("agent", "Talk to a human"),
             ("closure", "Request a loan closure certificate"),

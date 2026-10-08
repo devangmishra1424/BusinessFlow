@@ -46,7 +46,7 @@ def test_translate_to_english_falls_back_to_original_query_on_groq_error(monkeyp
     fake_client = type("FakeClient", (), {"chat": type("Chat", (), {
         "completions": type("Completions", (), {"create": staticmethod(_raise)})()
     })()})()
-    monkeypatch.setattr(query_llm, "client", lambda: fake_client)
+    monkeypatch.setattr(query_llm, "groq_client", lambda: fake_client)
 
     result = query_llm.translate_to_english("क्या मुझे कुछ और दिन मिल सकते हैं")
 
@@ -63,7 +63,7 @@ def test_translate_to_english_falls_back_to_original_query_when_no_key_is_config
     def _raise():
         raise RuntimeError("GROQ_API_KEY is not set -- copy .env.example to .env and fill it in")
 
-    monkeypatch.setattr(query_llm, "client", _raise)
+    monkeypatch.setattr(query_llm, "groq_client", _raise)
 
     result = query_llm.translate_to_english("क्या मुझे कुछ और दिन मिल सकते हैं")
 
@@ -77,7 +77,7 @@ def test_expand_query_falls_back_to_original_only_on_groq_error(monkeypatch):
     fake_client = type("FakeClient", (), {"chat": type("Chat", (), {
         "completions": type("Completions", (), {"create": staticmethod(_raise)})()
     })()})()
-    monkeypatch.setattr(query_llm, "client", lambda: fake_client)
+    monkeypatch.setattr(query_llm, "groq_client", lambda: fake_client)
 
     result = query_llm.expand_query("can I get a few more days to pay")
 
@@ -88,7 +88,7 @@ def test_expand_query_falls_back_to_original_when_no_key_is_configured(monkeypat
     def _raise():
         raise RuntimeError("GROQ_API_KEY is not set -- copy .env.example to .env and fill it in")
 
-    monkeypatch.setattr(query_llm, "client", _raise)
+    monkeypatch.setattr(query_llm, "groq_client", _raise)
 
     result = query_llm.expand_query("can I get a few more days to pay")
 

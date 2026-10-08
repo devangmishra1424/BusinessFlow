@@ -8,8 +8,9 @@ a proactive reminder to a borrower who hasn't asked for anything, the
 other drafts a reply to an ops-initiated concern about an account's flags.
 """
 
+from businessflow.accounts.dues import reminder_amounts
 from businessflow.accounts.models import Account
-from businessflow.agent.client import MODEL, client
+from businessflow.agent.client import MODEL, groq_client
 from businessflow.outbound.decide import OutboundReminder
 
 # Kept local rather than reusing agent/client.py's _LANGUAGE_INSTRUCTIONS --
@@ -23,17 +24,29 @@ _LANGUAGE_INSTRUCTIONS = {
     "hinglish": "Reply in Hinglish -- natural Hindi-English code-switching, Latin script.",
 }
 
+_TONE_INSTRUCTIONS = {
+    "empathetic": "Tone: Warm, empathetic, and supportive. Emphasize that we are here to help if they face any difficulty.",
+    "neutral_reminder": "Tone: Direct, professional, polite, and neutral. Focus on clear payment instructions.",
+    "firm_urgent": "Tone: Firm, clear, and urgent. Highlight the importance of immediate payment to avoid further delinquency.",
+    "final_notice": (
+        "Tone: Very firm, formal, and urgent. State clearly that this is a critical notice requiring immediate "
+        "payment or direct contact -- but never threaten, and never mention any consequence (legal action, "
+        "reporting, visits) that isn't in the facts below."
+    ),
+}
+
 _REMINDER_SYSTEM_PROMPT = (
     "You draft a short, professional payment reminder from a loan servicer "
-    "to a borrower. Be direct and respectful, never threatening. Reference "
+    "to a borrower. Be direct and respectful, never threatening and never "
+    "abusive, whatever the tone below asks for. Reference "
     "ONLY the account facts given below -- never invent an amount, date, or "
     "claim that wasn't given. Keep it to 1-3 short sentences, suitable for "
-    "an SMS/Telegram message. {language_instruction} Output only the "
+    "an SMS/Telegram message. {tone_instruction} {language_instruction} Output only the "
     "message text itself: no preamble, no quotation marks, no signature block."
 )
 
 
-def compose_message(account: Account, reminder: OutboundReminder) -> str:
+def compose_message(account: Account, reminder: OutboundReminder, risk_profile=None) -> str:
     """One real Groq call per reminder. reminder.kind is "heads_up" (EMI
     due in reminder.days days), "due_now" (due today, or within the
     grace period -- reminder.days days past due, no late fee yet), or
@@ -42,12 +55,14 @@ def compose_message(account: Account, reminder: OutboundReminder) -> str:
     fields; the caller (outbound/run.py) is responsible for send.py's own
     real-vs-logged delivery split, not this function.
 
-    The payment link itself is NOT woven into this text -- it's attached
-    separately as a real Telegram button (see outbound/run.py and
-    send.py), never asked of the LLM, since a composed-prose URL risks
-    exactly the kind of fabricated/mangled link this project's live
-    conversational agent is separately instructed never to produce."""
-    emi_str = f"{account.emi_amount:,.0f}"
+    Optionally accepts a risk_profile from outbound/risk_engine.py to dynamically
+    adjust tone (empathetic, neutral, firm, final notice)."""
+    # The same amounts the payment link attached to this reminder is minted
+    # for (outbound/run.py): what's still due this cycle (EMI less any
+    # credit), plus the late fee once a follow_up says it applies -- never
+    # the bare emi_amount, which ignored credit and the fee.
+    emi, late_fee, total = reminder_amounts(account, reminder.kind)
+    emi_str = f"{emi:,.0f}"
     if reminder.kind == "heads_up":
         situation = f"Their EMI of {emi_str} rupees is due in {reminder.days} day(s), on {account.emi_due_date.isoformat()}."
     elif reminder.kind == "due_now":
@@ -55,17 +70,22 @@ def compose_message(account: Account, reminder: OutboundReminder) -> str:
             f"Their EMI of {emi_str} rupees is due now (day {reminder.days} of the grace period, no late fee yet)."
         )
     else:
-        situation = f"Their EMI of {emi_str} rupees is now {reminder.days} day(s) past due."
+        situation = (
+            f"Their EMI of {emi_str} rupees is now {reminder.days} day(s) past due, and a late fee of "
+            f"{late_fee:,.0f} rupees applies -- {total:,.0f} rupees in total is due now."
+        )
 
     facts = (
         f"Borrower: {account.borrower_name}.\n"
         f"{situation}\n"
         f"Ask them to pay, or contact us if there's a problem."
     )
+    tone_str = _TONE_INSTRUCTIONS.get(getattr(risk_profile, "recommended_tone", "neutral_reminder"), "")
     system_prompt = _REMINDER_SYSTEM_PROMPT.format(
+        tone_instruction=tone_str,
         language_instruction=_LANGUAGE_INSTRUCTIONS.get(account.language_preference, _LANGUAGE_INSTRUCTIONS["en"])
     )
-    completion = client().chat.completions.create(
+    completion = groq_client().chat.completions.create(
         model=MODEL,
         temperature=0.4,
         messages=[
@@ -110,7 +130,7 @@ def draft_clarification_message(
         f"Current account flags: {'; '.join(flag_reasons) if flag_reasons else 'none currently.'}\n"
         f"Loan officer's note: {operator_note}"
     )
-    completion = client().chat.completions.create(
+    completion = groq_client().chat.completions.create(
         model=MODEL,
         temperature=0.4,
         messages=[

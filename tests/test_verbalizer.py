@@ -1,3 +1,5 @@
+import pytest
+
 from businessflow.audio.verbalizer import _hindi_number_words, has_unverbalized_pattern, verbalize
 
 
@@ -6,7 +8,10 @@ def test_verbalizes_rupee_amount_with_rs_prefix():
 
 
 def test_verbalizes_rupee_amount_with_symbol_and_paise():
-    assert verbalize("pay ₹585,200.50 now") == "pay five hundred and eighty-five thousand, two hundred rupees and fifty paise now"
+    # Indian grouping: 585,200 is "five lakh, eighty-five thousand, two
+    # hundred" to an Indian caller -- not the western "five hundred and
+    # eighty-five thousand" this assertion used to expect.
+    assert verbalize("pay ₹585,200.50 now") == "pay five lakh, eighty-five thousand, two hundred rupees and fifty paise now"
 
 
 def test_verbalizes_iso_date():
@@ -111,3 +116,124 @@ def test_has_unverbalized_pattern_false_after_verbalize():
 
 def test_has_unverbalized_pattern_false_for_text_with_no_pattern_at_all():
     assert has_unverbalized_pattern("it is 3 days past due") is False
+
+
+# --- emails, phone numbers, account IDs, percentages, Indian grouping -----
+#
+# TTS reads "BF-1001" as a blob and "9812345000" as one huge number; neither
+# can be written down by the listener. These must be spelled out. Every
+# case is checked in English and Hindi because Hindi TTS is monolingual and
+# silently drops Latin letters/words (see verbalizer.py's docstring).
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Mail devang.mishra@gmail.com for help.",
+     "Mail D E V A N G dot M I S H R A, at, gmail dot com for help."),
+    ("reach me: a@b.com, c@d.org.",
+     "reach me: A, at, B dot com, C, at, D dot org."),
+    ("Write to billing_team+india@acme-corp.co.in today",
+     "Write to B I L L I N G underscore T E A M plus I N D I A, at, A C M E dash C O R P dot C O dot in today"),
+])
+def test_email_is_spelled_out_in_english(text, expected):
+    assert verbalize(text, "en") == expected
+
+
+def test_email_is_spelled_with_devanagari_letter_names_in_hindi():
+    # Hindi TTS cannot say Latin letters, so letters become Devanagari names
+    # and the well-known domain words are transliterated.
+    result = verbalize("Mail devang.mishra@gmail.com for help.", "hi")
+
+    assert result == "Mail डी ई वी ए एन जी डॉट एम आई एस एच आर ए, ऐट, जीमेल डॉट कॉम for help."
+    assert "@" not in result
+
+
+@pytest.mark.parametrize("text", ["Call +91 98123 45000 now", "Call +919812345000 now", "Call +91-98123-45000 now"])
+def test_phone_with_country_code_is_read_as_grouped_digits(text):
+    assert verbalize(text, "en") == "Call plus nine one, nine eight one two three, four five zero zero zero now"
+
+
+@pytest.mark.parametrize("text", ["Call 9812345000 now", "Call 98123 45000 now", "Call 98123-45000 now"])
+def test_phone_without_country_code_is_read_as_two_groups_of_five(text):
+    assert verbalize(text, "en") == "Call nine eight one two three, four five zero zero zero now"
+
+
+def test_phone_is_read_digit_by_digit_in_hindi():
+    assert verbalize("Call +91 98123 45000 now", "hi") == "Call प्लस नौ एक, नौ आठ एक दो तीन, चार पांच शून्य शून्य शून्य now"
+
+
+def test_account_id_is_spelled_letter_by_letter_then_digit_by_digit():
+    assert verbalize("Your account BF-1001 is overdue", "en") == "Your account B F, one zero zero one is overdue"
+    assert verbalize("Your account BF-1001 is overdue", "hi") == "Your account बी एफ, एक शून्य शून्य एक is overdue"
+
+
+def test_percentages_whole_and_decimal():
+    assert verbalize("Interest is 12.5% and fee is 2%", "en") == "Interest is twelve point five percent and fee is two percent"
+    assert verbalize("Interest is 12.5% and fee is 2%", "hi") == "Interest is बारह दशमलव पांच प्रतिशत and fee is दो प्रतिशत"
+
+
+def test_english_amounts_use_indian_grouping_lakh_and_crore():
+    assert verbalize("Pay ₹1,25,000 now", "en") == "Pay one lakh, twenty-five thousand rupees now"
+    assert verbalize("Pay ₹1,00,00,000 now", "en") == "Pay one crore rupees now"
+
+
+def test_a_long_rupee_amount_is_not_mistaken_for_a_phone_number():
+    # ₹9812345000 is ten digits starting with 9, i.e. phone-shaped. The
+    # rupee symbol must win: amounts are verbalized before phones are looked at.
+    result = verbalize("₹9812345000 is due", "en")
+
+    assert "rupees" in result
+    assert "nine eight one two three" not in result
+
+
+def test_sentence_ending_full_stop_survives_after_email_and_phone():
+    assert verbalize("Mail a@b.com.", "en").endswith("dot com.")
+    assert verbalize("Call 9812345000.", "en").endswith("zero zero zero.")
+
+
+@pytest.mark.parametrize("text", [
+    "split 1/2 and 50/50",        # fractions/ratios are not dates or IDs
+    "version 3.5.1 released",     # dotted version, not an amount or email
+    "call 12345 for help",        # five digits: not a ten-digit mobile
+    "ticket AB-12 is open",       # ID needs at least three digits
+    "it is 3 days past due",      # small plain numbers already read fine
+    "50 off today",               # a bare number is not a percentage
+    "",
+])
+def test_text_without_a_supported_pattern_is_left_untouched(text):
+    assert verbalize(text, "en") == text
+    assert verbalize(text, "hi") == text
+
+
+@pytest.mark.parametrize("text", ["@", "a@", "@b.com", "%", "-", "+91", "BF-", "9" * 40, "₹", "Rs."])
+def test_malformed_input_passes_through_unchanged_and_never_raises(text):
+    # Unrecognized shapes must pass through untouched; the function sits on
+    # the TTS path of every voice reply and must not be able to crash it or
+    # half-convert a fragment into garbage.
+    for language in ("en", "hi"):
+        assert verbalize(text, language) == text
+
+
+_ALL_PATTERNS = (
+    "Mail devang.mishra@gmail.com, call +91 98123 45000, account BF-1001, "
+    "interest 12.5%, pay ₹1,25,000 by 2026-09-15."
+)
+
+
+@pytest.mark.parametrize("language", ["en", "hi"])
+def test_verbalize_is_idempotent(language):
+    # Re-verbalizing already-spoken text (e.g. a reply that passes two
+    # layers) must not change it again.
+    once = verbalize(_ALL_PATTERNS, language)
+
+    assert verbalize(once, language) == once
+
+
+@pytest.mark.parametrize("language", ["en", "hi"])
+def test_nothing_the_stray_pattern_check_looks_for_survives_verbalize(language):
+    assert has_unverbalized_pattern(_ALL_PATTERNS) is True
+    assert has_unverbalized_pattern(verbalize(_ALL_PATTERNS, language)) is False
+
+
+@pytest.mark.parametrize("raw", ["devang@gmail.com", "9812345000", "BF-1001", "12.5%"])
+def test_has_unverbalized_pattern_detects_each_new_pattern_on_its_own(raw):
+    assert has_unverbalized_pattern(f"see {raw} here") is True

@@ -8,7 +8,7 @@ if it doesn't.
 
 import json
 
-from businessflow.agent.client import MODEL, client
+from businessflow.agent.client import MODEL, groq_client
 
 _SYSTEM_PROMPT = """You write short, plain-language reports for loan-collection ops staff, built ONLY \
 from real, already-gathered account data given to you as JSON. Every account_id, day-count, and reason \
@@ -25,7 +25,7 @@ def write_report(query: str, analysis: dict, feedback: str | None = None) -> str
             "exact account_ids and day-counts present in the data above."
         )
 
-    completion = client().chat.completions.create(
+    completion = groq_client().chat.completions.create(
         model=MODEL,
         temperature=0.3,
         messages=[

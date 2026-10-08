@@ -23,15 +23,18 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 
+import psycopg
 from docling.exceptions import ConversionError
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Security, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
 from businessflow.accounts import store
+from businessflow.accounts.db import check_database
+from businessflow.accounts.escalation_kinds import CALLBACK, CLOSURE, RESTRUCTURING, SYSTEM, classify_escalation
 from businessflow.accounts.models import Account
 from businessflow.channels.credentials import build_telegram_start_payload
 from businessflow.observability import metrics
@@ -210,6 +213,14 @@ class EscalationOut(BaseModel):
     # propose_restructuring) -- None for every other escalation kind.
     proposed_changes: dict | None = None
     resolution_reason: str | None = None
+    # restructuring | closure | callback | fraud | request | system (see
+    # accounts/escalation_kinds.py) -- display/notification wording and queue
+    # triage only; best-effort, never used for anything that touches an account.
+    kind: str = "request"
+    # Set only on the response to approve/reject: True = reached over Telegram,
+    # False = logged but the borrower has no linked Telegram, None = nothing
+    # was sent (system-raised tickets never message the borrower).
+    borrower_notified: bool | None = None
 
 
 class EscalationRejectIn(BaseModel):
@@ -246,6 +257,7 @@ class RecordPaymentOut(BaseModel):
     months_remaining: int
     next_emi_due_date: date
     pending_emi_credit: float
+    late_fee_paid: float = 0.0  # >0 when the amount included the late fee (not a prepayment)
 
 
 class ResolveDisputeIn(BaseModel):
@@ -258,6 +270,7 @@ class ResolveDisputeOut(BaseModel):
     account_id: str
     dispute_id: int
     resolution_note: str | None = None
+    borrower_notified: bool | None = None  # True = reached over Telegram; False = logged only (visible on their dashboard)
 
 
 class LogPromiseIn(BaseModel):
@@ -465,7 +478,14 @@ def _summarize(account: Account, flags: list[Flag]) -> AccountSummaryOut:
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    # Same contract as the chat API's /health (channels/browser_api.py): 503
+    # when the database is unreachable, never the error text.
+    try:
+        check_database()
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.error("health check failed: database unreachable (%s) -- check the Supabase project isn't paused and DATABASE_URL is right", type(exc).__name__)
+        return JSONResponse(status_code=503, content={"status": "degraded", "database": "unreachable"})
+    return {"status": "ok", "database": "ok"}
 
 
 @app.get("/accounts", response_model=list[AccountSummaryOut], dependencies=[Depends(require_api_key)])
@@ -1012,7 +1032,7 @@ def record_account_payment(account_id: str, body: RecordPaymentIn):
     response_model=ResolveDisputeOut,
     dependencies=[Depends(require_api_key)],
 )
-def resolve_account_dispute(account_id: str, body: ResolveDisputeIn | None = None):
+async def resolve_account_dispute(account_id: str, body: ResolveDisputeIn | None = None):
     """Closes this account's currently open dispute. Found live: there was
     no way, anywhere in this codebase (ops UI or store layer), to ever
     turn a dispute back off -- once flagged, an account stayed permanently
@@ -1029,7 +1049,14 @@ def resolve_account_dispute(account_id: str, body: ResolveDisputeIn | None = Non
     except store.NoOpenDisputeError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     store.log_event(account_id, "tool_called", {"tool": "resolve_dispute", "arguments": {"account_id": account_id, "resolution_note": resolution_note}, "result": result})
-    return ResolveDisputeOut(**result)
+    # Tell the borrower. Resolving used to be silent: the freeze lifted and the
+    # banner vanished, but nothing said how it ended. Delivered over Telegram
+    # when linked, and always shown under "Messages from us" on their dashboard.
+    message = "Update on your dispute: our team has reviewed it and closed it."
+    if resolution_note:
+        message += f" Note from our team: {resolution_note}"
+    notified = await notify.notify_dispute_resolved(account_id, message)
+    return ResolveDisputeOut(**result, borrower_notified=notified)
 
 
 @app.post("/accounts/{account_id}/promises", response_model=LogPromiseOut, dependencies=[Depends(require_api_key)])
@@ -1072,13 +1099,56 @@ def list_open_escalations():
     return [_escalation_out(e) for e in store.list_open_escalations()]
 
 
-def _escalation_out(escalation) -> EscalationOut:
+def _escalation_out(escalation, borrower_notified: bool | None = None) -> EscalationOut:
     return EscalationOut(
         escalation_id=escalation.escalation_id, account_id=escalation.account_id,
         reason=escalation.reason, status=escalation.status,
         created_at=escalation.created_at, resolved_at=escalation.resolved_at,
         proposed_changes=escalation.proposed_changes, resolution_reason=escalation.resolution_reason,
+        kind=classify_escalation(escalation.reason, escalation.proposed_changes),
+        borrower_notified=borrower_notified,
     )
+
+
+def _approval_message(kind: str, result: dict, account: Account | None) -> str | None:
+    """What the borrower is told when staff approve/close their ticket, by
+    kind. Only a real restructuring says "approved ... new EMI": before this,
+    approving ANY ticket sent "Good news -- your recent request has been
+    approved", including to a borrower who had filed a complaint (live: a
+    grievance got exactly that). A system-raised ticket (guardrail block,
+    chronic-delinquency notice) has no borrower request behind it, so it
+    sends nothing at all."""
+    if kind == SYSTEM:
+        return None
+    if kind == RESTRUCTURING and "new_months_remaining" in result and "new_emi_amount" in result:
+        message = (
+            f"Good news — your request for more time has been approved. Your loan now has "
+            f"{result['new_months_remaining']} months remaining, with a new EMI of "
+            f"₹{result['new_emi_amount']:,.2f}."
+        )
+        if account is not None and account.days_past_due(store.current_date()) > 0:
+            message += " Your overdue instalment is still due — please pay it, or talk to us if you need help."
+        return message
+    if kind == CLOSURE:
+        return "Your loan closure request has been approved by our team."
+    if kind == CALLBACK:
+        return "Our team has followed up on your call-back request."
+    return "Our team has reviewed your request and closed it. If anything is still unresolved, reply here and we'll pick it up."
+
+
+def _rejection_message(kind: str, reason: str | None) -> str | None:
+    if kind == SYSTEM:
+        return None
+    message = (
+        "Your request for more time could not be approved."
+        if kind == RESTRUCTURING
+        else "Your recent request could not be approved."
+    )
+    if reason:
+        message += f" Reason: {reason}"
+    if kind == RESTRUCTURING:
+        message += " You can still pay what's due, or talk to us about other options."
+    return message
 
 
 @app.post(
@@ -1093,6 +1163,11 @@ async def approve_escalation(escalation_id: str):
     the agent just being unsure -- see approve_restructuring's own
     docstring), so this just closes those out with no account change.
     Either way, if the borrower has a linked Telegram chat, tells them."""
+    # Read the ticket first: what the borrower is told depends on what it is.
+    ticket = store.get_escalation(escalation_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail=f"No escalation found for escalation_id={escalation_id!r}")
+    kind = classify_escalation(ticket.reason, ticket.proposed_changes)
     try:
         result = store.approve_restructuring(escalation_id)
     except store.EscalationNotFoundError as e:
@@ -1105,18 +1180,13 @@ async def approve_escalation(escalation_id: str):
         # 500 this used to be.
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-    if "new_months_remaining" in result and "new_emi_amount" in result:
-        message = (
-            f"Good news -- your recent request has been approved. Your loan now has "
-            f"{result['new_months_remaining']} months remaining, with a new EMI of "
-            f"₹{result['new_emi_amount']:,.2f}."
-        )
-    else:
-        message = "Good news -- your recent request has been approved."
-    await notify.notify_restructuring_decision(result["account_id"], approved=True, message=message)
+    message = _approval_message(kind, result, store.get_account(result["account_id"]))
+    notified = None
+    if message is not None:
+        notified = await notify.notify_restructuring_decision(result["account_id"], approved=True, message=message)
 
     escalation = store.get_escalation(escalation_id)
-    return _escalation_out(escalation)
+    return _escalation_out(escalation, borrower_notified=notified)
 
 
 @app.post(
@@ -1127,6 +1197,10 @@ async def reject_escalation(escalation_id: str, body: EscalationRejectIn):
     account itself is never touched -- nothing was ever applied to it)
     and, if the borrower has a linked Telegram chat, tells them, including
     the optional reason if ops entered one."""
+    ticket = store.get_escalation(escalation_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail=f"No escalation found for escalation_id={escalation_id!r}")
+    kind = classify_escalation(ticket.reason, ticket.proposed_changes)
     try:
         result = store.reject_restructuring(escalation_id, body.reason)
     except store.EscalationNotFoundError as e:
@@ -1134,13 +1208,13 @@ async def reject_escalation(escalation_id: str, body: EscalationRejectIn):
     except store.EscalationAlreadyResolvedError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
 
-    message = "Your recent request could not be approved."
-    if result["reason"]:
-        message += f" Reason: {result['reason']}"
-    await notify.notify_restructuring_decision(result["account_id"], approved=False, message=message)
+    message = _rejection_message(kind, result["reason"])
+    notified = None
+    if message is not None:
+        notified = await notify.notify_restructuring_decision(result["account_id"], approved=False, message=message)
 
     escalation = store.get_escalation(escalation_id)
-    return _escalation_out(escalation)
+    return _escalation_out(escalation, borrower_notified=notified)
 
 
 @app.get("/metrics", response_model=MetricsOut, dependencies=[Depends(require_api_key)])

@@ -228,20 +228,20 @@ def reset_fallback_key_switch(monkeypatch):
 def test_switch_to_fallback_key_changes_which_key_client_returns(reset_fallback_key_switch, monkeypatch):
     monkeypatch.setenv("ALTERNATE_GROQ_KEY", "gsk_fake_fallback_key_for_this_test")
     client_module._current_key_index = 0
-    primary = client_module.client()
+    primary, primary_index = client_module.client()
 
-    switched = client_module.switch_to_fallback_key()
+    switched = client_module.switch_to_fallback_key(primary_index)
 
     assert switched is True
-    assert client_module.client().api_key != primary.api_key
-    assert client_module.client().api_key == "gsk_fake_fallback_key_for_this_test"
+    assert client_module.client()[0].api_key != primary.api_key
+    assert client_module.client()[0].api_key == "gsk_fake_fallback_key_for_this_test"
 
 
 def test_switch_to_fallback_key_returns_false_when_none_configured(reset_fallback_key_switch, monkeypatch):
     monkeypatch.delenv("ALTERNATE_GROQ_KEY", raising=False)
     client_module._current_key_index = 0
 
-    assert client_module.switch_to_fallback_key() is False
+    assert client_module.switch_to_fallback_key(0) is False
 
 
 def test_switch_to_fallback_key_advances_through_multiple_configured_fallbacks(reset_fallback_key_switch, monkeypatch):
@@ -253,17 +253,20 @@ def test_switch_to_fallback_key_advances_through_multiple_configured_fallbacks(r
     monkeypatch.setenv("ALTERNATE_GROQ_KEY3", "gsk_fake_fallback_3")
     client_module._current_key_index = 0
 
-    assert client_module.switch_to_fallback_key() is True
-    assert client_module.client().api_key == "gsk_fake_fallback_1"
+    # switch_to_fallback_key takes the index the caller was using when it
+    # got rate-limited (see its docstring on thread safety), so each step
+    # passes the index the previous step left active.
+    assert client_module.switch_to_fallback_key(0) is True
+    assert client_module.client()[0].api_key == "gsk_fake_fallback_1"
 
-    assert client_module.switch_to_fallback_key() is True
-    assert client_module.client().api_key == "gsk_fake_fallback_2"
+    assert client_module.switch_to_fallback_key(1) is True
+    assert client_module.client()[0].api_key == "gsk_fake_fallback_2"
 
-    assert client_module.switch_to_fallback_key() is True
-    assert client_module.client().api_key == "gsk_fake_fallback_3"
+    assert client_module.switch_to_fallback_key(2) is True
+    assert client_module.client()[0].api_key == "gsk_fake_fallback_3"
 
     # All three configured fallbacks now tried -- nowhere left to go.
-    assert client_module.switch_to_fallback_key() is False
+    assert client_module.switch_to_fallback_key(3) is False
 
 
 def test_fallback_env_var_names_does_not_stop_at_the_first_gap(reset_fallback_key_switch, monkeypatch):
@@ -288,11 +291,11 @@ def test_fallback_key_stays_active_before_cooldown_elapses(reset_fallback_key_sw
     # test's premise (switch_to_fallback_key() advances index 0 -> 1)
     # only holds if it actually starts at 0.
     client_module._current_key_index = 0
-    client_module.switch_to_fallback_key()
+    client_module.switch_to_fallback_key(0)
     # Barely any time has passed -- still well inside the cooldown window.
     client_module._switched_at = time.time() - 60
 
-    assert client_module.client().api_key == "gsk_fake_fallback_key_for_this_test"
+    assert client_module.client()[0].api_key == "gsk_fake_fallback_key_for_this_test"
 
 
 def test_fallback_key_reverts_to_primary_after_cooldown_elapses(reset_fallback_key_switch, monkeypatch):
@@ -302,8 +305,47 @@ def test_fallback_key_reverts_to_primary_after_cooldown_elapses(reset_fallback_k
     monkeypatch.setenv("GROQ_API_KEY", "gsk_fake_primary_key_for_this_test")
     monkeypatch.setenv("ALTERNATE_GROQ_KEY", "gsk_fake_fallback_key_for_this_test")
     client_module._current_key_index = 0  # same explicit-reset reasoning as the test above
-    client_module.switch_to_fallback_key()
+    client_module.switch_to_fallback_key(0)
     client_module._switched_at = time.time() - client_module._FALLBACK_COOLDOWN_SECONDS - 1
 
-    assert client_module.client().api_key == "gsk_fake_primary_key_for_this_test"
+    assert client_module.client()[0].api_key == "gsk_fake_primary_key_for_this_test"
     assert client_module._current_key_index == 0
+
+
+# --- request policy: timeouts, retries, and the groq_client() helper -------
+#
+# Real groq.Groq objects are constructed here; construction makes no network
+# call, so nothing is faked. They pin the policy that fixes the ~51 s tool
+# turns: the SDK's default (2 retries that SLEEP for the server's
+# Retry-After on a 429) must be off for the agent loop only, and every
+# client must carry an explicit timeout.
+
+
+def test_fail_fast_client_has_no_sdk_retries_and_a_tight_explicit_timeout(reset_fallback_key_switch):
+    client_module._current_key_index = 0
+
+    groq_client, _ = client_module.client(fail_fast=True)
+
+    assert groq_client.max_retries == 0
+    assert groq_client.timeout == client_module._FAIL_FAST_TIMEOUT_SECONDS
+
+
+def test_default_client_keeps_sdk_retries_but_has_an_explicit_timeout(reset_fallback_key_switch):
+    # Reminders, extraction, query translation and reports have no key
+    # rotation of their own, so they keep the SDK's retry behavior.
+    client_module._current_key_index = 0
+
+    groq_client, _ = client_module.client()
+
+    assert groq_client.max_retries == 2
+    assert groq_client.timeout == client_module._REQUEST_TIMEOUT_SECONDS
+
+
+def test_groq_client_returns_just_the_client_for_the_active_key(reset_fallback_key_switch, monkeypatch):
+    monkeypatch.setenv("ALTERNATE_GROQ_KEY", "gsk_fake_fallback_key_for_this_test")
+    client_module._current_key_index = 0
+    assert client_module.groq_client().api_key != "gsk_fake_fallback_key_for_this_test"
+
+    client_module.switch_to_fallback_key(0)
+
+    assert client_module.groq_client().api_key == "gsk_fake_fallback_key_for_this_test"

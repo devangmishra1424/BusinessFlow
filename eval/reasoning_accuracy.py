@@ -29,7 +29,7 @@ from pathlib import Path
 
 import groq
 
-from businessflow.agent.client import MODEL, client
+from businessflow.agent.client import MODEL, groq_client
 from businessflow.agent.loop import extract_tool_calls_with_results, run_turn, start_conversation
 from eval.tool_scoring import print_regression_delta, record_run_history
 from scripts.seed_accounts import main as _reseed_demo_accounts
@@ -58,7 +58,7 @@ def _judge(tool_calls_with_results: list[dict], claim: str, reply: str) -> dict:
     ground_truth = json.dumps(tool_calls_with_results, indent=2, ensure_ascii=False)
     user_content = f"REAL TOOL RESULTS (ground truth):\n{ground_truth}\n\nCLAIM TO CHECK:\n{claim}\n\nAGENT'S REPLY:\n{reply}"
     try:
-        completion = client().chat.completions.create(
+        completion = groq_client().chat.completions.create(
             model=MODEL,
             temperature=0,
             messages=[

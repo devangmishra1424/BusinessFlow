@@ -40,7 +40,7 @@
   --text-0: #0c1c32;
   --text-1: #26324a;
   --text-2: #52607a;
-  --text-3: #838fa3;
+  --text-3: #5f6b82; /* was #838fa3 (3.27:1 on white) -- AA needs 4.5:1; this is >=4.75:1 on every surface used */
 
   --accent: #005da8;
   --accent-strong: #004884;
@@ -235,6 +235,33 @@ button, input { font-family: inherit; }
    warnings expand to a plain note instead, since that's already an open
    claim under review. */
 .dash-warnings { display: flex; flex-direction: column; gap: 8px; }
+
+/* Due now -- the one number, one button. The same amount every reminder and
+   Telegram's /pay use (accounts/dues.py). Neutral by default; red text only
+   when money is actually overdue. */
+.due-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md);
+  padding: 18px 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  box-shadow: var(--shadow-soft);
+}
+.due-card[hidden] { display: none; }
+.due-card-label { font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-2); margin: 0 0 2px; }
+.due-card-amount { font-family: var(--font-tight); font-weight: 800; font-size: 30px; line-height: 1.1; color: var(--text-0); margin: 0; font-variant-numeric: tabular-nums; }
+.due-card-amount.overdue { color: var(--danger); }
+.due-card-sub { font-size: 12.5px; color: var(--text-1); margin: 4px 0 0; line-height: 1.45; }
+.due-card-cta { display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 190px; }
+.due-card-cta .btn-primary { font-size: 14px; padding: 12px 18px; min-height: 44px; }
+.due-card-cta .due-card-alt { background: none; border: none; padding: 4px; color: var(--accent-strong); font-size: 12.5px; font-weight: 600; cursor: pointer; text-decoration: underline; }
+.pay-link-btn {
+  display: inline-block; background: var(--accent); color: var(--on-accent) !important; font-weight: 700; font-size: 13px;
+  padding: 10px 18px; border-radius: var(--radius-sm); text-decoration: none; word-break: normal !important;
+}
+.contest-form { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.contest-form[hidden] { display: none; }
+.contest-form textarea {
+  width: 100%; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  padding: 9px 11px; color: var(--text-0); font-size: 13px; font-family: inherit; resize: vertical; min-height: 64px;
+}
 .dash-warning {
   background: var(--danger-dim); border: 1px solid rgba(194, 43, 28, 0.3); border-radius: var(--radius-md);
   color: var(--text-0); font-size: 13.5px; line-height: 1.5; animation: rise 0.4s var(--ease); overflow: hidden;
@@ -243,6 +270,10 @@ button, input { font-family: inherit; }
   display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 12px 15px; border: none;
   background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
 }
+.dash-warning.info { background: var(--accent-dim); border-color: rgba(0, 93, 168, 0.3); }
+.dash-warning.info .dash-warning-head svg { color: var(--accent); }
+.dash-warning.notice { background: var(--warning-solid-dim); border-color: rgba(154, 91, 0, 0.3); }
+.dash-warning.notice .dash-warning-head svg { color: var(--warning); }
 .dash-warning-head > span { flex: 1; }
 .dash-warning-head svg { flex-shrink: 0; margin-top: 1px; color: var(--danger); }
 .dash-warning-chevron { color: var(--text-3) !important; transition: transform 0.2s var(--ease); }
@@ -256,7 +287,8 @@ button, input { font-family: inherit; }
    bulk of the width, quick actions form a narrower rail next to it
    (collapses to a stacked single column on narrow viewports, same
    breakpoint as the rest of this dashboard). */
-.hero-actions-row { display: grid; grid-template-columns: 1fr 320px; gap: 20px; align-items: start; }
+.hero-actions-row { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 20px; align-items: start; }
+.hero-actions-row > * { min-width: 0; }
 .hero-actions-row .dash-actions-section { margin: 0; }
 
 /* Hero */
@@ -385,6 +417,13 @@ button, input { font-family: inherit; }
 .esc-status.queued_for_human { color: var(--warning); background: var(--warning-solid-dim); }
 .esc-status.approved { color: var(--success); background: var(--success-solid-dim); }
 .esc-status.rejected { color: var(--danger); background: var(--danger-solid-dim); }
+.esc-status.open { color: var(--warning); background: var(--warning-solid-dim); }
+.esc-status.done { color: var(--success); background: var(--success-solid-dim); }
+.esc-status.declined { color: var(--text-2); background: var(--surface-strong); }
+.esc-title { font-size: 13px; font-weight: 600; color: var(--text-0); line-height: 1.45; margin: 0 0 2px; }
+.esc-detail { font-size: 12.5px; color: var(--text-1); line-height: 1.45; margin: 0 0 4px; }
+.esc-outcome { font-size: 12.5px; color: var(--text-1); line-height: 1.45; margin: 4px 0 0; }
+.dash-msg-kind { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-2); margin: 0 0 3px; }
 
 /* Documents */
 .dash-documents { display: flex; flex-direction: column; gap: 8px; }
@@ -557,7 +596,7 @@ button, input { font-family: inherit; }
 .recording-hint { color: var(--text-3); margin-left: auto; }
 
 @media (max-width: 760px) {
-  .hero-actions-row { grid-template-columns: 1fr; }
+  .hero-actions-row { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 520px) {
   .start-card { padding: 26px 20px 20px; }
@@ -575,4 +614,21 @@ button, input { font-family: inherit; }
   .dash-chat-fab:hover { transform: translateY(-1px); }
   .esc-card { flex-direction: column; }
   .doc-row { flex-wrap: wrap; }
+}
+
+
+/* Keyboard focus must be visible everywhere (the dashboard had only a few
+   input :focus rules), and motion respects the OS setting. */
+button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible, [role="button"]:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+/* 44px minimum touch targets on phones -- the borrower side is phone-first. */
+@media (max-width: 520px) {
+  .btn-primary, .btn-cancel, .btn-retry { min-height: 44px; }
+  .icon-btn { width: 44px; height: 44px; }
+  .dash-warning-actions { gap: 10px; }
+  .due-card-cta { width: 100%; }
 }

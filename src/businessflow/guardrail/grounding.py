@@ -46,7 +46,35 @@ _URL_RE = re.compile(r"https?://[^\s\[\]]+")
 # Without this, [\d,]+ stops at the space and captures only "५" (5) as
 # its own isolated "amount", which correctly matches nothing -- a false
 # positive from the regex being too strict, not a real hallucination.
-_RUPEE_AMOUNT_RE = re.compile(r"₹\s*([\d,]+(?: [\d,]+)*(?:\.\d+)?)")
+# Digit groups may be separated by a plain space OR the no-break spaces the
+# model really emits (U+00A0, U+2009 thin, U+202F narrow no-break). Found
+# live: "₹5 56,738.07" was read as just "5", so a correct, grounded
+# Hindi reply was blocked as an invented amount of ₹5.
+_AMOUNT_BODY = r"[\d,]+(?:[    ][\d,]+)*(?:\.\d+)?"
+# The check originally recognized only "₹", so a reply that wrote the same
+# fabricated figure as "Rs. 5,00,000", "INR 500000", "500000 rupees" or
+# "५,००,००० रुपये" sailed straight past it. Both orders are covered now:
+# marker-then-number, and number-then-marker (the usual Hindi order).
+# "Rs"/"INR" must not be the tail of a longer word ("hours 5" is not a
+# currency), and Hindi "रु" must not be the start of a longer word.
+# An amount can carry a magnitude word: "₹5 lakh", "4.18 लाख रुपये", "Rs. 1.5 crore".
+# Read as a bare "5" it is both a false alarm (a correct "₹4.18 लाख" blocked
+# because 4.18 matches nothing) and a hole (a made-up "5 लाख रुपये" is not
+# read at all). Only counted next to a currency marker -- "5 लाख लोग" is not money.
+_MAGNITUDE = r"(lakhs?|lacs?|crores?|thousand|लाख|करोड़|करोड|हज़ार|हजार)(?![A-Za-zऀ-ॿ])"
+_MAGNITUDE_MULTIPLIER = {
+    "lakh": 1e5, "lakhs": 1e5, "lac": 1e5, "lacs": 1e5, "लाख": 1e5,
+    "crore": 1e7, "crores": 1e7, "करोड़": 1e7, "करोड": 1e7,
+    "thousand": 1e3, "हज़ार": 1e3, "हजार": 1e3,
+}
+_RUPEE_PREFIX_RE = re.compile(
+    rf"(?:₹|(?<![A-Za-z])(?:Rs\.?|INR)|रु(?![ऀ-ॿ])\.?)\s*({_AMOUNT_BODY})(?:\s*{_MAGNITUDE})?",
+    re.IGNORECASE,
+)
+_RUPEE_SUFFIX_RE = re.compile(
+    rf"(?<![\d,.])(\d[\d,]*(?:\.\d+)?)\s*(?:{_MAGNITUDE}\s*)?(?:rupees?\b|rs\b\.?|inr\b|रुपये|रुपए|रुपया|रुपयों|रु(?![ऀ-ॿ]))",
+    re.IGNORECASE,
+)
 _PLAIN_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 # Real borrowers write "15k" or "1.5L", not "15000" or "150000" -- found
 # live: a user said "maybe 15k for now?", the model correctly asked
@@ -71,11 +99,16 @@ def extract_urls(text: str) -> set[str]:
 
 def extract_rupee_amounts(text: str) -> set[float]:
     amounts = set()
-    for m in _RUPEE_AMOUNT_RE.finditer(text):
-        try:
-            amounts.add(float(m.group(1).replace(",", "").replace(" ", "")))
-        except ValueError:
-            continue
+    for pattern in (_RUPEE_PREFIX_RE, _RUPEE_SUFFIX_RE):
+        for m in pattern.finditer(text):
+            try:
+                amount = float(re.sub(r"[\s,]", "", m.group(1)))
+            except ValueError:
+                continue
+            magnitude = m.group(2)
+            if magnitude:
+                amount *= _MAGNITUDE_MULTIPLIER[magnitude.lower()]
+            amounts.add(amount)
     return amounts
 
 

@@ -3,6 +3,7 @@
 from datetime import date
 
 from businessflow.accounts import store
+from businessflow.accounts.dues import amount_due_now
 from businessflow.accounts.policy import GRACE_PERIOD_DAYS, LATE_FEE_FLAT_AMOUNT, PROMISE_TOLERANCE_DAYS
 from businessflow.tools.server import mcp
 
@@ -24,7 +25,10 @@ _MAX_PAYMENT_HISTORY_LIMIT = 20
         "past due, months remaining, approximate outstanding balance, NACH mandate "
         "status, late fee applicability, and dispute status. outstanding_balance_approx "
         "is an approximation (emi_amount * months_remaining), not a real amortization "
-        "schedule. interest_rate_pct is often None -- if so, say you don't have it "
+        "schedule. amount_due_now is what the borrower owes right now (this cycle's EMI "
+        "less any credit, plus the late fee once it applies; 0 for a fully repaid loan) "
+        "-- quote it directly instead of adding figures yourself. "
+        "interest_rate_pct is often None -- if so, say you don't have it "
         "rather than guessing one. nach_mandate_active only reflects current status, not "
         "why a debit failed -- for 'why did my auto-debit fail', combine this with "
         "check_policy on NACH troubleshooting, don't guess. late_fee_amount is set only "
@@ -77,6 +81,11 @@ def get_payment_status(account_id: str) -> dict:
         "nach_mandate_active": account.nach_mandate_active,
         "late_fee_applicable": late_fee_applicable,
         "late_fee_amount": float(LATE_FEE_FLAT_AMOUNT) if late_fee_applicable else None,
+        # What the borrower owes right now -- one grounded figure for the
+        # agent to quote (so it never has to add EMI + fee itself, which the
+        # grounding guardrail would block as unverified arithmetic) and the
+        # same number the dashboard's Pay button and reminders use.
+        "amount_due_now": amount_due_now(account, as_of),
         "dispute_open": account.dispute_open,
         "risk_tier": account.risk_tier,
         "broken_promise_count": account.broken_promise_count(),

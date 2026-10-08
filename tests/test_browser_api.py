@@ -67,12 +67,15 @@ def throwaway_account():
     state (months_remaining, emi_due_date, payment_history) and must
     never do that against a real seeded demo account (BF-1001..1004) that
     a live deployment or another test run might be relying on."""
-    from datetime import date
+    from datetime import timedelta
 
+    # Relative to "today", never a fixed calendar date: this fixture used to
+    # pin 2026-10-01, which silently turned every payment test below into a
+    # "paid late" one the day after that date passed.
     account, _ = store.create_account(
         borrower_name="Pay Test Borrower", business_name="Pay Test Co", phone_number="+919800011111",
         language_preference="en", loan_type="Test Loan", principal_amount=60_000, emi_amount=3_000,
-        tenure_months=20, emi_due_date=date(2026, 10, 1), nach_mandate_active=True, risk_tier="low",
+        tenure_months=20, emi_due_date=store.current_date() + timedelta(days=10), nach_mandate_active=True, risk_tier="low",
     )
     try:
         yield account
@@ -84,10 +87,11 @@ def throwaway_account():
         conn.execute("delete from accounts where account_id = %s", (account.account_id,))
 
 
-def test_health():
+@_pg_skip
+def test_health_reports_ok_when_the_database_is_reachable():
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    assert response.json() == {"status": "ok", "database": "ok"}
 
 
 @_pg_skip
@@ -297,7 +301,7 @@ def test_dashboard_returns_real_account_snapshot_timeline_and_empty_escalations_
     assert timeline[1]["status"] == "paid-on-time"
     assert timeline[2]["status"] == "paid-on-time"
     assert timeline[3]["status"] == "overdue"
-    assert timeline[3]["label"] == "Overdue -- 3d past due"
+    assert timeline[3]["label"] == "Due 3d ago — within the grace period"  # past due, but inside the grace period: not "Overdue"
     assert timeline[3]["amount"] == 12_500
     assert timeline[-1]["status"] == "upcoming"
 
@@ -305,7 +309,7 @@ def test_dashboard_returns_real_account_snapshot_timeline_and_empty_escalations_
     # rules -- 3 days past due does not exceed the 3-day grace period, no
     # dispute, no broken promises -- so no warnings at all.
     assert body["warnings"] == []
-    assert body["escalations"] == []
+    assert body["requests"] == []
     assert body["documents"] == []
 
 
@@ -327,7 +331,7 @@ def test_dashboard_reframes_ops_flags_into_borrower_toned_warnings(reseed_accoun
     assert {w["label"] for w in warnings} == {"overdue", "disputed", "broken_promises"}
     assert any("20 days overdue" in t and "late fee" in t and "500" in t for t in texts)
     assert any("open dispute" in t and "reviewing" in t for t in texts)
-    assert any("2 missed payment promises" in t for t in texts)
+    assert any("2 earlier payment promises" in t for t in texts)
     # The reframing is deliberate -- never the raw, staff-toned ops/flags.py
     # wording verbatim (see that module's Flag.reason strings).
     assert not any("grace period" in t for t in texts)
@@ -585,6 +589,7 @@ def test_payment_info_endpoint_returns_pending_for_a_fresh_token(throwaway_accou
         "account_id": throwaway_account.account_id, "amount": 3000.0,
         "business_name": "Pay Test Co", "borrower_name": "Pay Test Borrower", "status": "pending",
         "emi_amount_due": 3000.0,  # emi_amount minus a fresh account's zero pending_emi_credit
+        "late_fee_due": 0.0,  # due date is still in the future
     }
 
 
@@ -605,13 +610,13 @@ def test_payment_confirm_endpoint_records_a_real_payment(throwaway_account):
     body = response.json()
     assert body["amount"] == 3000.0
     assert body["months_remaining"] == throwaway_account.months_remaining - 1
-    assert body["next_emi_due_date"] == "2026-11-01"  # one month past the fixture's 2026-10-01
+    assert body["next_emi_due_date"] == store.add_one_month(throwaway_account.emi_due_date).isoformat()  # one month past the fixture's due date
 
     updated = store.get_account_or_raise(throwaway_account.account_id)
     assert updated.months_remaining == throwaway_account.months_remaining - 1
     assert len(updated.payment_history) == 1
     assert updated.payment_history[0].amount == 3000.0
-    assert updated.payment_history[0].on_time is True  # paid before/on the original 2026-10-01 due date
+    assert updated.payment_history[0].on_time is True  # paid before the fixture's due date (10 days out)
 
     # A real tool_called event, same as an LLM- or slash-command-triggered
     # payment would log -- an operator/ops dashboard has no separate way
@@ -966,3 +971,74 @@ def test_speech_endpoint_returns_real_playable_audio_in_the_conversations_langua
     data, sr = sf.read(io.BytesIO(response.content))
     assert sr == 16000
     assert len(data) > 0
+
+
+@_pg_skip
+def test_dashboard_requests_hide_system_tickets_and_include_the_borrowers_own_dispute(reseed_accounts):
+    # Live: Fatima's "Your requests" showed "Guardrail blocked a reply: ... [12500.0]" and
+    # "Broken promise pattern -- 2 broken promises on record" -- and not her actual fee dispute.
+    from businessflow.accounts.escalation_kinds import BROKEN_PROMISE_PATTERN_PREFIX, GUARDRAIL_REASON_PREFIX
+
+    store.create_escalation("BF-1003", f"{GUARDRAIL_REASON_PREFIX} amount(s) not from any real tool result: [12500.0]")
+    store.create_escalation("BF-1003", f"{BROKEN_PROMISE_PATTERN_PREFIX} -- 2 broken promises on record")
+    store.create_escalation("BF-1003", "Borrower requested a human agent from the dashboard")
+    conversation_id = _start_verified_conversation("BF-1003", "930571")
+
+    body = client.get(f"/conversations/{conversation_id}/dashboard").json()
+
+    assert sorted(r["kind"] for r in body["requests"]) == ["callback", "dispute"]
+    blob = str(body["requests"])
+    assert "Guardrail" not in blob and "Broken promise pattern" not in blob
+    dispute = next(r for r in body["requests"] if r["kind"] == "dispute")
+    assert dispute["status_label"] == "Under review" and "late fee" in dispute["detail"]
+
+
+@_pg_skip
+def test_dashboard_states_one_amount_due_now_and_agrees_with_the_agents_tool(reseed_accounts):
+    from businessflow.tools.account_tools import get_payment_status
+
+    conversation_id = _start_verified_conversation("BF-1003", "930571")
+
+    account = client.get(f"/conversations/{conversation_id}/dashboard").json()["account"]
+
+    assert account["amount_due_now"] == 35_500.0  # EMI 35,000 + the 500 late fee, 20 days past due
+    assert account["amount_due_now"] == get_payment_status("BF-1003")["amount_due_now"]
+
+
+@_pg_skip
+def test_dashboard_messages_include_reminders_decisions_and_dispute_outcomes_not_only_staff_messages(reseed_accounts):
+    store.log_event("BF-1001", "reminder_sent", {"kind": "due_now", "message": "Your EMI is due", "delivered_via_telegram": False})
+    store.log_event("BF-1001", "restructuring_decision_notified", {"approved": True, "message": "Decision text", "delivered_via_telegram": False})
+    conversation_id = _start_verified_conversation("BF-1001", "482913")
+
+    messages = client.get(f"/conversations/{conversation_id}/dashboard").json()["messages"]
+
+    assert {m["kind"] for m in messages} == {"reminder", "decision"}
+    assert {m["message"] for m in messages} == {"Your EMI is due", "Decision text"}
+
+
+@_pg_skip
+def test_dashboard_for_a_fully_repaid_loan_shows_nothing_late_or_due(reseed_accounts):
+    store.get_connection().execute("update accounts set months_remaining = 0 where account_id = %s", ("BF-1002",))
+    conversation_id = _start_verified_conversation("BF-1002", "716044")
+
+    body = client.get(f"/conversations/{conversation_id}/dashboard").json()
+
+    assert body["warnings"] == []
+    assert body["account"]["days_past_due"] == 0 and body["account"]["amount_due_now"] == 0.0
+
+
+@_pg_skip
+def test_paying_emi_plus_the_late_fee_through_a_real_link_is_a_plain_payment(reseed_accounts):
+    # BF-1002: 11 days past due, EMI 22,000. This is exactly the amount the overdue "Pay" button and the
+    # reminders mint; the pay page must see it as what's owed, not as an "extra" to apply somewhere.
+    token = store.create_payment_token("BF-1002", 22_500)
+
+    info = client.get(f"/pay/{token}/info").json()
+    assert info["emi_amount_due"] == 22_000.0 and info["late_fee_due"] == 500.0
+
+    response = client.post(f"/pay/{token}/confirm")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["kind"] == "regular" and body["late_fee_paid"] == 500.0 and body["pending_emi_credit"] == 0.0

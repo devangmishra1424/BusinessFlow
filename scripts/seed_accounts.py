@@ -50,7 +50,10 @@ from psycopg.rows import dict_row
 # (python -m scripts.seed_accounts) same as any other entry point.
 load_dotenv()
 
-_ACCOUNT_IDS = ["BF-1001", "BF-1002", "BF-1003", "BF-1004"]
+_ACCOUNT_IDS = [
+    "BF-1001", "BF-1002", "BF-1003", "BF-1004", "BF-1005",
+    "BF-1006", "BF-1007", "BF-1008", "BF-1009", "BF-1010"
+]
 
 # Arbitrary, fixed key for the advisory lock -- just needs to be the same
 # across every process seeding these same demo accounts, so it doesn't
@@ -65,6 +68,12 @@ _DAYS_PAST_DUE = {
     "BF-1002": 11,
     "BF-1003": 20,
     "BF-1004": 12,
+    "BF-1005": 5,
+    "BF-1006": 0,
+    "BF-1007": 15,
+    "BF-1008": 2,
+    "BF-1009": 8,
+    "BF-1010": 0,
 }
 
 
@@ -143,14 +152,113 @@ def _build_accounts(today: date) -> list[dict]:
             "risk_tier": "medium",
             "access_key": "205839",
         },
+        {
+            "account_id": "BF-1005",
+            "borrower_name": "Sunita Patil",
+            "business_name": "Patil Dairy & Kirana Store",
+            "phone_number": "+919812345005",
+            "language_preference": "hi",
+            "loan_type": "Working Capital Loan",
+            "principal_amount": 400_000,
+            "emi_amount": 18_000,
+            "tenure_months": 24,
+            "months_remaining": 10,
+            "emi_due_date": (today - timedelta(days=_DAYS_PAST_DUE["BF-1005"])).isoformat(),
+            "nach_mandate_active": True,
+            "dispute_open": False,
+            "risk_tier": "medium",
+            "access_key": "128143",
+        },
+        {
+            "account_id": "BF-1006",
+            "borrower_name": "Rajesh Kumar Yadav",
+            "business_name": "Yadav Welding & Fabrication Works",
+            "phone_number": "+919812345006",
+            "language_preference": "hi",
+            "loan_type": "Equipment Loan",
+            "principal_amount": 350_000,
+            "emi_amount": 15_000,
+            "tenure_months": 24,
+            "months_remaining": 18,
+            "emi_due_date": (today + timedelta(days=10)).isoformat(),
+            "nach_mandate_active": True,
+            "dispute_open": False,
+            "risk_tier": "low",
+            "access_key": "738570",
+        },
+        {
+            "account_id": "BF-1007",
+            "borrower_name": "Meera Nair",
+            "business_name": "Nair Spices & Provisions",
+            "phone_number": "+919812345007",
+            "language_preference": "en",
+            "loan_type": "Working Capital Loan",
+            "principal_amount": 500_000,
+            "emi_amount": 20_000,
+            "tenure_months": 30,
+            "months_remaining": 15,
+            "emi_due_date": (today - timedelta(days=_DAYS_PAST_DUE["BF-1007"])).isoformat(),
+            "nach_mandate_active": False,
+            "dispute_open": False,
+            "risk_tier": "high",
+            "access_key": "584558",
+        },
+        {
+            "account_id": "BF-1008",
+            "borrower_name": "Harpreet Singh Sodhi",
+            "business_name": "Sodhi Auto Care Garage",
+            "phone_number": "+919812345008",
+            "language_preference": "hinglish",
+            "loan_type": "Equipment Loan",
+            "principal_amount": 750_000,
+            "emi_amount": 30_000,
+            "tenure_months": 36,
+            "months_remaining": 24,
+            "emi_due_date": (today - timedelta(days=_DAYS_PAST_DUE["BF-1008"])).isoformat(),
+            "nach_mandate_active": True,
+            "dispute_open": False,
+            "risk_tier": "low",
+            "access_key": "778854",
+        },
+        {
+            "account_id": "BF-1009",
+            "borrower_name": "Anjali Deshmukh",
+            "business_name": "Deshmukh Boutique & Tailoring",
+            "phone_number": "+919812345009",
+            "language_preference": "hi",
+            "loan_type": "Working Capital Loan",
+            "principal_amount": 300_000,
+            "emi_amount": 14_000,
+            "tenure_months": 24,
+            "months_remaining": 12,
+            "emi_due_date": (today - timedelta(days=_DAYS_PAST_DUE["BF-1009"])).isoformat(),
+            "nach_mandate_active": True,
+            "dispute_open": False,
+            "risk_tier": "medium",
+            "access_key": "511301",
+        },
+        {
+            "account_id": "BF-1010",
+            "borrower_name": "Devang Mishra",
+            "business_name": "AI Start-Up",
+            "phone_number": "+919812345010",
+            "language_preference": "en",
+            "loan_type": "Business Expansion Loan",
+            "principal_amount": 1_000_000,
+            "emi_amount": 45_000,
+            "tenure_months": 24,
+            "months_remaining": 24,
+            "emi_due_date": (today + timedelta(days=15)).isoformat(),
+            "nach_mandate_active": True,
+            "dispute_open": False,
+            "risk_tier": "low",
+            "access_key": "844488",
+        },
     ]
 
 
 # (account_id, days before that account's emi_due_date, amount, on_time) --
 # offsets computed once, by hand, from the original fixed-date seed data
-# (e.g. BF-1001's three payments were exactly 92/61/31 days before its old
-# 2026-08-18 due date), so the relative shape of the payment history is
-# unchanged, only its anchor point moves with emi_due_date.
 _PAYMENT_HISTORY_OFFSETS = [
     ("BF-1001", 92, 12_500, True),
     ("BF-1001", 61, 12_500, True),
@@ -159,9 +267,19 @@ _PAYMENT_HISTORY_OFFSETS = [
     ("BF-1002", 58, 22_000, False),
     ("BF-1002", 22, 22_000, False),
     ("BF-1003", 61, 35_000, True),
-    # July and August EMIs both missed entirely -- no records for them.
     ("BF-1004", 61, 28_000, True),
     ("BF-1004", 31, 28_000, True),
+    ("BF-1005", 92, 18_000, True),
+    ("BF-1005", 61, 18_000, True),
+    ("BF-1005", 31, 25_000, True),  # Extra prepayment off-cycle
+    ("BF-1006", 61, 15_000, True),
+    ("BF-1006", 31, 15_000, True),
+    ("BF-1007", 61, 20_000, True),
+    ("BF-1008", 61, 30_000, True),
+    ("BF-1008", 31, 30_000, True),
+    ("BF-1009", 61, 14_000, True),
+    ("BF-1009", 31, 14_000, True),
+    ("BF-1010", 31, 45_000, True),
 ]
 
 # (account_id, made_on days before due, promised_date days before due, amount, kept)

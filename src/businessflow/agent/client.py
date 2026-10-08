@@ -4,6 +4,7 @@ tool-calling agent loop in agent/loop.py.
 """
 
 import os
+import threading
 import time
 
 from dotenv import load_dotenv
@@ -47,6 +48,12 @@ _MAX_FALLBACK_KEY_SUFFIX = 20  # ALTERNATE_GROQ_KEY2..20 -- generous headroom; a
 _current_key_index = 0  # 0 = primary (GROQ_API_KEY); N>0 = the Nth configured fallback
 _switched_at: float | None = None
 _FALLBACK_COOLDOWN_SECONDS = 150
+# Explicit request timeouts (the SDK's own default is 60 s read). The
+# conversational loop gets a tighter one: a normal turn answers in a few
+# seconds, and a hung call should fail over, not hold a caller for a minute.
+_REQUEST_TIMEOUT_SECONDS = 60.0
+_FAIL_FAST_TIMEOUT_SECONDS = 30.0
+_key_lock = threading.Lock()
 
 
 def _fallback_env_var_names() -> list[str]:
@@ -551,20 +558,46 @@ _LANGUAGE_INSTRUCTIONS = {
 }
 
 
-def client() -> Groq:
-    global _current_key_index
-    if _current_key_index > 0 and _switched_at is not None:
-        if time.time() - _switched_at >= _FALLBACK_COOLDOWN_SECONDS:
-            _current_key_index = 0  # cooldown elapsed -- give the primary another chance
+def client(*, fail_fast: bool = False) -> tuple[Groq, int]:
+    """Returns (client for the currently active key, that key's index) -- the
+    index is what switch_to_fallback_key() needs to rotate safely.
 
-    env_var = _active_env_var()
-    api_key = os.environ.get(env_var)
-    if not api_key:
-        raise RuntimeError(f"{env_var} is not set -- copy .env.example to .env and fill it in")
-    return Groq(api_key=api_key)
+    fail_fast=True is for the one caller that rotates keys itself (the agent
+    loop). The Groq SDK's default is 2 retries, and on a 429 it SLEEPS for
+    whatever Retry-After the server sends (up to 60 s) before each one --
+    so a rate-limited key cost ~25 s + ~25 s before the RateLimitError ever
+    reached the rotation code, which would then have switched to a fresh key
+    in milliseconds. Measured tool-calling turns took ~51 s against ~2.3 s
+    for a no-tool turn (eval/results/latency_benchmark.json); the two-call
+    shape of a tool turn plus a ~5k-token prompt against an 8k tokens/minute
+    cap is what keeps tripping it. With fail_fast the 429 surfaces at once.
+    Every other caller keeps the SDK's retry behavior; use groq_client()."""
+    global _current_key_index, _switched_at
+    with _key_lock:
+        if _current_key_index > 0 and _switched_at is not None:
+            if time.time() - _switched_at >= _FALLBACK_COOLDOWN_SECONDS:
+                _current_key_index = 0  # cooldown elapsed -- give the primary another chance
+
+        env_var = _active_env_var()
+        api_key = os.environ.get(env_var)
+        if not api_key:
+            raise RuntimeError(f"{env_var} is not set -- copy .env.example to .env and fill it in")
+        if fail_fast:
+            return Groq(api_key=api_key, max_retries=0, timeout=_FAIL_FAST_TIMEOUT_SECONDS), _current_key_index
+        return Groq(api_key=api_key, timeout=_REQUEST_TIMEOUT_SECONDS), _current_key_index
 
 
-def switch_to_fallback_key() -> bool:
+def groq_client() -> Groq:
+    """Just the client for the currently active key -- for the call sites
+    (outbound reminders, loan-term extraction, query translation, reports)
+    that have no key-rotation logic of their own. client() returns a
+    (client, key_index) pair for the agent loop's sake; these callers used
+    to do `client().chat...`, which stopped working the moment client()
+    started returning that pair."""
+    return client()[0]
+
+
+def switch_to_fallback_key(current_key_index: int) -> bool:
     """Called when the currently active key's requests start failing
     with a rate limit. Advances to the next configured fallback
     (ALTERNATE_GROQ_KEY, then ALTERNATE_GROQ_KEY2, ...), if there's one
@@ -572,12 +605,27 @@ def switch_to_fallback_key() -> bool:
     actually advanced, False if every configured key is already in use
     -- the caller should let the original error propagate in that case."""
     global _current_key_index, _switched_at
-    fallback_names = _fallback_env_var_names()
-    if _current_key_index < len(fallback_names):
-        _current_key_index += 1
-        _switched_at = time.time()
-        return True
-    return False
+    with _key_lock:
+        if _current_key_index != current_key_index:
+            # Another thread already advanced it, retry with the new one
+            return True
+        fallback_names = _fallback_env_var_names()
+        if _current_key_index < len(fallback_names):
+            _current_key_index += 1
+            _switched_at = time.time()
+            return True
+        return False
+
+
+def reset_to_primary_key() -> None:
+    """Go back to GROQ_API_KEY right now rather than waiting out
+    _FALLBACK_COOLDOWN_SECONDS. For the agent loop after it has waited for
+    the rate limits to clear: every fallback was tried and exhausted, and
+    the primary has had the longest to recover."""
+    global _current_key_index, _switched_at
+    with _key_lock:
+        _current_key_index = 0
+        _switched_at = None
 
 
 def build_system_prompt(language: str = "en", account_id: str | None = None, template: str | None = None) -> str:
@@ -630,7 +678,8 @@ def reply(user_message: str, language: str = "en") -> str:
     """A single-turn reply with no memory of prior turns and no tool
     access -- the placeholder reasoning step for the voice I/O shell.
     language is "en" or "hi" and controls which script the reply must use."""
-    completion = client().chat.completions.create(
+    groq_client, _ = client()
+    completion = groq_client.chat.completions.create(
         model=MODEL,
         messages=[
             {"role": "system", "content": build_system_prompt(language)},
