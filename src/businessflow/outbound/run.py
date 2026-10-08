@@ -20,6 +20,8 @@ either way.
 from datetime import datetime, time, timezone
 
 from businessflow.accounts import store
+from businessflow.accounts.dues import reminder_amounts
+from businessflow.accounts.escalation_kinds import BROKEN_PROMISE_PATTERN_PREFIX, CHRONIC_DELINQUENCY_REASON
 from businessflow.accounts.policy import BROKEN_PROMISES_BEFORE_MANDATORY_ESCALATION, MANDATORY_ESCALATION_DAYS_PAST_DUE
 from businessflow.outbound.compose import compose_message
 from businessflow.outbound.decide import decide_reminders
@@ -34,10 +36,7 @@ from businessflow.tools.payment_tools import generate_payment_link
 # opening a second one. A NEW escalation with this same reason only opens
 # again once a human has actually resolved the last one and the account is
 # STILL over threshold afterward -- which is correct, not a bug.
-_CHRONIC_DELINQUENCY_REASON = (
-    "Chronically overdue -- past the mandatory escalation threshold with repeated "
-    "reminders sent and no resolution"
-)
+_CHRONIC_DELINQUENCY_REASON = CHRONIC_DELINQUENCY_REASON  # shared with accounts/escalation_kinds.py so the classifier can't drift
 
 
 def _already_sent_today(account_id: str, kind: str) -> bool:
@@ -45,9 +44,14 @@ def _already_sent_today(account_id: str, kind: str) -> bool:
     return store.has_recent_event_with_detail(account_id, "reminder_sent", since_midnight, "kind", kind)
 
 
+from businessflow.outbound.risk_engine import calculate_account_risk
+
+
 def run_daily_outbound_pass(account_ids: list[str] | None = None) -> list[dict]:
     sent = []
     for reminder in decide_reminders(account_ids):
+        if _already_sent_today(reminder.account_id, reminder.kind):
+            continue
         # A follow_up reminder alone fires identically forever once an
         # account clears GRACE_PERIOD_DAYS, with no ceiling -- found live,
         # this never itself escalates to a human no matter how delinquent
@@ -57,10 +61,19 @@ def run_daily_outbound_pass(account_ids: list[str] | None = None) -> list[dict]:
         # working.
         if reminder.kind == "follow_up" and reminder.days >= MANDATORY_ESCALATION_DAYS_PAST_DUE:
             escalate_to_human(reminder.account_id, _CHRONIC_DELINQUENCY_REASON)
-        if _already_sent_today(reminder.account_id, reminder.kind):
-            continue
         account = store.get_account_or_raise(reminder.account_id)
-        message = compose_message(account, reminder)
+        # What the reminder quotes and the link is minted for: EMI still due
+        # this cycle (less any credit) plus the late fee for a follow_up --
+        # see accounts/dues.py. Previously the bare emi_amount, which ignored
+        # credit and the fee and sent borrowers to a pay page that called the
+        # difference an "extra payment".
+        _emi, _late_fee, amount_due = reminder_amounts(account, reminder.kind)
+        if _emi <= 0:
+            # This cycle's EMI is already covered by credit from an earlier
+            # extra payment -- there is nothing to remind them to pay.
+            continue
+        risk_profile = calculate_account_risk(account)
+        message = compose_message(account, reminder, risk_profile=risk_profile)
         # A real, single-use payment link on every reminder kind -- even a
         # heads_up borrower paying a few days early, or a follow_up
         # borrower already past the grace period, both benefit from "pay
@@ -68,21 +81,17 @@ def run_daily_outbound_pass(account_ids: list[str] | None = None) -> list[dict]:
         # exact due date. generate_payment_link mints a fresh token per
         # reminder (accounts.store.create_payment_token) -- never reused
         # across sends, so an old reminder's link can't outlive this one.
-        link = generate_payment_link(reminder.account_id, account.emi_amount)
-        # Found live: send_reminder's real return value (did this actually
-        # reach the borrower over Telegram, or just get logged with nowhere
-        # to deliver to) was silently discarded here -- it was already
-        # being written into the reminder_sent event's own details
-        # (accounts/store.py), just never propagated back up to the API
-        # response or the ops dashboard, which had no way to distinguish a
-        # real delivery from a no-op. From an operator's chair, clicking
-        # "send reminders" and having every account come back undelivered
-        # (no linked Telegram chat) looked identical to the button doing
-        # nothing at all.
-        delivered = send_reminder(reminder.account_id, reminder.kind, message, link["payment_link"], account.emi_amount)
+        link = generate_payment_link(reminder.account_id, amount_due)
+        delivered = send_reminder(reminder.account_id, reminder.kind, message, link["payment_link"], amount_due)
         sent.append({
-            "account_id": reminder.account_id, "kind": reminder.kind, "days": reminder.days,
-            "message": message, "delivered_via_telegram": delivered,
+            "account_id": reminder.account_id,
+            "kind": reminder.kind,
+            "days": reminder.days,
+            "risk_tier": risk_profile.tier.value,
+            "recommended_tone": risk_profile.recommended_tone.value,
+            "risk_score": risk_profile.score,
+            "message": message,
+            "delivered_via_telegram": delivered,
         })
     return sent
 
@@ -103,10 +112,12 @@ def resolve_promises() -> dict:
     escalated = []
     for account_id in newly_broken_account_ids:
         account = store.get_account_or_raise(account_id)
-        if account.broken_promise_count() == BROKEN_PROMISES_BEFORE_MANDATORY_ESCALATION:
+        new_breaks = len([r for r in resolved if r["account_id"] == account_id and r["kept"] is False])
+        prev_count = account.broken_promise_count() - new_breaks
+        if prev_count < BROKEN_PROMISES_BEFORE_MANDATORY_ESCALATION <= account.broken_promise_count():
             result = escalate_to_human(
                 account_id,
-                f"Broken promise pattern -- {account.broken_promise_count()} broken promises on record",
+                f"{BROKEN_PROMISE_PATTERN_PREFIX} -- {account.broken_promise_count()} broken promises on record",
             )
             escalated.append(result)
 

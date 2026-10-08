@@ -21,6 +21,7 @@ from datetime import date, datetime, timedelta, timezone
 import psycopg
 
 from businessflow.accounts.db import get_connection
+from businessflow.accounts.dues import late_fee_due
 from businessflow.accounts.models import Account, Escalation, PaymentRecord, PromiseToPay
 from businessflow.accounts.policy import PAYMENT_TOKEN_TTL_HOURS, PROMISE_TOLERANCE_DAYS
 
@@ -607,39 +608,37 @@ def record_payment(
     amount: float,
     payment_date: date | None = None,
     apply_extra_to_next: bool | None = None,
+    payment_scheme: str | None = None,
 ) -> dict:
-    """The one place a payment actually LANDS: every other payment_history
-    row in this system is seed data, never a live event this app itself
-    produced. Called only from redeem_payment_token below -- never
-    reachable directly from a borrower-facing tool, since a payment must
-    always be gated by a real, single-use token (see that function's own
-    docstring for why).
+    """The one place a payment actually LANDS: records regular EMI payments
+    as well as off-cycle prepayments.
 
-    Real reducing-balance EMI semantics, kept deliberately simple to match
-    this project's existing "one flat EMI cuts one month" model -- but that
-    model only holds when the amount paid actually matches what's due.
-    What's due THIS cycle is emi_amount minus pending_emi_credit (a running
-    credit from a prior off-cycle payment the borrower chose to apply, or
-    an overpayment's excess -- see Account.pending_emi_credit).
+    What's due THIS cycle is emi_amount minus pending_emi_credit.
 
-    - amount covers what's due (>=): the cycle retires normally -- one
-      month off, due date rolls forward, same as before. Anything paid
-      ABOVE what was due is automatically credited toward the next cycle
-      (kind="overpayment_applied") -- overpaying is never ambiguous, so
-      this needs no confirmation from the borrower.
-    - amount falls short of what's due: an off-cycle/partial payment.
-      Never retires a month on its own -- months_remaining/emi_due_date
-      are left untouched either way, since the cycle wasn't actually paid
-      off. Requires apply_extra_to_next to be explicitly True or False
-      (raises ExtraPaymentDecisionRequiredError on None, so this can't
-      silently guess the borrower's intent): True adds the full amount to
-      pending_emi_credit, reducing what's due next cycle
-      (kind="extra_applied"); False just records the payment with zero
-      effect on the schedule or the credit (kind="extra_unapplied") --
-      logged, not processed, exactly as asked for.
-
-    months_remaining floors at 0 rather than going negative on a stray
-    extra payment against an already-closed loan."""
+    - amount covers it: the cycle retires -- one month off, due date rolls
+      forward. Anything above what was due is then either
+        * exactly the late fee (accounts/dues.py) -- the borrower paid
+          "EMI + fee", the figure the dashboard and reminders quote. That is
+          NOT a prepayment: it is recorded as a regular payment with nothing
+          credited (late_fee_paid says so), or
+        * a genuine extra, applied per payment_scheme:
+          1. credit_next_emi (default): pending_emi_credit, so next cycle's
+             EMI is smaller.
+          2. reduce_emi: against the remaining balance, lowering the EMI for
+             the months that are left.
+          3. reduce_tenure: against the remaining balance, removing as many
+             whole EMIs from the end as the extra pays for; a remainder
+             smaller than one EMI stays as credit rather than disappearing.
+      Both schemes measure "remaining balance" the way the rest of the
+      product does (emi_amount x months left, see get_payment_status and
+      calculate_hypothetical), *after* this cycle's EMI is retired -- so the
+      EMI just paid is never also counted as prepayment, and never lost.
+    - amount falls short: a partial payment toward THIS cycle. The cycle is
+      not retired (months_remaining/emi_due_date untouched) and
+      apply_extra_to_next must be True (credit it -- what is still due this
+      cycle is emi_amount - credit) or False (record only, no effect on the
+      schedule); None raises ExtraPaymentDecisionRequiredError.
+    """
     if payment_date is None:
         payment_date = current_date()
     conn = get_connection()
@@ -647,13 +646,41 @@ def record_payment(
 
     due_this_cycle = round(account.emi_amount - account.pending_emi_credit, 2)
     on_time = payment_date <= account.emi_due_date
+    new_principal = account.principal_amount
+    new_emi_amount = account.emi_amount
+    late_fee_paid = 0.0
 
     if amount + 0.01 >= due_this_cycle:
         excess = round(amount - due_this_cycle, 2)
-        kind = "overpayment_applied" if excess > 0.01 else "regular"
-        new_months_remaining = max(0, account.months_remaining - 1)
+        months_after = max(0, account.months_remaining - 1)
+        new_months_remaining = months_after
         next_due_date = add_one_month(account.emi_due_date)
-        new_credit = excess
+
+        fee = late_fee_due(account, payment_date)
+        if fee and excess > 0.01 and abs(excess - fee) <= 0.01:
+            late_fee_paid = fee
+            excess = 0.0
+
+        outstanding_after = round(account.emi_amount * months_after, 2)
+        kind = "regular"
+        new_credit = 0.0
+        if excess > 0.01:
+            kind = "overpayment_applied"
+            new_credit = excess
+            if payment_scheme == "reduce_emi" and months_after > 0:
+                applied = min(excess, outstanding_after)
+                kind = "principal_prepayment_reduce_emi"
+                new_principal = max(0.0, round(account.principal_amount - applied, 2))
+                new_emi_amount = max(1.0, round((outstanding_after - applied) / months_after, 2))
+                new_credit = round(excess - applied, 2)
+            elif payment_scheme == "reduce_tenure" and months_after > 0:
+                whole_emis = min(int(excess // account.emi_amount), months_after)
+                if whole_emis > 0:
+                    applied = round(whole_emis * account.emi_amount, 2)
+                    kind = "principal_prepayment_reduce_tenure"
+                    new_months_remaining = months_after - whole_emis
+                    new_principal = max(0.0, round(account.principal_amount - applied, 2))
+                    new_credit = round(excess - applied, 2)
     else:
         if apply_extra_to_next is None:
             raise ExtraPaymentDecisionRequiredError(
@@ -670,8 +697,8 @@ def record_payment(
         (account_id, payment_date, amount, on_time, kind),
     )
     conn.execute(
-        "update accounts set months_remaining = %s, emi_due_date = %s, pending_emi_credit = %s, updated_at = now() where account_id = %s",
-        (new_months_remaining, next_due_date, new_credit, account_id),
+        "update accounts set principal_amount = %s, emi_amount = %s, months_remaining = %s, emi_due_date = %s, pending_emi_credit = %s, updated_at = now() where account_id = %s",
+        (new_principal, new_emi_amount, new_months_remaining, next_due_date, new_credit, account_id),
     )
     return {
         "account_id": account_id,
@@ -679,9 +706,12 @@ def record_payment(
         "payment_date": payment_date.isoformat(),
         "on_time": on_time,
         "kind": kind,
+        "principal_amount": new_principal,
+        "emi_amount": new_emi_amount,
         "months_remaining": new_months_remaining,
         "next_emi_due_date": next_due_date.isoformat(),
         "pending_emi_credit": new_credit,
+        "late_fee_paid": late_fee_paid,
     }
 
 
@@ -764,24 +794,12 @@ def get_payment_token_info(token: str) -> dict | None:
     }
 
 
-def redeem_payment_token(token: str, apply_extra_to_next: bool | None = None) -> dict:
-    """The only path by which a "pay now" link can actually move the
-    account forward -- confirming re-checks used_at/expires_at rather
-    than trusting the caller already checked via get_payment_token_info
-    (that read can go stale between page-load and the borrower's click),
-    so a double-submit or a replayed request can never record two
-    payments for one token.
-
-    apply_extra_to_next only matters if this token's amount turns out to
-    be less than what's actually due this cycle -- passed straight through
-    to record_payment. Checked here too, BEFORE the token is marked used
-    (see below), even though record_payment re-checks the same thing:
-    the normal path always has this decided before it ever reaches here
-    (pay.js asks the borrower up front, using the emi_amount_due
-    get_payment_token_info returns, and always sends an answer) -- but if
-    a caller skips that and this really is still undecided, raising before
-    marking the token used means a real payment link isn't burned for
-    nothing; the borrower can just try confirming again with an answer."""
+def redeem_payment_token(
+    token: str,
+    apply_extra_to_next: bool | None = None,
+    payment_scheme: str | None = None,
+) -> dict:
+    """Redeems a payment token and records the payment according to the selected scheme."""
     conn = get_connection()
     row = conn.execute(
         "select account_id, amount, expires_at, used_at from payment_tokens where token = %s",
@@ -799,11 +817,11 @@ def redeem_payment_token(token: str, apply_extra_to_next: bool | None = None) ->
     if float(row["amount"]) + 0.01 < due_this_cycle and apply_extra_to_next is None:
         raise ExtraPaymentDecisionRequiredError(
             f"amount {row['amount']} is less than the {due_this_cycle} due this cycle for "
-            f"account_id={row['account_id']!r} -- apply_extra_to_next must be True or False"
+            f"account_id={row['account_id']!r} -- apply_extra_to_next must be specified"
         )
 
     conn.execute("update payment_tokens set used_at = now() where token = %s", (token,))
-    return record_payment(row["account_id"], float(row["amount"]), apply_extra_to_next=apply_extra_to_next)
+    return record_payment(row["account_id"], float(row["amount"]), apply_extra_to_next=apply_extra_to_next, payment_scheme=payment_scheme)
 
 
 _ESCALATION_COLUMNS = "escalation_id, account_id, reason, status, created_at, resolved_at, proposed_changes, resolution_reason"
@@ -881,6 +899,41 @@ def get_clarification_requests(account_id: str) -> list[dict]:
             "resolved": watermark is not None and r["created_at"] <= watermark,
         }
         for r in rows
+    ]
+
+
+# Everything the system or staff has SENT to a borrower, by the event type
+# outbound/send.py's _deliver_and_log logs it under. The borrower's dashboard
+# reads this (not just clarification requests) so what it says -- that nothing
+# sent to them is only visible on Telegram -- is actually true: a web-only
+# borrower previously never saw a restructuring decision or a reminder at all.
+_BORROWER_MESSAGE_KINDS = {
+    "clarification_request_sent": "message",
+    "restructuring_decision_notified": "decision",
+    "dispute_resolution_notified": "dispute",
+    "reminder_sent": "reminder",
+}
+_MAX_BORROWER_MESSAGES = 50  # an explicit bound on an otherwise unbounded history
+
+
+def get_borrower_messages(account_id: str) -> list[dict]:
+    """Messages sent to this borrower, newest first, bounded. Each is
+    {message, delivered_via_telegram, created_at, kind} with kind one of
+    message | decision | dispute | reminder."""
+    rows = get_connection().execute(
+        "select event_type, details, created_at from events where account_id = %s and event_type = any(%s) "
+        "order by created_at desc limit %s",
+        (account_id, list(_BORROWER_MESSAGE_KINDS), _MAX_BORROWER_MESSAGES),
+    ).fetchall()
+    return [
+        {
+            "message": r["details"].get("message", ""),
+            "delivered_via_telegram": bool(r["details"].get("delivered_via_telegram", False)),
+            "created_at": r["created_at"],
+            "kind": _BORROWER_MESSAGE_KINDS[r["event_type"]],
+        }
+        for r in rows
+        if r["details"].get("message")
     ]
 
 

@@ -67,10 +67,10 @@ create table payment_history (
     payment_date  date not null,
     amount        numeric not null,
     on_time       boolean not null,
-    -- 'regular' | 'extra_unapplied' | 'extra_applied' | 'overpayment_applied'
+    -- 'regular' | 'extra_unapplied' | 'extra_applied' | 'overpayment_applied' | 'principal_prepayment_reduce_emi' | 'principal_prepayment_reduce_tenure'
     -- -- see accounts/models.py's PaymentRecord.kind for what each means.
     kind          text not null default 'regular'
-                  check (kind in ('regular', 'extra_unapplied', 'extra_applied', 'overpayment_applied')),
+                  check (kind in ('regular', 'extra_unapplied', 'extra_applied', 'overpayment_applied', 'principal_prepayment_reduce_emi', 'principal_prepayment_reduce_tenure')),
     created_at    timestamptz not null default now()
 );
 

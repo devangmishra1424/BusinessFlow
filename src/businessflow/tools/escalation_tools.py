@@ -3,6 +3,7 @@
 import logging
 
 from businessflow.accounts import store
+from businessflow.accounts.escalation_kinds import CLOSURE_CERTIFICATE_REASON
 from businessflow.tools.payment_tools import calculate_hypothetical
 from businessflow.tools.server import mcp
 
@@ -40,10 +41,7 @@ def escalate_to_human(account_id: str, reason: str) -> dict:
 # eligibility and, when eligible, only queues a human to issue the actual
 # document -- it never produces or sends one itself, the same reason
 # escalate_to_human above exists rather than this system acting alone.
-_CLOSURE_CERTIFICATE_REASON = (
-    "Borrower requesting loan closure certificate/NOC -- fully repaid, "
-    "needs human to issue the actual document"
-)
+_CLOSURE_CERTIFICATE_REASON = CLOSURE_CERTIFICATE_REASON  # shared with accounts/escalation_kinds.py
 
 
 @mcp.tool(

@@ -233,3 +233,41 @@ def test_get_payment_history_clamps_a_non_positive_limit_up_to_one(reseed_accoun
 def test_get_payment_history_raises_on_unknown_account(reseed_accounts):
     with pytest.raises(ValueError, match="No account found"):
         get_payment_history(account_id="BF-9999")
+
+
+def test_get_payment_status_reports_what_is_due_now(reseed_accounts):
+    within_grace = get_payment_status(account_id="BF-1001")  # 3 days late: no fee yet
+    past_grace = get_payment_status(account_id="BF-1002")  # 11 days late: EMI 22,000 + the 500 fee
+
+    assert within_grace["amount_due_now"] == 12_500.0
+    assert past_grace["amount_due_now"] == 22_500.0
+
+
+def test_get_payment_status_says_nothing_is_late_or_due_on_a_fully_repaid_loan(reseed_accounts):
+    from businessflow.accounts import store
+
+    store.get_connection().execute("update accounts set months_remaining = 0 where account_id = %s", ("BF-1002",))
+
+    result = get_payment_status(account_id="BF-1002")  # its (seeded) due date is long past, but nothing is left to pay
+
+    assert result["days_past_due"] == 0
+    assert result["late_fee_applicable"] is False and result["late_fee_amount"] is None
+    assert result["amount_due_now"] == 0.0
+
+
+def test_get_payment_status_reports_what_is_due_now(reseed_accounts):
+    within_grace = get_payment_status(account_id="BF-1001")  # 3 days late: no fee yet
+    past_grace = get_payment_status(account_id="BF-1002")  # 11 days late: EMI 22,000 + the 500 fee
+
+    assert within_grace["amount_due_now"] == 12_500.0
+    assert past_grace["amount_due_now"] == 22_500.0
+
+
+def test_get_payment_status_says_nothing_is_late_or_due_on_a_fully_repaid_loan(reseed_accounts):
+    store.get_connection().execute("update accounts set months_remaining = 0 where account_id = %s", ("BF-1002",))
+
+    result = get_payment_status(account_id="BF-1002")  # its (seeded) due date is long past, but nothing is left to pay
+
+    assert result["days_past_due"] == 0
+    assert result["late_fee_applicable"] is False and result["late_fee_amount"] is None
+    assert result["amount_due_now"] == 0.0

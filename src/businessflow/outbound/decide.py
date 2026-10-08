@@ -34,6 +34,11 @@ def decide_reminder(account: Account, as_of: date | None = None) -> OutboundRemi
     if account.dispute_open:
         return None
 
+    # A fully repaid loan keeps a (phantom) future due date -- see
+    # Account.days_past_due. Never remind someone who has nothing left to pay.
+    if account.months_remaining <= 0:
+        return None
+
     days_until_due = (account.emi_due_date - as_of).days
     if 0 < days_until_due <= HEADS_UP_DAYS_BEFORE_DUE:
         return OutboundReminder(account.account_id, "heads_up", days_until_due)
