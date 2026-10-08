@@ -121,7 +121,8 @@ def test_list_accounts_returns_all_seeded_accounts_with_correct_flags(reseed_acc
 
     assert response.status_code == 200
     by_id = {a["account_id"]: a for a in response.json()}
-    assert set(by_id) == {"BF-1001", "BF-1002", "BF-1003", "BF-1004"}
+    # scripts/seed_accounts.py seeds ten demo accounts (BF-1001..BF-1010).
+    assert set(by_id) == {f"BF-{n}" for n in range(1001, 1011)}
 
     assert [f["label"] for f in by_id["BF-1001"]["flags"]] == []
     assert {f["label"] for f in by_id["BF-1003"]["flags"]} == {"overdue", "disputed", "broken_promises"}

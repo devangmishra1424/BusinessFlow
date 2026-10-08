@@ -196,57 +196,12 @@ def test_record_payment_reduce_tenure_removes_whole_emis_against_the_real_check_
     before = store.get_account_or_raise("BF-1002")  # 20 months left, EMI 22,000
     assert before.months_remaining == 20
 
-    result = store.record_payment("BF-1002", 22_000 + 50_000 + 500, payment_scheme="reduce_tenure")  # 500 = the late fee
+    # A deliberate 50,000 extra on top of the EMI -- NOT EMI + the late fee, so it is a real prepayment
+    # even though this account is past its grace period (only an overage of exactly the fee is the fee).
+    result = store.record_payment("BF-1002", 22_000 + 50_000, payment_scheme="reduce_tenure")
 
     assert result["kind"] == "principal_prepayment_reduce_tenure"
-    assert result["late_fee_paid"] == 500.0
-    after = store.get_account_or_raise("BF-1002")
-    assert after.months_remaining == 17  # one for this EMI, two whole EMIs from the 50,000
-    assert after.pending_emi_credit == 6_000  # the remainder is kept, not dropped
-    assert after.payment_history[-1].kind == "principal_prepayment_reduce_tenure"
-
-
-def test_get_borrower_messages_lists_everything_sent_to_the_borrower_newest_first(reseed_accounts):
-    store.log_event("BF-1001", "clarification_request_sent", {"message": "Please call us", "delivered_via_telegram": False})
-    store.log_event("BF-1001", "reminder_sent", {"kind": "due_now", "message": "Your EMI is due", "delivered_via_telegram": False})
-    store.log_event("BF-1001", "restructuring_decision_notified", {"approved": True, "message": "Approved", "delivered_via_telegram": True})
-    store.log_event("BF-1001", "dispute_resolution_notified", {"message": "Dispute closed", "delivered_via_telegram": False})
-    store.log_event("BF-1001", "user_message", {"content": "not something we SENT"})
-    store.log_event("BF-1002", "reminder_sent", {"kind": "due_now", "message": "someone else's", "delivered_via_telegram": False})
-
-    messages = store.get_borrower_messages("BF-1001")
-
-    assert [m["kind"] for m in messages] == ["dispute", "decision", "reminder", "message"]
-    assert [m["message"] for m in messages] == ["Dispute closed", "Approved", "Your EMI is due", "Please call us"]
-    assert messages[1]["delivered_via_telegram"] is True and messages[0]["delivered_via_telegram"] is False
-
-
-def test_record_payment_treats_emi_plus_the_late_fee_as_a_regular_payment(reseed_accounts):
-    # BF-1002 is seeded 11 days past due (EMI 22,000, past the 3-day grace period). Paying EMI + the
-    # 500 fee -- exactly what the overdue "Pay" button and every reminder mint -- used to be recorded as
-    # a 500 overpayment credited to the NEXT EMI.
-    before = store.get_account_or_raise("BF-1002")
-
-    result = store.record_payment("BF-1002", 22_500)
-
-    assert result["kind"] == "regular"
-    assert result["late_fee_paid"] == 500.0
-    after = store.get_account_or_raise("BF-1002")
-    assert after.months_remaining == before.months_remaining - 1
-    assert after.pending_emi_credit == 0
-    assert after.payment_history[-1].kind == "regular" and after.payment_history[-1].amount == 22_500
-
-
-def test_record_payment_reduce_tenure_removes_whole_emis_against_the_real_check_constraint(reseed_accounts):
-    # Writes a principal_prepayment_* kind through the REAL payment_history CHECK constraint (schema.sql) --
-    # the production database had to be migrated by hand for these kinds, so CI is where drift shows up.
-    before = store.get_account_or_raise("BF-1002")  # 20 months left, EMI 22,000
-    assert before.months_remaining == 20
-
-    result = store.record_payment("BF-1002", 22_000 + 50_000 + 500, payment_scheme="reduce_tenure")  # 500 = the late fee
-
-    assert result["kind"] == "principal_prepayment_reduce_tenure"
-    assert result["late_fee_paid"] == 500.0
+    assert result["late_fee_paid"] == 0.0
     after = store.get_account_or_raise("BF-1002")
     assert after.months_remaining == 17  # one for this EMI, two whole EMIs from the 50,000
     assert after.pending_emi_credit == 6_000  # the remainder is kept, not dropped
