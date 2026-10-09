@@ -25,12 +25,30 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
 
 from businessflow.accounts import store
+from businessflow.channels.reminder_actions import action_rows
 
 logger = logging.getLogger(__name__)
 
 
+def _build_reply_markup(
+    payment_url: str | None, payment_amount: float | None, actions: list[list[tuple[str, str]]] | None
+) -> InlineKeyboardMarkup | None:
+    """The "Pay now" URL button first (when there is a link), then one row per group of tappable actions."""
+    rows: list[list[InlineKeyboardButton]] = []
+    if payment_url:
+        label = f"💳 Pay ₹{payment_amount:,.0f} now" if payment_amount is not None else "💳 Pay now"
+        rows.append([InlineKeyboardButton(label, url=payment_url)])
+    for row in actions or []:
+        rows.append([InlineKeyboardButton(text, callback_data=data) for text, data in row])
+    return InlineKeyboardMarkup(rows) if rows else None
+
+
 async def _send_telegram_message(
-    chat_id: int, text: str, payment_url: str | None = None, payment_amount: float | None = None
+    chat_id: int,
+    text: str,
+    payment_url: str | None = None,
+    payment_amount: float | None = None,
+    actions: list[list[tuple[str, str]]] | None = None,
 ) -> bool:
     """Returns True only if Telegram actually accepted the message --
     False (not raised) if the token is missing, or Telegram itself
@@ -38,6 +56,10 @@ async def _send_telegram_message(
     can fall back to a logged event instead of losing the notification
     silently. A genuinely unexpected error is not this case and
     propagates, per this project's "don't swallow the unexpected" rule.
+
+    actions, when given, are rows of (label, callback_data) tappable
+    buttons below the message (channels/reminder_actions.py builds them
+    and handles the tap).
 
     payment_url, when given, attaches a real Telegram URL button below
     the message -- not woven into the message text itself (see
@@ -47,10 +69,7 @@ async def _send_telegram_message(
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
         return False
-    reply_markup = None
-    if payment_url:
-        label = f"💳 Pay ₹{payment_amount:,.0f} now" if payment_amount is not None else "💳 Pay now"
-        reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton(label, url=payment_url)]])
+    reply_markup = _build_reply_markup(payment_url, payment_amount, actions)
     try:
         async with Bot(token=token) as bot:
             await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
@@ -67,11 +86,13 @@ async def _deliver_and_log(
     extra_details: dict,
     payment_url: str | None = None,
     payment_amount: float | None = None,
+    with_actions: bool = False,
 ) -> bool:
     account = store.get_account(account_id)
     delivered = False
     if account and account.telegram_chat_id:
-        delivered = await _send_telegram_message(account.telegram_chat_id, message, payment_url, payment_amount)
+        actions = action_rows(account_id, account.language_preference) if with_actions else None
+        delivered = await _send_telegram_message(account.telegram_chat_id, message, payment_url, payment_amount, actions)
 
     store.log_event(account_id, event_type, {**extra_details, "message": message, "delivered_via_telegram": delivered})
     return delivered
@@ -84,9 +105,12 @@ def send_reminder(
     borrower was actually reached over Telegram (see module docstring).
     payment_url/payment_amount are optional -- run.py only mints a real
     payment token (and passes both) for the reminder kinds where "pay
-    now" actually makes sense (see run.py itself for which)."""
+    now" actually makes sense (see run.py itself for which). Every
+    reminder also carries the tappable actions of
+    channels/reminder_actions.py (promise to pay, talk to a person,
+    dispute), handled in telegram_bot.on_callback_query."""
     return asyncio.run(
-        _deliver_and_log(account_id, message, "reminder_sent", {"kind": kind}, payment_url, payment_amount)
+        _deliver_and_log(account_id, message, "reminder_sent", {"kind": kind}, payment_url, payment_amount, with_actions=True)
     )
 
 

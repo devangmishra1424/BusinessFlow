@@ -55,6 +55,7 @@ import torchaudio
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
+from telegram.error import TelegramError
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from businessflow.accounts import store
@@ -73,6 +74,7 @@ from businessflow.audio.tts import encode_ogg_opus, speak_english, speak_hindi
 from businessflow.audio.vad import trim_to_speech
 from businessflow.audio.verbalizer import verbalize
 from businessflow.channels.credentials import looks_like_credentials, parse_credentials, parse_telegram_start_payload
+from businessflow.channels.reminder_actions import run_action as run_reminder_action
 from businessflow.tools.account_tools import flag_dispute, get_payment_history, get_payment_status
 from businessflow.tools.escalation_tools import escalate_to_human, request_closure_certificate
 from businessflow.tools.payment_tools import generate_payment_link
@@ -442,7 +444,15 @@ _NOT_VERIFIED_MESSAGE = (
 
 def _verified_account_id(chat_id: int) -> str | None:
     session = _sessions.get(chat_id)
-    return session["account_id"] if session else None
+    if session and session["account_id"]:
+        return session["account_id"]
+    # No in-memory session (a restart or an OOM kill wiped it, or the chat has not spoken yet this
+    # run) but this chat already proved it owns an account: the durable chat link is only ever
+    # written after a real access-key check. The same trust handle_incoming_message's "Welcome
+    # back" rehydration already extends to a text turn, extended to the slash commands and to the
+    # buttons under a reminder, so they work the moment a borrower taps them.
+    linked = store.get_account_by_telegram_chat_id(chat_id)
+    return linked.account_id if linked else None
 
 
 def _log_tool_call(account_id: str, tool: str, arguments: dict, result: dict) -> None:
@@ -633,6 +643,16 @@ async def on_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await query.message.reply_text("Hindi set for this conversation." if language == "hi" else "English set for this conversation.")
         return
 
+    if data.startswith("rem:"):
+        # A button under a proactive reminder: one tap, no LLM turn (channels/reminder_actions.py).
+        result = await asyncio.to_thread(run_reminder_action, chat_id, data)
+        if result is None:
+            return
+        await query.message.reply_text(result.text)
+        if result.done:
+            await _drop_action_buttons(query)
+        return
+
     if not data.startswith("menu:"):
         return
     cmd = data.split(":", 1)[1]
@@ -660,6 +680,20 @@ async def on_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     else:
         text = "Unknown option."
     await query.message.reply_text(text)
+
+
+async def _drop_action_buttons(query) -> None:
+    """Takes the tappable action rows off a reminder once one has been used, keeping its "Pay now" link
+    (the only row made of URL buttons). Best-effort and logged: the action itself already succeeded, and
+    Telegram refuses to edit a message that is too old or already unchanged."""
+    markup = query.message.reply_markup
+    if markup is None:
+        return
+    kept = [row for row in markup.inline_keyboard if all(button.url for button in row)]
+    try:
+        await query.edit_message_reply_markup(InlineKeyboardMarkup(kept) if kept else None)
+    except TelegramError:
+        logger.warning("could not remove the action buttons from a reminder", exc_info=True)
 
 
 async def _send_spoken_reply(update: Update, chat_id: int, reply: str) -> None:

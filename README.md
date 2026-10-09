@@ -101,7 +101,9 @@ but too noisy run-to-run (Piper/MMS-TTS are both stochastic) to threshold
 without crying wolf; those stay a printed trend line for a human to read.
 
 **Shipped, not just running locally.** Three real channels -- browser chat +
-dashboard, a Telegram bot with a full slash-command menu, and the ops
+dashboard, a Telegram bot with a full slash-command menu (every proactive reminder also carries one-tap
+"I'll pay tomorrow / in 3 days / in a week", "talk to a person" and "dispute" buttons that call the same tools with
+no LLM turn, `channels/reminder_actions.py`), and the ops
 dashboard -- deployed as separate services on a real VM behind HTTPS, with
 GitHub Actions deploying automatically on every push to `main` that passes
 CI. CI runs against its own disposable, schema-verified Postgres+pgvector

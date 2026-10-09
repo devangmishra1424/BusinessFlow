@@ -524,3 +524,45 @@ def test_handle_incoming_voice_reaches_the_real_agent_loop_without_the_nested_ev
 
     assert transcript == "what is my current EMI amount"
     assert reply  # a real, non-empty reply from the real agent loop
+
+
+@_pg_skip
+def test_slash_commands_work_for_a_linked_chat_with_no_session(reseed_accounts):
+    # A restart wipes _sessions, but the durable chat link survives it. Before this, /status, /pay and
+    # the buttons under a reminder answered "needs a verified account" until the borrower re-sent their
+    # access key, even though the same chat had already proved it owned the account. (reseed_accounts
+    # clears every telegram_chat_id before each test, so there is nothing to clean up afterwards.)
+    from businessflow.accounts import store
+
+    chat_id = 900101
+    assert telegram_bot._verified_account_id(chat_id) is None  # never linked: still refused
+    store.set_telegram_chat_id("BF-1001", chat_id)
+
+    assert chat_id not in _sessions
+    assert telegram_bot._verified_account_id(chat_id) == "BF-1001"
+    assert "BF-1001" in asyncio.run(telegram_bot._run_status(chat_id))
+
+
+@_pg_skip
+def test_tapping_a_reminder_button_records_a_real_promise_only_for_the_linked_chat(reseed_accounts):
+    from datetime import timedelta
+
+    from businessflow.accounts import store
+    from businessflow.channels import reminder_actions
+
+    def promised_dates(account_id):
+        rows = store.get_connection().execute("select promised_date from promises where account_id = %s", (account_id,)).fetchall()
+        return [r["promised_date"] for r in rows]
+
+    chat_id = 900102
+    store.set_telegram_chat_id("BF-1001", chat_id)
+
+    result = reminder_actions.run_action(chat_id, reminder_actions.encode("ptp", "BF-1001", 3))
+    assert result is not None and result.done is True
+    assert store.current_date() + timedelta(days=3) in promised_dates("BF-1001")
+
+    # the same chat tapping a button that names a different account is refused and writes nothing
+    before = promised_dates("BF-1003")
+    refused = reminder_actions.run_action(chat_id, reminder_actions.encode("ptp", "BF-1003", 3))
+    assert refused.done is False
+    assert promised_dates("BF-1003") == before
