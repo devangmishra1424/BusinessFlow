@@ -23,6 +23,11 @@ docling-core==2.92.0
 docling-ibm-models==3.14.0  # the actual OCR/layout models -- the package that broke
 docling-parse==7.15.0
 docling-slim==2.121.0
+# Same class of drift, found 2026-10-10: an unpinned CI install resolved rapidocr 3.10.0 (released
+# that week) against local's verified-good 3.9.2, and docling then logged "No OCR engine found"
+# and read nothing from a scanned PDF (tests/test_ingest.py's OCR test). A production
+# `pip install` would have hit the same thing.
+rapidocr==3.9.2
 
 # --- Tools ---
 fastmcp
