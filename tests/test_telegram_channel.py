@@ -566,3 +566,11 @@ def test_tapping_a_reminder_button_records_a_real_promise_only_for_the_linked_ch
     refused = reminder_actions.run_action(chat_id, reminder_actions.encode("ptp", "BF-1003", 3))
     assert refused.done is False
     assert promised_dates("BF-1003") == before
+
+
+def test_the_voice_unavailable_note_follows_the_language():
+    # A spoken reply that could not be made used to vanish without a word; the borrower now gets this line.
+    from businessflow.channels.telegram_bot import _voice_unavailable_note
+
+    assert "text above" in _voice_unavailable_note("en")
+    assert any("\u0900" <= ch <= "\u097f" for ch in _voice_unavailable_note("hi"))

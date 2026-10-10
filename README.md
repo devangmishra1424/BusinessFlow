@@ -290,6 +290,12 @@ worse than one that lists them:
   through every table and query, per-org ops credentials, and per-org RAG
   scoping -- not just a schema column. Deliberately not built: this is a
   single-tenant proof of concept, not a live multi-customer product yet.
+- **Voice accent and quality.** English is spoken by Piper `en_US-lessac` (an American voice; Piper has no
+  Indian-English voice) and Hindi by Meta MMS-TTS (intelligible, basic). Neither is an Indian-accented natural
+  voice, and no listening test has been run to measure one; that needs a heavier or hosted engine. A Hindi reply
+  that contains Latin script (English words, acronyms, or a whole reply in Roman script) is spoken in two voices
+  (Devanagari runs by the Hindi voice, Latin runs by the English one) instead of losing those words or
+  producing no voice; a spoken reply that still cannot be made is announced in the chat.
 - A production-grade frontend design pass beyond the current functional
   dashboards, and horizontal scaling, are out of scope for a project at
   this size. (End-to-end latency IS measured, see `eval.latency_benchmark`

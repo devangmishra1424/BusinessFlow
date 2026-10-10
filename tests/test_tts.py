@@ -228,3 +228,63 @@ def test_speak_hindi_output_encodes_without_crashing():
     data, sr = sf.read(io.BytesIO(result))
     assert sr in _OPUS_SAMPLE_RATES
     assert len(data) > 0
+
+
+# ---------------------------------------------------------------------------
+# Hindi replies that are not pure Devanagari. The Hindi voice (MMS) silently drops Latin letters and
+# digits, and crashes on a sentence it can say nothing of, so a Hindi reply written in Roman script
+# produced no voice at all and "UPI" inside a Hindi sentence was skipped. Latin runs now go to the
+# English voice.
+# ---------------------------------------------------------------------------
+
+from businessflow.audio.tts import _script_runs  # noqa: E402
+
+
+def test_script_runs_separates_devanagari_from_latin():
+    assert _script_runs("आपका भुगतान UPI से हुआ।") == [("hi", "आपका भुगतान"), ("en", "UPI"), ("hi", "से हुआ।")]
+
+
+def test_script_runs_keeps_consecutive_latin_words_together():
+    assert _script_runs("आप WhatsApp Business पर") == [("hi", "आप"), ("en", "WhatsApp Business"), ("hi", "पर")]
+
+
+def test_script_runs_treats_a_roman_script_sentence_as_one_english_run():
+    assert _script_runs("Aapki agli kist paanch hazaar rupaye ki hai.") == [("en", "Aapki agli kist paanch hazaar rupaye ki hai")]
+
+
+def test_script_runs_drops_pieces_with_no_letters():
+    assert _script_runs("।") == []
+    assert _script_runs("123 !") == []
+    assert _script_runs("   ") == []
+
+
+def test_speak_hindi_raises_a_clear_error_when_nothing_is_speakable():
+    for text in ("।", "123 !", "   "):
+        with pytest.raises(ValueError, match="nothing speakable"):
+            speak_hindi(text)
+
+
+@_piper_skip
+def test_speak_hindi_speaks_a_reply_written_in_roman_script_instead_of_crashing():
+    # Before: tokenizer gave 0 tokens -> RuntimeError("narrow(): length must be non-negative") -> no voice.
+    speech = speak_hindi("Aapki agli kist paanch hazaar rupaye ki hai.")
+
+    assert len(speech.audio) / speech.sample_rate > 1.0
+
+
+@_piper_skip
+def test_speak_hindi_speaks_a_latin_word_inside_a_hindi_sentence():
+    without = speak_hindi("आपका भुगतान से हुआ।")
+    with_word = speak_hindi("आपका भुगतान WhatsApp से हुआ।")
+
+    # Before, the word was dropped and the two came out about equally long.
+    assert len(with_word.audio) / with_word.sample_rate > len(without.audio) / without.sample_rate + 0.3
+    # a mixed utterance is carried at the English voice's higher rate; a pure Hindi one is not resampled
+    assert with_word.sample_rate > without.sample_rate
+
+
+def test_the_pure_hindi_path_is_unchanged():
+    from businessflow.audio.tts import _mms_hindi
+
+    _, model = _mms_hindi()
+    assert speak_hindi("आपकी ईएमआई जल्द देय है।").sample_rate == model.config.sampling_rate

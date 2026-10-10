@@ -95,7 +95,7 @@ _HINDI_ONES_TO_NINETY_NINE = [
 # words only, and deliberately small -- add an entry here only once it's
 # actually been seen going unspoken (like EMI was, live), not
 # speculatively for every acronym this domain happens to use.
-_HINDI_GLOSSARY = {"EMI": "ईएमआई"}
+_HINDI_GLOSSARY = {"EMI": "ईएमआई", "UPI": "यूपीआई"}  # UPI: seen going unspoken in a Hindi reply, 2026-10-10
 _HINDI_GLOSSARY_PATTERN = re.compile(r"\b(" + "|".join(_HINDI_GLOSSARY) + r")\b")
 
 
@@ -122,6 +122,29 @@ def _hindi_number_words(n: int) -> str:
     if n:
         parts.append(_HINDI_ONES_TO_NINETY_NINE[n])
     return " ".join(parts)
+
+
+# Any plain number still in a Hindi sentence once the patterns above have run: a day of the month, "3 महीने",
+# a count. The Hindi voice drops digits without a sound, so "तारीख 15 अक्टूबर" was spoken as "तारीख अक्टूबर".
+# Grouped (5,000 or 1,25,000) or plain, with an optional decimal part. Not matched inside a Latin word, an ID
+# fragment (AB-12), a dotted version (3.5.1) or after a + (a malformed phone number). Five or more plain digits
+# are a code, not a quantity, and are said digit by digit.
+_BARE_NUMBER = re.compile(r"(?<![A-Za-z0-9_.+])(?<![A-Za-z]-)\d+(?:,\d{2,3})*(?:\.\d+)?(?![A-Za-z0-9_]|\.\d)")
+_MAX_SPOKEN_INTEGER = 10**12
+
+
+def _verbalize_bare_number(match: re.Match) -> str:
+    raw = match.group(0)
+    whole, _, fraction = raw.replace(",", "").partition(".")
+    n = int(whole)  # int() reads Devanagari digits too
+    if n >= _MAX_SPOKEN_INTEGER:
+        return raw  # not a number a person says aloud; leave it rather than invent a reading
+    if len(whole) >= 5 and "," not in raw and not fraction:
+        return _digit_words(whole, "hi")  # a code, PIN or reference number: said digit by digit, as for phone numbers and IDs
+    words = _hindi_number_words(n)
+    if fraction:
+        words += f" दशमलव {_digit_words(fraction, 'hi')}"
+    return words
 
 
 def _verbalize_date(match: re.Match, language: str) -> str:
@@ -239,7 +262,8 @@ def verbalize(text: str, language: str = "en") -> str:
 
     Order matters: dates and rupee amounts first (they contain digit runs the
     phone/ID patterns must not see), then emails (which may contain either).
-    The output contains none of the patterns, so verbalize() is idempotent."""
+    For Hindi, any plain number left after those (a day of the month, a count) is then spelled in Hindi
+    words too. The output contains none of the patterns, so verbalize() is idempotent."""
     text = _ISO_DATE.sub(lambda m: _verbalize_date(m, language), text)
     text = _RUPEE_AMOUNT.sub(lambda m: _verbalize_rupees(m, language), text)
     text = _EMAIL.sub(lambda m: _verbalize_email(m, language), text)
@@ -248,4 +272,5 @@ def verbalize(text: str, language: str = "en") -> str:
     text = _PERCENT.sub(lambda m: _verbalize_percent(m, language), text)
     if language == "hi":
         text = _HINDI_GLOSSARY_PATTERN.sub(lambda m: _HINDI_GLOSSARY[m.group(1)], text)
+        text = _BARE_NUMBER.sub(_verbalize_bare_number, text)
     return text
