@@ -28,7 +28,7 @@ real payment recording, a real Telegram bot, real evals.
 model fine-tuned specifically for Hindi-English code-switched speech, WER-
 benchmarked against the base model (`eval/asr_wer.py`) rather than assumed
 better -- plus a VAD stage (Silero) ahead of it and TTS on the way out (Piper
-for English, MMS for Hindi). Every model in the pipeline runs int8-quantized
+for English, Piper's `hi_IN` voice for Hindi with Meta MMS as the fallback). Every model in the pipeline runs int8-quantized
 ONNX, chosen deliberately for the RAM/latency envelope a real voice turn
 needs, not left at full precision by default. Multi-sentence replies are
 synthesized per sentence and rejoined with a deliberate pause between them
@@ -291,11 +291,19 @@ worse than one that lists them:
   scoping -- not just a schema column. Deliberately not built: this is a
   single-tenant proof of concept, not a live multi-customer product yet.
 - **Voice accent and quality.** English is spoken by Piper `en_US-lessac` (an American voice; Piper has no
-  Indian-English voice) and Hindi by Meta MMS-TTS (intelligible, basic). Neither is an Indian-accented natural
-  voice, and no listening test has been run to measure one; that needs a heavier or hosted engine. A Hindi reply
-  that contains Latin script (English words, acronyms, or a whole reply in Roman script) is spoken in two voices
-  (Devanagari runs by the Hindi voice, Latin runs by the English one) instead of losing those words or
-  producing no voice; a spoken reply that still cannot be made is announced in the chat.
+  Indian-English voice, and it reads as a little mechanical) and Hindi by Piper's `hi_IN` priyamvada voice, with Meta
+  MMS-TTS as the automatic fallback (`TTS_HINDI_ENGINE=mms` makes it the first choice; `PIPER_HINDI_VOICE` picks
+  rohan, pratham or priyamvada). The Hindi choice was measured on this bot's own replies (CPU, 2 threads, a Whisper
+  read-back for clarity, `kaggle/tts-comparison-kernel`): Piper is about 5x faster than MMS, clearer (character
+  error 6.5-7% vs 10.8%) and needs no extra memory, where MMS held ~420 MB per process; one listener ranked
+  priyamvada above MMS. Kokoro (82M) ranked first by ear and clearest, but costs ~0.7-0.9 GB and runs at about half
+  real time on those 2 threads, so it was not adopted for a 3.8 GB VM. The only Indian-accented open model found,
+  AI4Bharat's Indic Parler-TTS, needs a GPU; true Indian-accent English in production means a GPU server or a
+  hosted engine, and none is in place. A Hindi reply that contains Latin script (English words, acronyms, or a whole
+  reply in Roman script) is spoken in two voices (Devanagari runs by the Hindi voice, Latin runs by the English
+  one) instead of losing those words or producing no voice; a spoken reply that still cannot be made is announced
+  in the chat. These comparisons measure clarity, speed and memory; naturalness and accent were judged by one
+  listener's ears, not by a metric.
 - A production-grade frontend design pass beyond the current functional
   dashboards, and horizontal scaling, are out of scope for a project at
   this size. (End-to-end latency IS measured, see `eval.latency_benchmark`

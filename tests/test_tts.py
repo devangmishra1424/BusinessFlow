@@ -279,12 +279,60 @@ def test_speak_hindi_speaks_a_latin_word_inside_a_hindi_sentence():
 
     # Before, the word was dropped and the two came out about equally long.
     assert len(with_word.audio) / with_word.sample_rate > len(without.audio) / without.sample_rate + 0.3
-    # a mixed utterance is carried at the English voice's higher rate; a pure Hindi one is not resampled
-    assert with_word.sample_rate > without.sample_rate
+    # a mixed utterance is carried at the higher of the two voices' rates (equal for Piper + Piper)
+    assert with_word.sample_rate >= without.sample_rate
 
 
-def test_the_pure_hindi_path_is_unchanged():
-    from businessflow.audio.tts import _mms_hindi
+# ---------------------------------------------------------------------------
+# Which engine speaks Hindi: Piper's hi_IN voice by default, MMS as the fallback or first choice.
+# ---------------------------------------------------------------------------
 
+from businessflow.audio.tts import _hindi_engine_order, _mms_hindi  # noqa: E402
+
+
+def test_the_default_hindi_engine_is_piper_with_mms_as_the_fallback(monkeypatch):
+    monkeypatch.delenv("TTS_HINDI_ENGINE", raising=False)
+    assert _hindi_engine_order() == ["piper", "mms"]
+
+
+def test_the_hindi_engine_can_be_switched_by_the_environment(monkeypatch):
+    monkeypatch.setenv("TTS_HINDI_ENGINE", " MMS ")
+    assert _hindi_engine_order() == ["mms", "piper"]
+
+
+def test_a_mistyped_hindi_engine_fails_loudly_instead_of_using_the_default(monkeypatch):
+    monkeypatch.setenv("TTS_HINDI_ENGINE", "pipr")
+    with pytest.raises(ValueError, match="TTS_HINDI_ENGINE"):
+        _hindi_engine_order()
+
+
+def test_hindi_is_spoken_by_piper_by_default(monkeypatch):
+    monkeypatch.delenv("TTS_HINDI_ENGINE", raising=False)
+    speech = speak_hindi("आपकी ईएमआई जल्द देय है।")
+    assert speech.sample_rate == 22050  # Piper's medium voices; MMS would be 16000
+    assert len(speech.audio) / speech.sample_rate > 0.8
+
+
+def test_mms_still_speaks_hindi_when_it_is_chosen(monkeypatch):
+    monkeypatch.setenv("TTS_HINDI_ENGINE", "mms")
     _, model = _mms_hindi()
-    assert speak_hindi("आपकी ईएमआई जल्द देय है।").sample_rate == model.config.sampling_rate
+    speech = speak_hindi("आपकी ईएमआई जल्द देय है।")
+    assert speech.sample_rate == model.config.sampling_rate
+
+
+def test_when_the_first_hindi_engine_fails_the_next_one_speaks_and_the_failure_is_logged(monkeypatch, caplog):
+    # A voice name that does not exist makes Piper's download fail; the reply must still be spoken (by MMS) and the
+    # failure must be on record, not swallowed.
+    monkeypatch.delenv("TTS_HINDI_ENGINE", raising=False)
+    monkeypatch.setenv("PIPER_HINDI_VOICE", "no_such_voice")
+    _, model = _mms_hindi()
+    with caplog.at_level("WARNING", logger="businessflow.audio.tts"):
+        speech = speak_hindi("आपकी ईएमआई जल्द देय है।")
+    assert speech.sample_rate == model.config.sampling_rate
+    assert any("Hindi voice engine 'piper' failed" in r.getMessage() for r in caplog.records)
+
+
+def test_a_mixed_reply_stays_at_the_piper_rate_with_no_resampling(monkeypatch):
+    # Both Piper voices are 22050 Hz, so a Hindi sentence with an English word needs no resampling at all.
+    monkeypatch.delenv("TTS_HINDI_ENGINE", raising=False)
+    assert speak_hindi("आपका भुगतान WhatsApp से हुआ।").sample_rate == 22050
