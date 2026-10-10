@@ -1,12 +1,24 @@
 """Text-to-speech: Piper for English (a local ONNX voice file, downloaded
-separately into data/models/piper/ -- not bundled with pip install), Meta
-MMS-TTS for Hindi (via transformers, auto-downloaded from Hugging Face on
-first use). Both return the same shape -- a mono float32 tensor + its
-sample rate -- so downstream code doesn't care which engine produced it.
+separately into data/models/piper/ -- not bundled with pip install). Hindi
+is Piper's hi_IN voice by default (auto-downloaded from Hugging Face on first
+use, about 60 MB) with Meta MMS-TTS (via transformers, also auto-downloaded) as
+the fallback, or the first choice with TTS_HINDI_ENGINE=mms. Every engine
+returns the same shape -- a mono float32 tensor + its sample rate -- so
+downstream code doesn't care which produced it.
+
+Why Piper for Hindi (measured 2026-10-10 on the replies this bot speaks, CPU with
+2 threads, kaggle/tts-comparison-kernel): about 5x faster than MMS, clearer to a
+speech recogniser (character error 6.5-7% against MMS's 10.8%), ready in about
+6 s instead of 28 s, and it needs no extra memory beyond the English voice,
+where MMS held another ~420 MB in each process on a VM with 3.8 GB. A listener
+ranked Piper's priyamvada voice above MMS. Kokoro Hindi ranked first by ear and
+was the clearest (4-5%), but it costs roughly 700 MB and runs at about half real
+time on those 2 threads, so it was not adopted for this VM.
 """
 
 import io
 import logging
+import os
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -15,6 +27,7 @@ from pathlib import Path
 import soundfile as sf
 import torch
 import torchaudio
+from huggingface_hub import hf_hub_download
 from piper import PiperVoice
 from transformers import AutoTokenizer, VitsModel
 
@@ -54,6 +67,33 @@ def _mms_hindi():
     model = VitsModel.from_pretrained("facebook/mms-tts-hin")
     model.eval()
     return tokenizer, model
+
+
+_HINDI_ENGINES = ("piper", "mms")
+_PIPER_HINDI_REPO = "rhasspy/piper-voices"
+
+
+def _hindi_engine_order() -> list[str]:
+    """TTS_HINDI_ENGINE picks the first choice; the other is the fallback. Read at call time so a deployment can
+    flip it; a typo fails loudly rather than silently using the default."""
+    preferred = os.environ.get("TTS_HINDI_ENGINE", "piper").strip().lower()
+    if preferred not in _HINDI_ENGINES:
+        raise ValueError(f"TTS_HINDI_ENGINE must be one of {_HINDI_ENGINES}, got {preferred!r}")
+    return [preferred] + [e for e in _HINDI_ENGINES if e != preferred]
+
+
+def _piper_hindi_voice_name() -> str:
+    return os.environ.get("PIPER_HINDI_VOICE", "priyamvada").strip()  # rohan, pratham and priyamvada exist (medium)
+
+
+@lru_cache(maxsize=4)
+def _piper_hindi(voice_name: str) -> PiperVoice:
+    """Piper's Hindi voice, fetched from Hugging Face on first use and cached by huggingface_hub after that (the
+    same way the MMS weights are). The config file has to sit next to the model, so both are fetched."""
+    filename = f"hi/hi_IN/{voice_name}/medium/hi_IN-{voice_name}-medium.onnx"
+    model_path = hf_hub_download(_PIPER_HINDI_REPO, filename)
+    hf_hub_download(_PIPER_HINDI_REPO, filename + ".json")
+    return PiperVoice.load(model_path)
 
 
 def _join_with_gaps(chunks: list[torch.Tensor], sample_rate: int, gap_seconds: float = _SENTENCE_GAP_SECONDS) -> torch.Tensor:
@@ -138,8 +178,30 @@ def _synthesize_mms(tokenizer, model, text: str) -> torch.Tensor | None:
         return model(**inputs).waveform[0]
 
 
+def _speak_hindi_run(run: str) -> tuple[torch.Tensor, int] | None:
+    """One Devanagari run through the first Hindi engine that works: (audio, sample rate), or None when the engine has
+    nothing it can say. The engines fail in unrelated ways (a Hugging Face download, onnxruntime, torch), so any
+    failure of one means "try the next"; each is logged with its traceback, and if every engine fails the last error
+    is raised."""
+    last_error: Exception | None = None
+    for engine in _hindi_engine_order():
+        try:
+            if engine == "piper":
+                chunks = list(_piper_hindi(_piper_hindi_voice_name()).synthesize(run))
+                if not chunks:
+                    return None
+                return torch.cat([torch.from_numpy(c.audio_float_array) for c in chunks]), chunks[0].sample_rate
+            tokenizer, model = _mms_hindi()
+            audio = _synthesize_mms(tokenizer, model, run)
+            return None if audio is None else (audio, model.config.sampling_rate)
+        except Exception as e:  # noqa: BLE001 -- see the docstring: any engine failure means "fall back", never "stay silent"
+            logger.warning("Hindi voice engine %r failed for a run (%s); trying the next", engine, e, exc_info=True)
+            last_error = e
+    raise RuntimeError("no Hindi voice engine could speak this text") from last_error
+
+
 def speak_hindi(text: str) -> Speech:
-    """Hindi TTS via Meta's MMS-TTS, with any Latin-script runs (English words, acronyms, or a whole
+    """Hindi TTS (Piper's hi_IN voice, falling back to Meta's MMS-TTS; see the module docstring), with any Latin-script runs (English words, acronyms, or a whole
     reply the model wrote in Roman script) spoken by the English voice instead of being dropped.
     Downloads model weights on first call (cached by huggingface_hub after that, not re-downloaded
     per call). Synthesized one sentence at a time (see _split_hindi_sentences) and joined with the same
@@ -147,8 +209,6 @@ def speak_hindi(text: str) -> Speech:
 
     Raises ValueError when the text has nothing speakable at all (no letters), so a caller can tell the
     user the voice is unavailable instead of sending silence."""
-    tokenizer, model = _mms_hindi()
-    hindi_rate = model.config.sampling_rate
     sentences = _split_hindi_sentences(text) or [text]  # whitespace-only input has no sentence boundary at all
 
     spoken: list[list[tuple[torch.Tensor, int]]] = []  # per sentence: [(audio, sample rate)] per run
@@ -157,9 +217,9 @@ def speak_hindi(text: str) -> Speech:
         pieces: list[tuple[torch.Tensor, int]] = []
         for script, run in _script_runs(sentence):
             if script == "hi":
-                audio = _synthesize_mms(tokenizer, model, run)
-                if audio is not None:
-                    pieces.append((audio, hindi_rate))
+                hindi = _speak_hindi_run(run)
+                if hindi is not None:
+                    pieces.append(hindi)
             else:
                 english = speak_english(run)
                 pieces.append((english.audio, english.sample_rate))
