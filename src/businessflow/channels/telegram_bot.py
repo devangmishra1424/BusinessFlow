@@ -696,6 +696,14 @@ async def _drop_action_buttons(query) -> None:
         logger.warning("could not remove the action buttons from a reminder", exc_info=True)
 
 
+def _voice_unavailable_note(language: str) -> str:
+    return (
+        "(अभी आवाज़ में जवाब नहीं बन पाया -- ऊपर लिखा जवाब ही पूरा है।)"
+        if language == "hi"
+        else "(I couldn't make the spoken version of that reply just now -- the text above is the full answer.)"
+    )
+
+
 async def _send_spoken_reply(update: Update, chat_id: int, reply: str) -> None:
     # Best-effort: the text reply already succeeded and was already sent
     # by the caller -- a TTS failure here shouldn't take that back, just
@@ -708,6 +716,13 @@ async def _send_spoken_reply(update: Update, chat_id: int, reply: str) -> None:
         voice_bytes = encode_ogg_opus(speech)
     except Exception:
         logger.warning("Voice-reply synthesis failed for chat_id=%s", chat_id, exc_info=True)
+        # Found live: a Hindi reply that could not be spoken just never came as a voice note, and nothing
+        # said why, so it looked like the voice feature did not work for Hindi at all. The text reply was
+        # already sent; say that the spoken one is missing.
+        try:
+            await update.message.reply_text(_voice_unavailable_note(language))
+        except TelegramError:
+            logger.warning("Could not send the voice-unavailable note to chat_id=%s", chat_id, exc_info=True)
         return
     await update.message.reply_voice(voice=voice_bytes)
 

@@ -201,7 +201,24 @@ def test_sentence_ending_full_stop_survives_after_email_and_phone():
 ])
 def test_text_without_a_supported_pattern_is_left_untouched(text):
     assert verbalize(text, "en") == text
+
+
+@pytest.mark.parametrize("text", [
+    "version 3.5.1 released",     # a dotted version is not a quantity
+    "ticket AB-12 is open",       # an ID fragment
+    "",
+])
+def test_hindi_leaves_versions_and_id_fragments_untouched(text):
     assert verbalize(text, "hi") == text
+
+
+def test_hindi_reads_plain_numbers_in_otherwise_unsupported_text():
+    # English is left alone (a person reads "3 days" fine), but the Hindi voice drops digits silently.
+    assert verbalize("it is 3 days past due", "hi") == "it is तीन days past due"
+    assert verbalize("50 off today", "hi") == "पचास off today"
+    # five or more plain digits are a code, not a quantity: digit by digit
+    assert verbalize("call 12345 for help", "hi") == "call एक दो तीन चार पांच for help"
+    assert not any(ch.isdigit() for ch in verbalize("split 1/2 and 50/50", "hi"))
 
 
 @pytest.mark.parametrize("text", ["@", "a@", "@b.com", "%", "-", "+91", "BF-", "9" * 40, "₹", "Rs."])
@@ -237,3 +254,47 @@ def test_nothing_the_stray_pattern_check_looks_for_survives_verbalize(language):
 @pytest.mark.parametrize("raw", ["devang@gmail.com", "9812345000", "BF-1001", "12.5%"])
 def test_has_unverbalized_pattern_detects_each_new_pattern_on_its_own(raw):
     assert has_unverbalized_pattern(f"see {raw} here") is True
+
+
+# ---------------------------------------------------------------------------
+# Hindi: plain numbers and UPI. The Hindi voice drops digits and Latin letters without a sound, so
+# "तारीख 15 अक्टूबर" was spoken as "तारीख अक्टूबर" (found while probing why Hindi voice replies lost words).
+# ---------------------------------------------------------------------------
+
+
+def test_hindi_plain_numbers_become_hindi_words():
+    assert verbalize("अंतिम तारीख 15 अक्टूबर", "hi") == "अंतिम तारीख पंद्रह अक्टूबर"
+    assert verbalize("3 महीने बाकी हैं", "hi") == "तीन महीने बाकी हैं"
+
+
+def test_hindi_grouped_and_decimal_numbers():
+    assert verbalize("कुल 5,000 है", "hi") == "कुल पांच हज़ार है"
+    assert verbalize("कुल 1,25,000 है", "hi") == "कुल एक लाख पच्चीस हज़ार है"
+    assert verbalize("ब्याज 3.5 साल", "hi") == "ब्याज तीन दशमलव पांच साल"
+
+
+def test_hindi_devanagari_digits_are_read_too():
+    assert verbalize("तारीख १५", "hi") == "तारीख पंद्रह"
+
+
+def test_hindi_list_punctuation_survives_the_number_conversion():
+    assert verbalize("तारीख 5, 10 या 15।", "hi") == "तारीख पांच, दस या पंद्रह।"
+
+
+def test_hindi_leaves_no_digit_behind_and_is_idempotent():
+    text = "खाता BF-1001, किस्त ₹5,000, तारीख 2026-10-15, 3 दिन, फ़ोन 98765 43210, 18% ब्याज"
+    once = verbalize(text, "hi")
+    assert not any(ch.isdigit() for ch in once)
+    assert verbalize(once, "hi") == once
+
+
+def test_hindi_leaves_a_number_too_large_to_say_aloud_alone():
+    assert verbalize("कोड 1000000000000", "hi") == "कोड 1000000000000"
+
+
+def test_hindi_upi_is_spoken_in_devanagari():
+    assert verbalize("UPI से भुगतान करें", "hi") == "यूपीआई से भुगतान करें"
+
+
+def test_english_numbers_are_still_left_alone():
+    assert verbalize("pay on the 15th, 3 times", "en") == "pay on the 15th, 3 times"
