@@ -8,6 +8,7 @@ months_remaining/emi_due_date/payment_history forward -- there's just no
 real bank or card processor sitting behind the "confirm" click."""
 
 import ast
+import math
 import operator
 import os
 
@@ -20,6 +21,7 @@ from businessflow.accounts.policy import (
     RESTRUCTURING_TYPES,
     SETTLEMENT_DISCOUNT_PCT,
 )
+from businessflow.tools import validation
 from businessflow.tools.server import mcp
 
 
@@ -60,7 +62,8 @@ def generate_payment_link(account_id: str, amount: float) -> dict:
     real bank/card processor sits behind it -- confirming just runs this
     project's own record_payment, the same as a real gateway's webhook
     would, minus the gateway."""
-    store.get_account_or_raise(account_id)  # raises if the account doesn't exist
+    account = store.get_account_or_raise(account_id)  # raises if the account doesn't exist
+    amount = validation.money(amount, "amount", ceiling=validation.max_payable(account))
     token = store.create_payment_token(account_id, amount)
     return {
         "account_id": account_id,
@@ -84,6 +87,11 @@ def propose_partial_payment(account_id: str, proposed_amount: float) -> dict:
     and refuses to make an automated offer at all on accounts that need a
     human (open dispute or a pattern of broken promises)."""
     account = store.get_account_or_raise(account_id)
+    # NaN would compare False against the minimum below and be accepted; anything above what could ever be owed is a mistake.
+    # Zero and negatives are left to the "below the policy minimum" answer the borrower should hear.
+    proposed_amount = validation.finite_number(proposed_amount, "proposed_amount")
+    if proposed_amount > validation.max_payable(account):
+        raise ValueError(f"proposed_amount {proposed_amount:,.2f} is more than the most this account could owe")
 
     block_reason = _blocked_from_automated_restructuring(account)
     if block_reason:
@@ -185,6 +193,7 @@ _ALLOWED_BINOPS = {
     ast.Div: operator.truediv,
 }
 _ALLOWED_UNARYOPS = {ast.USub: operator.neg, ast.UAdd: operator.pos}
+_MAX_EXPRESSION_CHARS = 200
 
 
 def _safe_eval_arithmetic(node: ast.AST) -> float:
@@ -243,9 +252,13 @@ def compute(expression: str) -> dict:
     Raises ValueError for anything that isn't plain arithmetic (a name,
     a function call, anything resembling code) -- this is a calculator,
     not a code execution tool."""
+    if not isinstance(expression, str) or len(expression) > _MAX_EXPRESSION_CHARS:
+        raise ValueError(f"expression must be text of at most {_MAX_EXPRESSION_CHARS} characters")
     try:
         tree = ast.parse(expression, mode="eval")
         result = _safe_eval_arithmetic(tree)
-    except (SyntaxError, ValueError) as e:
-        raise ValueError(f"{expression!r} isn't a plain arithmetic expression: {e}") from e
+    except (SyntaxError, ValueError, RecursionError, MemoryError) as e:
+        raise ValueError(f"{expression[:60]!r} isn't a plain arithmetic expression: {type(e).__name__}") from e
+    if not math.isfinite(result):
+        raise ValueError(f"{expression[:60]!r} does not evaluate to a finite number")
     return {"expression": expression, "result": round(result, 2)}

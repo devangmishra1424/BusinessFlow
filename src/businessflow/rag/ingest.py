@@ -24,6 +24,7 @@ from docling.chunking import HybridChunker
 from docling.document_converter import ConversionResult, DocumentConverter
 
 from businessflow.accounts.db import get_connection
+from businessflow.rag import injection_scan
 from businessflow.rag.embeddings import embed_passages
 from businessflow.rag.store import embedding_literal, normalize_source_document, resolve_source_document
 from businessflow.rag.tokenize import with_headings
@@ -35,6 +36,18 @@ class UnreadableDocumentError(ValueError):
     """The file opened, but no usable text came out of it: a blank page, a scan the OCR could not read, a language the
     bundled OCR does not know. Ingesting what little (or what garbage) did come out would silently replace a good
     document with nothing, so the upload is refused instead."""
+
+
+class SuspiciousDocumentError(ValueError):
+    """The document contains text written to give orders to an AI rather than to inform a reader (see
+    rag/injection_scan.py). Retrieved text is placed in the model's context, so it is not stored."""
+
+    def __init__(self, filename: str, findings: list):
+        self.findings = findings
+        super().__init__(
+            f"{filename} contains text that looks written to instruct an AI system, not to inform a reader "
+            f"({'; '.join(str(f) for f in findings)}). Remove it and upload the document again."
+        )
 
 
 # Measured on rendered test scans (see tests/test_ingest_readability.py and the README): the bundled OCR reads English
@@ -122,6 +135,10 @@ def parse_and_chunk(file_path: str) -> list[ChunkRecord]:
         chunks = list(_chunker().chunk(result.document))
     records = [ChunkRecord(text=c.text, headings=" > ".join(c.meta.headings or [])) for c in chunks]
     _require_readable(result, records, file_path)
+    # Scanned as one body, not chunk by chunk, so a phrase that happens to straddle a chunk boundary is still seen.
+    findings = injection_scan.scan("\n".join(f"{r.headings}\n{r.text}" for r in records))
+    if findings:
+        raise SuspiciousDocumentError(Path(file_path).name, findings)
     return records
 
 
@@ -149,7 +166,8 @@ def ingest_document(file_path: str, document_type: str, account_id: str | None =
     leave two active generations.
 
     Returns the number of NEW chunks stored. Raises UnreadableDocumentError
-    (a ValueError) for a file with no usable text, before anything is
+    (a ValueError) for a file with no usable text, or SuspiciousDocumentError
+    for one that contains text written to instruct an AI, before anything is
     written -- the previous version stays active.
     """
     records = parse_and_chunk(file_path)

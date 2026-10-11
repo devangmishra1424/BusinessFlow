@@ -1,0 +1,49 @@
+{
+  "date": "2026-10-11",
+  "machine": {
+    "cpu": "AMD64 Family 25 Model 80 Stepping 0, AuthenticAMD",
+    "logical_cores": 12,
+    "torch_threads": 4,
+    "python": "3.12.10",
+    "os": "Windows-11-10.0.26200-SP0"
+  },
+  "input_clip_seconds": 5.07,
+  "transcript_of_clip": "Your payment of 12,500 rupees is 3 days past 2",
+  "stages": {
+    "voice-activity trimming (Silero)": {
+      "p50_ms": 37,
+      "p95_ms": 38,
+      "runs": 8,
+      "real_time_factor": 0.007,
+      "media_seconds": 5.07
+    },
+    "speech recognition (Whisper CTranslate2 int8, fine-tuned)": {
+      "p50_ms": 845,
+      "p95_ms": 874,
+      "runs": 8,
+      "real_time_factor": 0.197,
+      "media_seconds": 4.28
+    },
+    "speech synthesis, English (Piper)": {
+      "p50_ms": 315,
+      "p95_ms": 340,
+      "runs": 8,
+      "real_time_factor": 0.05,
+      "media_seconds": 6.31
+    },
+    "speech synthesis, Hindi (Piper hi_IN)": {
+      "p50_ms": 394,
+      "p95_ms": 416,
+      "runs": 8,
+      "real_time_factor": 0.048,
+      "media_seconds": 8.18
+    },
+    "Opus encoding of the English reply": {
+      "p50_ms": 91,
+      "p95_ms": 92,
+      "runs": 8
+    }
+  },
+  "sum_of_local_stage_medians_ms_english_path": 1288,
+  "excluded": "the language-model call, the database, and the network"
+}

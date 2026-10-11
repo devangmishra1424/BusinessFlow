@@ -5,6 +5,7 @@ import logging
 from businessflow.accounts import store
 from businessflow.accounts.escalation_kinds import CLOSURE_CERTIFICATE_REASON
 from businessflow.tools.payment_tools import calculate_hypothetical
+from businessflow.tools import validation
 from businessflow.tools.server import mcp
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ def escalate_to_human(account_id: str, reason: str) -> dict:
     start cold. Used whenever policy requires a human (open dispute,
     repeated broken promises) or the agent is otherwise unsure."""
     store.get_account_or_raise(account_id)  # raises if the account doesn't exist
+    reason = validation.free_text(reason, "reason")
     escalation_id = store.create_escalation(account_id, reason)
 
     logger.info("escalation created id=%s account_id=%s reason=%s", escalation_id, account_id, reason)

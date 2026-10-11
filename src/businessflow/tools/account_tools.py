@@ -5,6 +5,7 @@ from datetime import date
 from businessflow.accounts import store
 from businessflow.accounts.dues import amount_due_now
 from businessflow.accounts.policy import GRACE_PERIOD_DAYS, LATE_FEE_FLAT_AMOUNT, PROMISE_TOLERANCE_DAYS
+from businessflow.tools import validation
 from businessflow.tools.server import mcp
 
 # payment_history exists on the real Account model and Postgres table (see
@@ -146,10 +147,12 @@ def log_promise_to_pay(account_id: str, promised_date: str, promised_amount: flo
     date. promised_date is an ISO date string (YYYY-MM-DD). Whether the
     promise was kept is evaluated later, once that date has passed, against
     a tolerance band of a few days either side -- not the exact date."""
-    store.get_account_or_raise(account_id)  # raises if the account doesn't exist
-    parsed_date = date.fromisoformat(promised_date)
+    account = store.get_account_or_raise(account_id)  # raises if the account doesn't exist
+    today = store.current_date()
+    parsed_date = validation.promise_date(promised_date, today)
+    promised_amount = validation.money(promised_amount, "promised_amount", ceiling=validation.max_payable(account))
     newly_logged = store.add_promise(
-        account_id, made_on=store.current_date(), promised_date=parsed_date, promised_amount=promised_amount
+        account_id, made_on=today, promised_date=parsed_date, promised_amount=promised_amount
     )
     return {
         "account_id": account_id,
@@ -171,6 +174,7 @@ def flag_dispute(account_id: str, reason: str) -> dict:
     """Open a dispute flag on the account so no further automated collection
     action is taken on it until a human reviews the reason given."""
     store.get_account_or_raise(account_id)  # raises if the account doesn't exist
+    reason = validation.free_text(reason, "reason")
     newly_opened = store.open_dispute(account_id, reason)
     return {
         "account_id": account_id,

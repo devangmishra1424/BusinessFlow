@@ -50,3 +50,15 @@ def cluster_bootstrap_ci(values: list[float], clusters: list[str], n_boot: int =
         means.append(statistics.fmean(picked))
     means.sort()
     return statistics.fmean(values), means[int(n_boot * alpha / 2)], means[int(n_boot * (1 - alpha / 2)) - 1]
+
+
+def wilson_ci(successes: int, n: int, z: float = 1.96) -> tuple[float, float, float]:
+    """(proportion, lower, upper): the Wilson score interval for `successes` out of `n`. Unlike the normal approximation
+    it stays inside [0, 1] and is honest at 0/n and n/n, which is where attack-success rates live."""
+    if n == 0:
+        return float("nan"), float("nan"), float("nan")
+    p = successes / n
+    denominator = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / denominator
+    half = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5) / denominator
+    return p, max(0.0, centre - half), min(1.0, centre + half)
