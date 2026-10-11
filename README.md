@@ -352,6 +352,39 @@ worse than one that lists them:
   one) instead of losing those words or producing no voice; a spoken reply that still cannot be made is announced
   in the chat. The benchmark measures intelligibility as heard by one speech recogniser, speed and memory; naturalness and
   accent were judged by one listener's ears, not by a metric.
+- **"Naturalise tone" (web chat only).** A bar under the chat header looks for a natural-sounding voice in the browser for the
+  chat's language (a voice whose name says Natural, Neural, Premium or Enhanced: Edge's "... Online (Natural)" voices,
+  Windows Natural voices, macOS Premium/Enhanced; Chrome's Google voices and the old Windows ones are not counted). None:
+  it says "Sorry, not available". Found: it switches to it and says a short sample, and the speaker icon on a reply then
+  reads the words from `POST /conversations/{id}/speech-text` (the same `verbalize()` step the server voice uses, so ids and
+  amounts are spoken the same way) with that voice. If the voice cannot be used (none for this language, the text could
+  not be fetched, or it never starts within 5 s) the server voice plays instead, so a tap never ends in silence. Off by
+  default; only the on/off choice is remembered, and the voice is looked up again on every load. **Privacy:** Edge's natural voices are
+  online, so the reply text (which can contain the borrower's amounts, dates and account id) is sent to the browser's provider to
+  be spoken; the page says so when it switches on, and the server voice keeps everything on this machine. Telegram voice
+  notes are unchanged (they are audio files made on the server). A reply can also be stopped by tapping its speaker
+  again, and only one reply plays at a time. **Not verified:** how any natural voice sounds (the development browser has
+  none, and audio cannot be judged by a tool; the option was exercised with one real voice renamed to look natural,
+  covering the switch, the sample, the spoken text, stop, the fallback to server audio, the Hindi case and a stale saved
+  setting). Tests: `tests/js/naturalvoice.test.cjs` (22, run with node by `tests/test_naturalvoice_js.py`) and five
+  `speech-text` endpoint tests in `tests/test_browser_api.py`.
+- **"What I can help with" buttons (web chat and Telegram).** A short list of tappable suggestions so a borrower who does not
+  know what to ask is not left with a blank box: in the web chat under the greeting (and again from the "What can you help
+  with?" button in the bar under the header), and in Telegram on `/start`, on `/help`, and right after a chat verifies. One list
+  in `channels/abilities.py` feeds both (the web page reads it from `GET /conversations/{id}/abilities`). A tap is the same as
+  typing the button's sentence: it goes through the normal assistant turn with the same checks, except "How do I verify my
+  account?" and "More questions or doubts", which are answered at once with no assistant turn. Kept modest on purpose: eight
+  entries for a verified chat, each for something the assistant has a tool for, worded "ask about" where the tool only reviews
+  (more time to pay, loan closure); the last button is always "More questions or doubts", and its reply promises only that the
+  assistant will say so if it cannot answer. An unverified chat is offered only the general entries and how to verify, so it never
+  sees a button the assistant would have to refuse. Telegram's `/menu` (buttons that run a command directly) is unchanged.
+  **Limits:** the Hindi wording was written without a Hindi speaker's review; each tap in either channel is a full assistant turn
+  (the same cost and Groq quota as typing the question); the buttons can only say what the assistant is built to do, and the
+  assistant's own free-text answer to "what can you help with?" (which the model writes, and which can say "everything related to
+  your loan account") is not changed by this. **Not verified:** a real tap in Telegram (needs a linked chat and a running bot):
+  Telegram is covered by tests that drive the handlers with minimal stand-ins for the message and query objects. The web page was
+  exercised in a browser, with the assistant's reply stubbed so no model quota was spent. Tests: `tests/test_abilities.py` (17),
+  `tests/test_telegram_abilities.py` (19), four `abilities` endpoint tests in `tests/test_browser_api.py`.
 - A production-grade frontend design pass beyond the current functional
   dashboards, and horizontal scaling, are out of scope for a project at
   this size. (End-to-end latency IS measured, see `eval.latency_benchmark`

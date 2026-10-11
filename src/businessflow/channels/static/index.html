@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/styles.css?v=12" />
+<link rel="stylesheet" href="/static/styles.css?v=14" />
 </head>
 <body>
 
@@ -215,6 +215,12 @@
     </div>
   </header>
 
+  <div id="tone-bar" class="tone-bar">
+    <button type="button" id="abilities-btn" class="tone-btn">What can you help with?</button>
+    <button type="button" id="tone-btn" class="tone-btn" aria-pressed="false" hidden>Naturalise tone</button>
+    <span id="tone-note" class="tone-note" role="status" aria-live="polite"></span>
+  </div>
+
   <main id="message-list" class="message-list"></main>
 
   <form id="message-form" class="message-form" autocomplete="off">
@@ -233,6 +239,7 @@
   </form>
 </div>
 
-<script src="/static/app.js?v=8"></script>
+<script src="/static/naturalvoice.js?v=1"></script>
+<script src="/static/app.js?v=10"></script>
 </body>
 </html>

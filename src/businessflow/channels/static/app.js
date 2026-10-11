@@ -254,7 +254,10 @@ function _prepareChatContent() {
         ? `Verified — you're chatting about account ${state.accountId}.`
         : 'Chatting anonymously — to verify, send your account ID and 6-digit access key together, e.g. "BF-1001 482913".'
     );
+    showAbilities();
   }
+  toneNote = ""; // a "not available" note belongs to the chat language it was shown for
+  renderToneBar();
   document.getElementById("message-input").focus();
 }
 
@@ -298,6 +301,7 @@ function closeChatPanel() {
   // call unconditionally: stopRecording() itself is a no-op when nothing
   // is actually recording.
   stopRecording();
+  stopPlayback(); // and a reply being read aloud stops with the chat
   $chatScreen.classList.remove("open");
   $dashboardScreen.classList.remove("chat-open");
   setTimeout(() => {
@@ -324,6 +328,7 @@ function restartAll() {
   // recording still in flight when "Start over" is tapped must not be
   // left running into the new conversation. Safe unconditionally.
   stopRecording();
+  stopPlayback();
   state.conversationId = null;
   state.accountId = null;
   document.getElementById("message-list").innerHTML = "";
@@ -417,14 +422,15 @@ function friendlyMessageError(err) {
   return "Something went wrong sending that — please try again.";
 }
 
-$messageForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const text = $messageInput.value.trim();
+// Sends `text` as the borrower's next message and shows the reply. Typing and the "what I can help with" buttons both come
+// through here, so tapping a button is exactly the same as typing its sentence.
+async function sendUserText(text, { clearInput = false } = {}) {
   if (!text || state.sending || !state.conversationId) return;
 
   addUserMessage(text);
-  $messageInput.value = "";
+  if (clearInput) $messageInput.value = "";
   state.sending = true;
+  setAbilityChipsDisabled(true);
   $messageInput.disabled = true;
   $sendBtn.disabled = true;
   showTyping();
@@ -439,17 +445,87 @@ $messageForm.addEventListener("submit", async (e) => {
       const chip = document.getElementById("account-chip");
       chip.hidden = false;
       chip.textContent = state.accountId;
+      showAbilities(); // just verified: the list now includes the account entries
     }
   } catch (err) {
     hideTyping();
     addAssistantMessage(friendlyMessageError(err), [], true);
   } finally {
     state.sending = false;
+    setAbilityChipsDisabled(false);
     $messageInput.disabled = false;
     $sendBtn.disabled = false;
     $messageInput.focus();
   }
+}
+
+$messageForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  sendUserText($messageInput.value.trim(), { clearInput: true });
 });
+
+/* ============================================================
+   Option buttons -- "what I can help with", from GET .../abilities (channels/abilities.py, the same list the Telegram bot
+   shows). The server decides what is offered: an unverified chat only gets what it can actually do (policy answers, how to
+   verify), never a button the assistant would have to refuse. Deliberately modest: a short list, and the last button is
+   always "More questions or doubts". A button either sends its sentence as the borrower's next message (the normal assistant
+   turn) or, for "how do I verify" and "more questions", is answered at once with no assistant turn.
+   ============================================================ */
+function setAbilityChipsDisabled(disabled) {
+  document.querySelectorAll(".ability-chip").forEach((chip) => {
+    chip.disabled = disabled;
+  });
+}
+
+function onAbilityTap(ability) {
+  if (state.sending) return;
+  if (ability.prompt) {
+    sendUserText(ability.prompt);
+    return;
+  }
+  // Answered as it stands: show what was tapped, then the answer, without an assistant turn.
+  addUserMessage(ability.label);
+  addAssistantMessage(ability.reply);
+  if (ability.id === "more") $messageInput.focus();
+}
+
+// Shows the list as a row in the conversation; only the latest one is kept. `explicit` is a tap on "What can you help with?":
+// then a failure is shown. Loading it automatically is a nicety, so a failure there is only logged.
+async function showAbilities({ explicit = false } = {}) {
+  if (!state.conversationId) return;
+  let data;
+  try {
+    const res = await fetch(`/conversations/${state.conversationId}/abilities`);
+    if (!res.ok) throw new ApiError(res.status, `abilities request failed (${res.status})`);
+    data = await res.json();
+  } catch (err) {
+    if (explicit) addAssistantMessage("Couldn't load the options -- please try again.", [], true);
+    else console.warn("could not load the option buttons", err);
+    return;
+  }
+  document.querySelectorAll(".msg-row.abilities").forEach((row) => row.remove());
+  const row = document.createElement("div");
+  row.className = "msg-row abilities";
+  const intro = document.createElement("p");
+  intro.className = "abilities-intro";
+  intro.textContent = data.intro;
+  const chips = document.createElement("div");
+  chips.className = "ability-chips";
+  for (const ability of data.abilities) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "ability-chip";
+    chip.textContent = ability.label; // textContent, never innerHTML: these strings come from the server
+    chip.disabled = state.sending;
+    chip.addEventListener("click", () => onAbilityTap(ability));
+    chips.appendChild(chip);
+  }
+  row.append(intro, chips);
+  $messageList.appendChild(row);
+  scrollToBottom();
+}
+
+document.getElementById("abilities-btn").addEventListener("click", () => showAbilities({ explicit: true }));
 
 /* ============================================================
    Voice input -- record via MediaRecorder, decode+re-encode to WAV
@@ -587,6 +663,7 @@ async function handleRecordingStopped() {
   if (blob.size === 0 || recordingDurationMs < 300) return; // too short to be a real recording -- likely an accidental tap
 
   state.sending = true;
+  setAbilityChipsDisabled(true);
   $micBtn.disabled = true;
   showTyping();
 
@@ -617,6 +694,7 @@ async function handleRecordingStopped() {
       const chip = document.getElementById("account-chip");
       chip.hidden = false;
       chip.textContent = state.accountId;
+      showAbilities(); // just verified: the list now includes the account entries
     }
   } catch (err) {
     hideTyping();
@@ -628,6 +706,7 @@ async function handleRecordingStopped() {
   } finally {
     audioCtx?.close();
     state.sending = false;
+    setAbilityChipsDisabled(false);
     $micBtn.disabled = false;
   }
 }
@@ -647,11 +726,214 @@ if (VOICE_SUPPORTED) {
    borrower taps the speaker icon on an assistant bubble (see
    addAssistantMessage above). Not generated automatically for every
    reply -- only for one someone actually wants to hear.
+
+   Two voices can say it. By default the server makes the audio (Piper,
+   POST .../speech). With "Naturalise tone" on, the page asks the server for the
+   words it would have spoken (POST .../speech-text, same verbalize() step) and
+   a natural-sounding voice from the borrower's own browser says them (see
+   naturalvoice.js). If that voice cannot be used -- none for this language, the
+   spoken text could not be fetched, or it never starts -- the server audio plays
+   instead, so a tap never ends in silence.
    ============================================================ */
+
+// Only this on/off preference is kept on the device -- no credential or account data, so it does not break the rule at the
+// top of this file. The voice itself is looked up again on every page load: voices differ between browsers and computers,
+// so a choice made elsewhere can never point at a voice that is not there.
+const NATURAL_PREF_KEY = "bf.naturalTone";
+const LANGUAGE_NAME = { en: "English", hi: "Hindi" };
+const TONE_SAMPLE = { en: "This is the natural tone.", hi: "यह प्राकृतिक आवाज़ है।" };
+
+// If naturalvoice.js failed to load the option is simply hidden; nothing else on the page depends on it.
+const speaker = typeof NaturalVoice === "undefined"
+  ? { supported: false }
+  : NaturalVoice.createSpeaker({ synth: window.speechSynthesis || null, utteranceCtor: window.SpeechSynthesisUtterance || null });
+
+const $toneBar = document.getElementById("tone-bar");
+const $toneBtn = document.getElementById("tone-btn");
+const $toneNote = document.getElementById("tone-note");
+
+function readNaturalPref() {
+  try {
+    return localStorage.getItem(NATURAL_PREF_KEY) === "on";
+  } catch (_) {
+    return false; // storage can be missing or blocked (private window): the choice is then simply not remembered
+  }
+}
+
+let naturalOn = readNaturalPref();
+let toneChecking = false;
+let toneNote = ""; // a one-off message: "not available", or "the natural voice did not start"
+let loadedVoices = []; // the browser's voices as of the last look; used to name the voice in the note
+
+function setNatural(on) {
+  naturalOn = on;
+  try {
+    localStorage.setItem(NATURAL_PREF_KEY, on ? "on" : "off");
+  } catch (_) {
+    /* a blocked store only means the choice is not remembered */
+  }
+}
+
+function toneMessage() {
+  if (toneNote) return toneNote;
+  if (!naturalOn) return "";
+  const voice = NaturalVoice.pickNatural(loadedVoices, state.language);
+  if (!voice) {
+    return loadedVoices.length
+      ? `Natural tone is on, but this browser has no natural ${LANGUAGE_NAME[state.language]} voice, so replies use the standard voice.`
+      : "Natural tone is on.";
+  }
+  // Online voices (Edge's Natural ones) are streamed from the browser's provider, so the reply text goes there to be spoken.
+  const online = NaturalVoice.isOnline(voice) ? " This voice is online: the reply text is sent to your browser's provider to be spoken." : "";
+  return `Natural tone on: ${voice.name}.${online}`;
+}
+
+function renderToneBar() {
+  $toneBtn.hidden = !speaker.supported; // the bar also holds "What can you help with?", which every browser can use
+  if (!speaker.supported) {
+    $toneNote.textContent = "";
+    return;
+  }
+  $toneBtn.disabled = toneChecking;
+  $toneBtn.textContent = toneChecking ? "Checking…" : naturalOn ? "Back to standard tone" : "Naturalise tone";
+  $toneBtn.setAttribute("aria-pressed", naturalOn ? "true" : "false");
+  $toneNote.textContent = toneMessage();
+}
+
+// "Naturalise tone": look for a natural voice for this chat's language. None -> say so and change nothing. Found -> switch to
+// it and say a short sample so the borrower can hear it.
+async function onToneClick() {
+  if (naturalOn) {
+    setNatural(false);
+    toneNote = "";
+    stopPlayback();
+    renderToneBar();
+    return;
+  }
+  toneChecking = true;
+  toneNote = "";
+  renderToneBar();
+  loadedVoices = await speaker.loadVoices();
+  toneChecking = false;
+  const voice = NaturalVoice.pickNatural(loadedVoices, state.language);
+  if (!voice) {
+    toneNote = `Sorry, not available: this browser has no natural-sounding ${LANGUAGE_NAME[state.language]} voice. Microsoft Edge usually has them.`;
+    renderToneBar();
+    return;
+  }
+  setNatural(true);
+  stopPlayback();
+  renderToneBar();
+  speaker.speak(TONE_SAMPLE[state.language], voice, {
+    onFail: (failure) => {
+      if (failure.started) return;
+      setNatural(false);
+      toneNote = "The natural voice did not start, so the standard voice stays on.";
+      renderToneBar();
+    },
+  });
+}
+
+if ($toneBtn) $toneBtn.addEventListener("click", onToneClick);
+if (speaker.supported && naturalOn) {
+  // A remembered "on": look the voices up now. If this browser has no natural voice in either language, quietly go back to off.
+  speaker.loadVoices().then((voices) => {
+    loadedVoices = voices;
+    if (!NaturalVoice.pickNatural(voices, "en") && !NaturalVoice.pickNatural(voices, "hi")) setNatural(false);
+    renderToneBar();
+  });
+}
+renderToneBar();
+
+// One reply plays at a time: tapping the one that is playing stops it, and starting another stops the one before it.
+let currentPlayback = null; // { cancelled, stop() } for whichever reply is loading or playing now
+
+function stopPlayback() {
+  const playback = currentPlayback;
+  currentPlayback = null;
+  if (playback) playback.stop();
+}
+window.addEventListener("pagehide", stopPlayback);
+
+// true: this reply has been dealt with (spoken, stopped, or failed after some sound). false: the natural voice could not be
+// used and nothing was heard, so the caller plays the server audio instead.
+async function playNatural(text, buttonEl, playback) {
+  const language = state.language;
+  loadedVoices = await speaker.loadVoices();
+  const voice = NaturalVoice.pickNatural(loadedVoices, language);
+  if (!voice) return false; // e.g. natural tone was switched on for an English chat and this one is Hindi
+  let spoken;
+  try {
+    const res = await fetch(`/conversations/${state.conversationId}/speech-text`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok) throw new ApiError(res.status, `speech-text request failed (${res.status})`);
+    spoken = (await res.json()).text;
+  } catch (err) {
+    console.warn("naturalise: could not get the spoken text; using the server voice instead", err);
+    return false;
+  }
+  if (playback.cancelled) return true; // the borrower moved on while this was loading
+  buttonEl.classList.remove("loading");
+  buttonEl.classList.add("playing");
+  return new Promise((resolve) => {
+    playback.stopNatural = () => speaker.stop(); // calls onEnd below, which tidies the button
+    speaker.speak(spoken, voice, {
+      onEnd: () => {
+        playback.stopNatural = null;
+        buttonEl.classList.remove("loading", "playing");
+        if (currentPlayback === playback) currentPlayback = null;
+        resolve(true);
+      },
+      onFail: (failure) => {
+        playback.stopNatural = null;
+        buttonEl.classList.remove("playing");
+        if (failure.started) {
+          // Some of it was heard, so playing the server audio now would say it twice.
+          if (currentPlayback === playback) currentPlayback = null;
+          buttonEl.classList.remove("loading");
+          addAssistantMessage("Couldn't finish playing that reply -- please try again.", [], true);
+          resolve(true);
+          return;
+        }
+        // Nothing was heard: the natural voice is not working here. Back to the standard voice, and it says this reply.
+        setNatural(false);
+        toneNote = "The natural voice did not start, so the standard voice was used.";
+        renderToneBar();
+        buttonEl.classList.add("loading");
+        resolve(false);
+      },
+    });
+  });
+}
+
 async function playSpeech(text, buttonEl) {
-  if (!state.conversationId || buttonEl.classList.contains("loading") || buttonEl.classList.contains("playing")) return;
+  if (!state.conversationId || buttonEl.classList.contains("loading")) return;
+  if (buttonEl.classList.contains("playing")) {
+    stopPlayback();
+    return;
+  }
+  stopPlayback();
+  const playback = {
+    cancelled: false,
+    audioEl: null,
+    cleanup: null,
+    stopNatural: null, // set while a natural voice is speaking this reply, cleared if the server audio takes over
+    stop() {
+      this.cancelled = true;
+      if (this.stopNatural) this.stopNatural();
+      if (this.audioEl) this.audioEl.pause();
+      if (this.cleanup) this.cleanup();
+      buttonEl.classList.remove("loading", "playing");
+    },
+  };
+  currentPlayback = playback;
   buttonEl.classList.add("loading");
   try {
+    if (naturalOn && speaker.supported && (await playNatural(text, buttonEl, playback))) return;
+    if (playback.cancelled) return;
     const res = await fetch(`/conversations/${state.conversationId}/speech`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -659,24 +941,30 @@ async function playSpeech(text, buttonEl) {
     });
     if (!res.ok) throw new ApiError(res.status, `speech request failed (${res.status})`);
     const blob = await res.blob();
+    if (playback.cancelled) return;
     const url = URL.createObjectURL(blob);
     const audioEl = new Audio(url);
+    playback.audioEl = audioEl;
     const cleanup = () => {
       buttonEl.classList.remove("playing");
       URL.revokeObjectURL(url);
+      if (currentPlayback === playback) currentPlayback = null;
     };
+    playback.cleanup = cleanup;
     audioEl.addEventListener("ended", cleanup);
     audioEl.addEventListener("error", cleanup);
     buttonEl.classList.remove("loading");
     buttonEl.classList.add("playing");
     await audioEl.play();
   } catch (err) {
+    if (playback.cancelled) return; // a play() cut short by the borrower's own stop is not an error
     // Found live: this silently reverted the button to idle with zero
     // feedback on ANY failure (backend TTS error, expired conversation,
     // network drop, or a rejected audioEl.play()) -- a borrower tapping
     // the speaker icon had no way to tell the feature broke versus their
     // tap just not registering. Matches the same friendly-error pattern
     // the text/voice-send paths already use.
+    if (currentPlayback === playback) currentPlayback = null;
     buttonEl.classList.remove("loading", "playing");
     addAssistantMessage(
       err instanceof ApiError ? friendlyMessageError(err) : "Couldn't play that reply -- please try again.",
