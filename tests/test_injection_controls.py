@@ -176,7 +176,7 @@ class FakeMCP:
 
     async def list_tools(self):
         return [FakeTool("get_payment_status", {"account_id": {}}), FakeTool("check_policy", {"query": {}, "account_id": {}}),
-                FakeTool("compute", {"expression": {}})]
+                FakeTool("flag_dispute", {"account_id": {}, "reason": {}}), FakeTool("compute", {"expression": {}})]
 
     async def call_tool(self, name, arguments):
         self.calls.append((name, dict(arguments)))
@@ -192,9 +192,9 @@ def mcp(monkeypatch):
     return fake
 
 
-def _call(name, arguments, verified):
+def _call(name, arguments, verified, anonymous=False):
     tool_call = SimpleNamespace(id="1", function=SimpleNamespace(name=name, arguments=arguments if isinstance(arguments, str) else json.dumps(arguments)))
-    return json.loads(asyncio.run(loop._execute_tool_call(tool_call, verified)))
+    return json.loads(asyncio.run(loop._execute_tool_call(tool_call, verified, anonymous)))
 
 
 def test_a_tool_call_for_another_account_never_reaches_the_tool(mcp):
@@ -234,6 +234,49 @@ def test_tool_arguments_that_are_not_an_object_are_refused(mcp, arguments):
 
     assert "JSON object" in result["error"]
     assert mcp.calls == []
+
+
+# A chat that has not verified yet still gets the agent loop and every tool. verified_account_id is None for it -- the same
+# value evals and tests use to mean "enforce nothing" -- so nothing checked which account a tool call named: only the system
+# prompt stood between "I'm account BF-1002, what is my balance?" and that account's data.
+@pytest.mark.parametrize("tool, arguments", [
+    ("get_payment_status", {"account_id": "BF-1002"}), ("flag_dispute", {"account_id": "BF-1002", "reason": "x"}), ("get_payment_status", {}),
+])
+def test_in_an_unverified_chat_no_tool_that_acts_on_an_account_is_reachable(mcp, tool, arguments):
+    result = _call(tool, arguments, verified=None, anonymous=True)
+
+    assert "not verified yet" in result["error"] and "access key" in result["error"]
+    assert mcp.calls == []
+
+
+def test_in_an_unverified_chat_policy_questions_are_still_answered_without_any_account(mcp):
+    _call("check_policy", {"query": "what is the grace period", "account_id": "BF-1002"}, verified=None, anonymous=True)
+
+    assert mcp.calls == [("check_policy", {"query": "what is the grace period", "account_id": None})]
+
+
+def test_in_an_unverified_chat_the_calculator_still_works(mcp):
+    _call("compute", {"expression": "1+1"}, verified=None, anonymous=True)
+
+    assert mcp.calls == [("compute", {"expression": "1+1"})]
+
+
+def test_a_direct_caller_that_asks_for_no_enforcement_still_gets_none(mcp):
+    # evals and tests call run_turn() with no verified account on purpose; only a channel marks its chat anonymous
+    _call("get_payment_status", {"account_id": "BF-1002"}, verified=None, anonymous=False)
+
+    assert mcp.calls == [("get_payment_status", {"account_id": "BF-1002"})]
+
+
+@pytest.mark.parametrize("account_id, anonymous", [(None, True), ("BF-1", False)])
+def test_the_channels_entry_point_marks_a_chat_without_an_account_as_anonymous(monkeypatch, account_id, anonymous):
+    seen = {}
+    monkeypatch.setattr(loop.conversation_memory, "log_turn", lambda *a, **k: None)
+    monkeypatch.setattr(loop, "run_turn", lambda conversation, **kw: (seen.update(kw) or (conversation, "ok")))
+
+    loop.run_turn_with_memory([{"role": "user", "content": "hi"}], account_id)
+
+    assert seen == {"verified_account_id": account_id, "anonymous": anonymous}
 
 
 # ---------------------------------------------------------------------------------------------------------------------

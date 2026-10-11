@@ -27,29 +27,31 @@ _FOLD_AWAY = re.compile("[​-‏‪-‮⁠-⁤⁦-⁩﻿\U000e0000-\U000e007f]"
 
 _RULES: list[tuple[str, re.Pattern]] = [
     ("override_instructions", re.compile(
-        r"\b(?:ignore|disregard|forget|override|bypass)\b[^.\n]{0,25}?\b(?:previous|prior|above|earlier|preceding|all|any)\b"
-        r"[^.\n]{0,20}?\b(?:instructions?|rules|prompts?|guidelines|directions|system message)\b")),
+        r"\b(?:ignore|disregard|forget|override|bypass)\b[^.]{0,25}?\b(?:previous|prior|above|earlier|preceding|all|any)\b"
+        r"[^.]{0,20}?\b(?:instructions?|rules|prompts?|guidelines|directions|system message)\b"
+        r"|\b(?:ignore|disregard|forget|override|bypass)\b[^.]{0,15}?\b(?:everything|anything)\s+(?:above|before|earlier|previously)\b"
+        r"|\b(?:ignore|disregard|override|bypass)\s+(?:the |your |all )?(?:system (?:message|prompt)|safety (?:rules|guidelines|checks)|guardrails?)\b")),
     ("chat_template_tokens", re.compile(
         r"<\|(?:im_start|im_end|system|user|assistant|endoftext)\|>|\[/?inst\]|<<sys>>|^\s*(?:system|assistant|developer)\s*:|###\s*(?:system|instruction)",
         re.MULTILINE)),
     ("role_reassignment", re.compile(
-        r"\byou are (?:now|no longer)\b[^.\n]{0,15}?\b(?:an? |the )?(?:ai|assistant|chatbot|bot|agent|language model|dan|unrestricted|different)\b"
+        r"\byou are (?:now|no longer)\b[^.]{0,15}?\b(?:an? |the )?(?:ai|assistant|chatbot|bot|agent|language model|dan|unrestricted|different)\b"
         r"|\bact as (?:an? |the )?(?:unrestricted|different|new|evil|dan)\b|\bpretend (?:that )?(?:to be|you are)\b"
         r"|\bnew (?:instructions?|role|persona)\s*:|\bdeveloper mode\b|\bjailbreak")),
     ("prompt_exfiltration", re.compile(
-        r"\b(?:reveal|show|print|repeat|output|disclose|leak|tell me)\b[^.\n]{0,30}?\b(?:system prompt|your instructions|your prompt|hidden instructions|initial prompt|tool definitions?)\b")),
+        r"\b(?:reveal|show|print|repeat|output|disclose|leak|tell me)\b[^.]{0,30}?\b(?:system prompt|your instructions|your prompt|hidden instructions|initial prompt|tool definitions?)\b")),
     ("concealment", re.compile(
-        r"\bdo not (?:tell|inform|mention|reveal)\b[^.\n]{0,25}?\b(?:user|borrower|customer|anyone|human)\b"
-        r"|\b(?:without|never) (?:telling|informing|alerting) (?:the )?(?:user|borrower|customer)\b")),
+        r"\bdo not (?:tell|inform|mention|reveal)\b[^.]{0,25}?\b(?:the )?(?:user|borrower|customer)\b"
+        r"|\b(?:without|never) (?:tell|telling|inform|informing|alert|alerting|mention|mentioning) (?:the )?(?:user|borrower|customer)\b")),
     ("tool_command", re.compile(
-        r"\b(?:call|invoke|run|execute|use)\b[^.\n]{0,20}?\b(?:escalate_to_human|flag_dispute|generate_payment_link|log_promise_to_pay|"
+        r"\b(?:call|invoke|run|execute|use)\b[^.]{0,20}?\b(?:escalate_to_human|flag_dispute|generate_payment_link|log_promise_to_pay|"
         r"propose_restructuring|propose_partial_payment|request_closure_certificate|get_payment_status|get_payment_history|check_policy)\b")),
     ("override_instructions_hindi", re.compile(
-        r"(?:पिछले|पहले\s+के|ऊपर\s+के|सभी)\s+(?:सभी\s+)?(?:निर्देश|आदेश)[^.\n]{0,30}?(?:अनदेखा|नज़रअंदाज़|नजरअंदाज|भूल)"
-        r"|(?:अनदेखा|नज़रअंदाज़|नजरअंदाज|भूल)[^.\n]{0,30}?(?:निर्देश|आदेश)")),
+        r"(?:पिछले|पहले\s+के|ऊपर\s+के|सभी)\s+(?:सभी\s+)?(?:निर्देश|आदेश)[^.]{0,30}?(?:अनदेखा|नज़रअंदाज़|नजरअंदाज|भूल)"
+        r"|(?:अनदेखा|नज़रअंदाज़|नजरअंदाज|भूल)[^.]{0,30}?(?:निर्देश|आदेश)")),
     ("override_instructions_hinglish", re.compile(
-        r"\b(?:pichle|purane|upar ke|saare|sabhi)\s+(?:nirdesh|instructions?|aadesh)\b[^.\n]{0,25}?\b(?:ignore|bhool|nazarandaz)\b"
-        r"|\bignore kar(?:o|na|do)\b[^.\n]{0,25}?\b(?:instructions?|nirdesh|rules)\b")),
+        r"\b(?:pichle|purane|upar ke|saare|sabhi)\s+(?:nirdesh|instructions?|aadesh)\b[^.]{0,25}?\b(?:ignore|bhool|nazarandaz)\b"
+        r"|\bignore kar(?:\s?do|o|na)\b[^.]{0,25}?\b(?:instructions?|nirdesh|rules)\b")),
 ]
 
 
@@ -62,12 +64,32 @@ class Finding:
         return f"{self.rule}: {self.excerpt!r}"
 
 
+# Letters from other alphabets that are drawn the same as a Latin letter: "ignоre" with a Cyrillic "о" reads as "ignore".
+_CONFUSABLES = str.maketrans({
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x", "і": "i", "ј": "j", "ѕ": "s", "ԁ": "d", "һ": "h",
+    "ο": "o", "α": "a", "ε": "e", "ν": "v", "ι": "i", "κ": "k", "ρ": "p", "τ": "t", "υ": "u",
+})
+_LEET = str.maketrans({"0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", "$": "s"})
+_LEET_WORD = re.compile(r"\b(?=\w*[a-z])(?=\w*[013457@$])\w+\b")  # a word that mixes letters with look-alike digits
+_SPACED_OUT = re.compile(r"\b(?:[a-z][ .\-_]){3,}[a-z]\b")  # "i g n o r e"
+
+
 def normalise(text: str) -> str:
     """Folded so that look-alike forms meet the patterns: compatibility forms (full-width letters, ligatures) to their
-    plain equivalents, invisible characters removed, case and whitespace collapsed."""
+    plain equivalents, invisible characters removed, look-alike letters from other alphabets made Latin, case folded and
+    all whitespace (line breaks included) collapsed to single spaces."""
     text = unicodedata.normalize("NFKC", text)
-    text = _FOLD_AWAY.sub("", text)
-    return re.sub(r"[ \t\r\f\v]+", " ", text).lower()
+    text = _FOLD_AWAY.sub("", text).translate(_CONFUSABLES)
+    return re.sub(r"\s+", " ", text).lower()
+
+
+def _variants(text: str) -> list[str]:
+    """The folded text, plus copies with digit-for-letter swaps and spaced-out letters repaired, because a document that
+    spells an instruction "1gn0re" or "i g n o r e" is not trying to be read by a person."""
+    flat = normalise(text)
+    deleet = _LEET_WORD.sub(lambda m: m.group(0).translate(_LEET), flat)
+    despaced = _SPACED_OUT.sub(lambda m: re.sub(r"[ .\-_]", "", m.group(0)), flat)
+    return list(dict.fromkeys([flat, deleet, despaced]))
 
 
 def scan(text: str) -> list[Finding]:
@@ -77,9 +99,15 @@ def scan(text: str) -> list[Finding]:
     hidden = _HIDDEN_CHARS.search(stripped)
     if hidden:
         findings.append(Finding("hidden_characters", f"U+{ord(hidden.group(0)):04X} at position {hidden.start()}"))
-    folded = normalise(text)
+    variants = _variants(text)
+    # The chat-template rule anchors on the start of a line ("system: ..."), so it reads the text with its line breaks;
+    # every other rule reads the flattened text.
+    line_aware = unicodedata.normalize("NFKC", text).translate(_CONFUSABLES).lower()
     for rule, pattern in _RULES:
-        match = pattern.search(folded)
-        if match:
-            findings.append(Finding(rule, " ".join(match.group(0).split())[:80]))
+        candidates = [line_aware] + variants if rule == "chat_template_tokens" else variants
+        for candidate in candidates:
+            match = pattern.search(candidate)
+            if match:
+                findings.append(Finding(rule, " ".join(match.group(0).split())[:80]))
+                break
     return findings

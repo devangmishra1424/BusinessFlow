@@ -47,6 +47,7 @@ from businessflow.outbound.run import run_daily_pass
 from businessflow.rag.extraction import extract_loan_terms
 from businessflow.rate_limit import RateLimiter
 from businessflow.rag.ingest import SuspiciousDocumentError, UnreadableDocumentError, extract_document_text, ingest_document
+from businessflow.tools import validation
 from businessflow.tools.escalation_tools import escalate_to_human
 
 logger = logging.getLogger(__name__)
@@ -384,6 +385,11 @@ class AccountCreateIn(BaseModel):
     # same column via document-extracted rates) -- a manually-entered
     # account has no rate to derive, so this stays None for those.
     interest_rate_pct: float | None = None
+
+    @field_validator("borrower_name", "business_name", "loan_type")
+    @classmethod
+    def _validate_name_text(cls, v: str, info) -> str:
+        return validation.short_name(v, info.field_name)
 
     @field_validator("phone_number")
     @classmethod

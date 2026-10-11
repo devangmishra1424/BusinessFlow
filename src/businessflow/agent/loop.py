@@ -191,7 +191,7 @@ async def _account_scoped_tools() -> frozenset[str]:
 
 
 @langfuse.observe(name="tool_call", as_type="tool")
-async def _execute_tool_call(tool_call, verified_account_id: str | None = None) -> str:
+async def _execute_tool_call(tool_call, verified_account_id: str | None = None, anonymous: bool = False) -> str:
     tool_name = tool_call.function.name
     try:
         arguments = json.loads(tool_call.function.arguments)
@@ -201,6 +201,23 @@ async def _execute_tool_call(tool_call, verified_account_id: str | None = None) 
         return json.dumps({"error": "tool arguments must be a JSON object"})
 
     account_id = arguments.get("account_id")
+
+    # A chat that has not verified (no account id + access key yet) is still handed the agent loop and every tool. Nothing
+    # below this block checks anything for it, because verified_account_id is None -- the value evals and tests use to mean
+    # "enforce nothing" -- so before this, the only thing between "I'm account BF-1002, what is my balance?" typed into an
+    # anonymous chat and that account's data was the system prompt telling the model it has no access. Account tools are
+    # refused in code instead; check_policy still answers general questions, with any account_id stripped.
+    if anonymous:
+        if tool_name in await _account_scoped_tools():
+            if tool_name != "check_policy":
+                store.log_event(None, "unverified_tool_blocked", {"tool": tool_name, "attempted_account_id": account_id})
+                return json.dumps({
+                    "error": (
+                        "this conversation is not verified yet, so no account can be looked up or changed -- ask the "
+                        "borrower to send their account id and access key (for example 'BF-1001 123456') first."
+                    ),
+                })
+            arguments["account_id"] = account_id = None
 
     # verified_account_id is only ever non-None for a session that went
     # through verify_and_start_conversation -- old callers (evals, tests,
@@ -342,6 +359,7 @@ def _finalize_reply(conversation: list[dict], verified_account_id: str | None) -
 @langfuse.observe(name="agent_turn", as_type="agent")
 async def _run_turn_async(
     conversation: list[dict], verified_account_id: str | None = None, reasoning_effort: str | None = None,
+    anonymous: bool = False,
 ) -> tuple[list[dict], str]:
     """reasoning_effort, when given, is passed straight through to every
     _create_completion call this turn makes (openai/gpt-oss-20b accepts
@@ -371,7 +389,7 @@ async def _run_turn_async(
             return _finalize_reply(conversation, verified_account_id)
 
         for tool_call in message.tool_calls:
-            result_json = await _execute_tool_call(tool_call, verified_account_id)
+            result_json = await _execute_tool_call(tool_call, verified_account_id, anonymous)
             conversation.append({
                 "role": "tool",
                 "tool_call_id": tool_call.id,
@@ -461,6 +479,7 @@ def _get_sync_loop() -> asyncio.AbstractEventLoop:
 
 def run_turn(
     conversation: list[dict], verified_account_id: str | None = None, reasoning_effort: str | None = None,
+    *, anonymous: bool = False,
 ) -> tuple[list[dict], str]:
     """Runs one user turn (the latest message in conversation must already
     be the user's) to completion, including any tool calls the model
@@ -473,8 +492,14 @@ def run_turn(
 
     reasoning_effort, when given, is forwarded to the model for this turn
     (see _run_turn_async) -- unset by default, same as before this
-    parameter existed."""
-    return _get_sync_loop().run_until_complete(_run_turn_async(conversation, verified_account_id, reasoning_effort))
+    parameter existed.
+
+    anonymous=True is for a chat that has NOT verified a borrower yet: tools that act on an account are refused (see
+    _execute_tool_call). It is a separate flag, not "verified_account_id is None", because None has always meant
+    "enforce nothing" for the evals and tests that call this directly."""
+    return _get_sync_loop().run_until_complete(
+        _run_turn_async(conversation, verified_account_id, reasoning_effort, anonymous)
+    )
 
 
 def start_conversation_with_recap(language: str = "en", account_id: str | None = None) -> list[dict]:
@@ -503,7 +528,7 @@ def run_turn_with_memory(conversation: list[dict], account_id: str | None) -> tu
     timestamp it *later* than the tool call it prompted, scrambling the
     recap's chronological order."""
     conversation_memory.log_turn(account_id, "user", conversation[-1]["content"])
-    conversation, reply = run_turn(conversation, verified_account_id=account_id)
+    conversation, reply = run_turn(conversation, verified_account_id=account_id, anonymous=account_id is None)
     conversation_memory.log_turn(account_id, "assistant", reply)
     return conversation, reply
 
