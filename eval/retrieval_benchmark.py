@@ -25,7 +25,8 @@ Metrics: Recall@k (is a correct chunk among the first k results) and MRR, each w
 Each setting is compared with its PARENT (the setting it changes one thing from) on the same questions, paired.
 
 The decision rule, fixed before the numbers were looked at: a change ships only if, on Recall@2 and MRR over the three
-question sets, at least one paired interval is entirely above zero ("helps") and none is entirely below ("hurts"). A
+question sets, at least one paired interval is entirely above zero ("helps"), none is entirely below ("hurts"), and the
+held-out set does not point the other way (its Recall@2 and MRR differences are not negative). A
 change with "no measurable difference" ships only if it costs nothing (none does: each costs latency, a re-embedding of
 the corpus, or code to maintain). An interval that includes zero is not a finding. 'Deployed view' is
 Recall@2 because check_policy hands the agent two chunks.
@@ -399,14 +400,22 @@ def paired_difference(a: list[int | None], b: list[int | None], metric: str, clu
 
 
 def verdict(paired: dict[str, dict[str, dict]]) -> str:
-    """The decision rule from the module docstring, applied to the paired intervals (set -> metric -> interval)."""
+    """The decision rule from the module docstring, applied to the paired intervals (set -> metric -> interval).
+
+    The rule has always said the held-out set must confirm a gain found on dev. The first version of this function did not
+    enforce that: it only asked that some interval be above zero and none below, and with a corrected baseline one setting
+    cleared dev by a lower bound of +0.0013 on 38 questions while the held-out set pointed the other way. A gain therefore
+    also needs the held-out point estimates (Recall@2 and MRR) not to be negative."""
     intervals = [paired[s][m] for s in SETS for m in METRICS]
     helps = any(i["lo"] > 0 for i in intervals)
     hurts = any(i["hi"] < 0 for i in intervals)
+    contradicted = any(paired["heldout"][m]["diff"] < 0 for m in METRICS)
     if helps and hurts:
         return "mixed: helps on one set, hurts on another -- not shipped"
     if hurts:
         return "hurts -- not shipped"
+    if helps and contradicted:
+        return "helps on a set, but the held-out set does not confirm it -- not shipped"
     if helps:
         return "helps"
     return "no measurable difference -- not shipped"

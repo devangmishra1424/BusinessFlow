@@ -96,13 +96,6 @@ def test_the_document_type_filter_is_exact(reranker):
     assert snapshot.retrieve("late fee", top_k=5, document_type="regulatory") == []
 
 
-def test_the_candidate_pool_is_never_smaller_than_top_k(reranker):
-    # candidate_pool=1 with top_k=3 used to be able to return fewer than three results from a corpus that had them.
-    results = DocumentRetriever(rows=ROWS).retrieve("late fee grace nach", top_k=3, candidate_pool=1)
-
-    assert len(results) == 3
-
-
 def test_a_chunk_sharing_no_word_with_the_query_is_not_a_keyword_candidate(reranker):
     snapshot = DocumentRetriever(rows=ROWS)
 

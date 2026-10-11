@@ -76,21 +76,22 @@ resample the 30), and 30 the documents cannot answer. Every change is
 compared with its parent on the same questions under a decision rule fixed in
 advance (a change ships only if a paired 95% interval clears zero), and the
 report is `eval/results/retrieval_benchmark.md`. As deployed, a correct chunk
-is among the two the agent receives for 76% of the development questions
-(63-89%), 94% of the held-out ones (85-100%) and 93% of the loan-agreement
-fact questions (84-99%), and none of the 2,160 retrievals the benchmark ran for
+is among the two the agent receives for 71% of the development questions
+(55-84%), 94% of the held-out ones (85-100%) and 92% of the loan-agreement
+fact questions (82-99%), and none of the 2,160 retrievals the benchmark ran for
 borrower-scoped questions returned another borrower's document. The LLM
 translation of Hindi and Hinglish questions is worth measuring because the
 keyword and rerank stages are English-only: without it Recall@2 falls by 0.09
 on the held-out questions and 0.16 on the loan ones, both intervals below
 zero (0.08 on the development set, where the interval includes zero). A larger candidate pool, putting heading paths into the text, and
 rank fusion were each tried and none cleared the rule (a pool of 8 gained
-0.03-0.04 but its intervals touch zero, and it costs roughly 25-70% more latency;
-headings gave a small Recall@5 gain on the development set that did not
-appear on the held-out set, where they nudged MRR down), so none was adopted. A score threshold for "nothing relevant"
+0.05-0.08 on the development and loan questions but its intervals touch zero,
+and it costs roughly 25-90% more latency; headings improved the development
+set by 0.06 MRR but the held-out set pointed the other way, -0.02, so the gain
+was not confirmed), so none was adopted. A score threshold for "nothing relevant"
 keeps 97% of answerable questions but drops only 35% of the in-domain
 questions the documents cannot answer, so it is not used as a safety
-mechanism. Where it still misses: loosely worded questions (Recall@2 0.79 for
+mechanism. Where it still misses: loosely worded questions (Recall@2 0.76 for
 the colloquial phrasing of the loan questions, against 1.00 for the clean and
 Hinglish ones). Limits: the questions were written by the engineer who built the
 retriever, n is small, the loan agreements all come from one template, and

@@ -65,6 +65,19 @@ def test_the_decision_rule_ships_only_a_change_that_helps_somewhere_and_hurts_no
     assert rb.verdict(_paired(loan__mrr=_interval(0.04, 0.01, 0.07), heldout__mrr=_interval(-0.06, -0.10, -0.01))).startswith("mixed")
 
 
+def test_a_gain_the_held_out_set_contradicts_is_not_shipped():
+    # What the corrected baseline produced for "headings everywhere": dev MRR +0.06 [+0.001, +0.14] on 38 questions, held-out -0.02.
+    paired = _paired(dev__mrr=_interval(0.058, 0.0013, 0.137), heldout__mrr=_interval(-0.025, -0.08, 0.02))
+
+    assert rb.verdict(paired) == "helps on a set, but the held-out set does not confirm it -- not shipped"
+
+
+def test_a_gain_the_held_out_set_agrees_with_ships():
+    paired = _paired(dev__mrr=_interval(0.058, 0.0013, 0.137), heldout__mrr=_interval(0.01, -0.03, 0.05))
+
+    assert rb.verdict(paired) == "helps"
+
+
 def test_an_interval_touching_zero_is_not_a_finding():
     assert rb.verdict(_paired(dev__mrr=_interval(0.05, 0.0, 0.1))).startswith("no measurable difference")
 
