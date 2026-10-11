@@ -19,6 +19,8 @@ import asyncio
 import logging
 import os
 import re
+import shutil
+import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
@@ -44,7 +46,7 @@ from businessflow.outbound.compose import draft_clarification_message
 from businessflow.outbound.run import run_daily_pass
 from businessflow.rag.extraction import extract_loan_terms
 from businessflow.rate_limit import RateLimiter
-from businessflow.rag.ingest import extract_document_text, ingest_document
+from businessflow.rag.ingest import UnreadableDocumentError, extract_document_text, ingest_document
 from businessflow.tools.escalation_tools import escalate_to_human
 
 logger = logging.getLogger(__name__)
@@ -108,25 +110,37 @@ def _telegram_invite_link(account_id: str, access_key: str) -> str | None:
     return f"https://t.me/{username}?start={payload}"
 
 
-def _cleanup_rejected_upload(saved_path: Path, account_dir: Path) -> None:
-    """Removes a partially-saved upload and, if now empty, the account
-    directory that was created to hold it -- the shared cleanup for every
-    upload_account_document rejection path that runs *after* the file has
-    already been written to disk (the size cap, and an unparseable
-    document), so this logic lives in exactly one place instead of being
-    duplicated slightly differently at each call site.
+# Uploads are streamed into a staging directory first, never straight over the file already on disk. A re-upload that is
+# rejected (too big, unparseable, unreadable scan) or that fails during ingestion therefore leaves the previous version
+# in place, on disk AND in the index; before this, the old file had already been overwritten (or truncated, for a size
+# rejection), so the document the chunks came from was gone while the chunks stayed. Kept outside the per-account
+# folders so the documents list never shows a half-finished upload.
+_STAGING_DIR = _DOCUMENTS_DIR / ".staging"
 
-    account_dir is assumed freshly mkdir'd (exist_ok=True) for this
-    upload -- if this was the account's first-ever upload attempt and it
-    got rejected, don't leave an empty directory behind. rmdir() only
-    succeeds on an empty directory, so this is a no-op (not an error)
-    when the account already has other real documents saved.
-    """
+
+def _install_upload(incoming: Path, saved_path: Path, staging: Path) -> Path | None:
+    """Moves a fully-received upload into place, setting any previous version aside. Returns where the previous version
+    was set aside (None if there was none), for _rollback_upload."""
+    previous = None
+    if saved_path.exists():
+        previous = staging / "previous" / saved_path.name
+        previous.parent.mkdir()
+        os.replace(saved_path, previous)
+    os.replace(incoming, saved_path)
+    return previous
+
+
+def _rollback_upload(saved_path: Path, previous: Path | None, account_dir: Path) -> None:
+    """Undoes _install_upload: the previous version (if any) goes back, otherwise the new file is removed and the
+    account folder too, if this was its first-ever upload attempt and it is now empty."""
     saved_path.unlink(missing_ok=True)
+    if previous is not None:
+        os.replace(previous, saved_path)
+        return
     try:
         account_dir.rmdir()
     except OSError:
-        pass
+        pass  # the account already has other documents in it, so the folder stays
 
 
 # Only a WRONG key counts as a hit -- a legitimate operator's dashboard
@@ -666,16 +680,18 @@ async def upload_account_document(
     ever retrievable for this borrower (see retriever.py's allowed_scopes,
     already tested in test_retriever.py).
 
-    Known limitation, not solved here: businessflow.tools.policy_tools.
-    _retriever() caches its DocumentRetriever PER PROCESS, refreshing it
-    only on a time-based poll (see _REFRESH_INTERVAL_SECONDS there). This
-    document is in the persistent Chroma store the instant this call
-    returns, but a currently-running borrower-facing process (channels/
-    browser_api.py, channels/telegram_bot.py) may not see it until that
-    process's own cached snapshot next refreshes -- bounded to that
-    interval, not "until restart", but not immediate either. There's no
-    pub/sub or other cross-process cache invalidation here; that would be
-    real new infra and is out of scope for this endpoint.
+    Visibility: the document is in the database the instant this call
+    returns, and the borrower-facing processes (channels/browser_api.py,
+    channels/telegram_bot.py) pick it up within
+    policy_tools._FINGERPRINT_CHECK_INTERVAL_SECONDS (15 s): each one
+    compares a cheap fingerprint of the chunk table against the one its
+    snapshot was built under and rebuilds when they differ. Not instant,
+    and no pub/sub; a bounded, checked delay.
+
+    Fails with 422 when the file has no readable text (a blank page, a
+    scan too poor for OCR, a Hindi/Devanagari scan -- the bundled OCR
+    reads English), and leaves any previous version of the same filename
+    exactly as it was.
     """
     account = store.get_account(account_id)
     if account is None:
@@ -696,15 +712,17 @@ async def upload_account_document(
         )
 
     account_dir = _DOCUMENTS_DIR / account_id
-    account_dir.mkdir(parents=True, exist_ok=True)
     # Overwrite-by-filename is deliberate: re-uploading a corrected version
     # of the same document is the expected case, and ingest_document()
     # already handles safe re-ingestion at the same file_path.
     saved_path = account_dir / filename
 
-    size = 0
+    staging = _STAGING_DIR / uuid.uuid4().hex
+    staging.mkdir(parents=True)
+    incoming = staging / filename
     try:
-        with open(saved_path, "wb") as out:
+        size = 0
+        with open(incoming, "wb") as out:
             while chunk := await file.read(_UPLOAD_READ_CHUNK_BYTES):
                 size += len(chunk)
                 if size > _MAX_UPLOAD_BYTES:
@@ -713,43 +731,41 @@ async def upload_account_document(
                         detail=f"file exceeds the {_MAX_UPLOAD_BYTES // (1024 * 1024)}MB upload limit",
                     )
                 out.write(chunk)
-    except HTTPException:
-        _cleanup_rejected_upload(saved_path, account_dir)
-        raise
 
-    try:
-        # Found live: this ran directly on the event loop despite the
-        # route being `async def` -- ingest_document does real CPU-bound
-        # work (docling parsing, local embedding), and the extraction
-        # step below makes a genuinely blocking, synchronous Groq HTTP
-        # call. Either one running in-loop blocks EVERY other request
-        # this single server process is handling (this app has no other
-        # worker to fall back to) until it returns -- confirmed live: a
-        # slow/rate-limited extraction call froze the entire ops API,
-        # including plain GETs, until the process was restarted.
-        # asyncio.to_thread moves the blocking work off the event loop
-        # without changing ingest_document/extract_loan_terms themselves.
-        chunks_stored = await asyncio.to_thread(
-            ingest_document, str(saved_path), document_type=document_type, account_id=account_id
-        )
-    except ConversionError as e:
-        # The extension passed our allow-list check, but the bytes behind
-        # it aren't a real, parseable document of that type (corrupt file,
-        # wrong content masquerading under this extension, etc). Docling
-        # raises its own ConversionError for exactly this -- caught
-        # specifically, not via a bare `except Exception`, so a genuinely
-        # unexpected failure still propagates as a 500 instead of being
-        # misreported as "bad input". ingest_document() converts the file
-        # before it ever touches the collection (both the delete-existing-
-        # chunks call and the upsert come after), so nothing was written
-        # to the vector store either -- the only cleanup needed is the
-        # same saved-file/empty-dir removal the size-cap rejection above
-        # already does.
-        _cleanup_rejected_upload(saved_path, account_dir)
-        raise HTTPException(
-            status_code=422,
-            detail=f"could not parse this file as {extension}: {e}",
-        ) from e
+        account_dir.mkdir(parents=True, exist_ok=True)
+        previous = _install_upload(incoming, saved_path, staging)
+        try:
+            # Found live: this ran directly on the event loop despite the
+            # route being `async def` -- ingest_document does real CPU-bound
+            # work (docling parsing, local embedding), and the extraction
+            # step below makes a genuinely blocking, synchronous Groq HTTP
+            # call. Either one running in-loop blocks EVERY other request
+            # this single server process is handling (this app has no other
+            # worker to fall back to) until it returns -- confirmed live: a
+            # slow/rate-limited extraction call froze the entire ops API,
+            # including plain GETs, until the process was restarted.
+            # asyncio.to_thread moves the blocking work off the event loop
+            # without changing ingest_document/extract_loan_terms themselves.
+            chunks_stored = await asyncio.to_thread(
+                ingest_document, str(saved_path), document_type=document_type, account_id=account_id
+            )
+        except (ConversionError, UnreadableDocumentError) as e:
+            # ConversionError: the extension passed our allow-list check, but the bytes behind it aren't a real,
+            # parseable document of that type (corrupt file, wrong content under this extension). Docling raises its
+            # own error for exactly this -- caught specifically, not via a bare `except Exception`, so a genuinely
+            # unexpected failure still propagates as a 500 instead of being misreported as "bad input".
+            # UnreadableDocumentError: it parsed, but nothing usable came out (a blank page, a scan the OCR cannot
+            # read, Hindi script). Either way ingest_document() wrote nothing to the index, and the previous version
+            # of this document, if any, is put back.
+            _rollback_upload(saved_path, previous, account_dir)
+            detail = f"could not parse this file as {extension}: {e}" if isinstance(e, ConversionError) else str(e)
+            raise HTTPException(status_code=422, detail=detail) from e
+        except Exception:
+            # Ingestion is one transaction, so the index still holds the previous version; keep the disk in step.
+            _rollback_upload(saved_path, previous, account_dir)
+            raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)  # best effort: only a leftover staging folder if this fails
 
     # Structured extraction only applies to a signed loan agreement --
     # there's no interest rate to find in a KYC document, say. Best-effort

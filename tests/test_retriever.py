@@ -241,7 +241,9 @@ def test_hindi_document_candidate_is_not_demoted_by_the_english_only_reranker(mo
         # chunk lands. This is precisely what _hybrid_rerank_results did
         # before this fix, replayed for real against the real model
         # rather than asserting a specific hard-coded score.
-        old_style_scores = real_predict([(query, t) for t in result_texts])
+        # the reranker is shown each chunk's heading path + text (DocumentRetriever's _search_texts), so replay it that way
+        search_text_of = dict(zip(retriever._texts, retriever._search_texts))
+        old_style_scores = real_predict([(query, search_text_of[t]) for t in result_texts])
         old_style_ranked = [t for _, t in sorted(zip(old_style_scores, result_texts), reverse=True)]
         old_rank = old_style_ranked.index(hindi_chunk_text)
 

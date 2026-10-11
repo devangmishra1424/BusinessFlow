@@ -31,6 +31,13 @@ def tokenize(text: str) -> list[str]:
     return _TOKEN_RE.findall(text.lower())
 
 
+def with_headings(headings: str, text: str) -> str:
+    """The chunk text with its heading path on top ("Restructuring options > Extend tenure" becomes two lines),
+    which is what Docling's own contextualize() produces. A chunk of a long policy often never repeats the policy
+    or section name, so on its own text it is hard to match to a question that uses that name."""
+    return "\n".join([*headings.split(" > "), text]) if headings else text
+
+
 def dominant_script(text: str) -> str:
     """'devanagari' or 'latin' if one clearly dominates (more than 2x the
     other), 'mixed' if neither does, 'none' if there are no script

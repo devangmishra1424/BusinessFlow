@@ -51,6 +51,8 @@ from pathlib import Path
 
 import numpy as np
 
+from eval.stats import bootstrap_ci, coefficient_of_variation, paired_ci  # noqa: F401  (re-exported for callers and tests)
+
 REPO = Path(__file__).resolve().parents[1]
 FIXTURE = REPO / "eval" / "fixtures" / "tts_benchmark_sentences.json"
 RESULTS = REPO / "eval" / "results"
@@ -94,33 +96,6 @@ def edge_silence_ms(audio: np.ndarray, sr: int, threshold_dbfs: float = -45.0, w
         return n * win_ms, n * win_ms
     first, last = loud.index(True), n - 1 - loud[::-1].index(True)
     return first * win_ms, (n - 1 - last) * win_ms
-
-
-def coefficient_of_variation(values: list[float]) -> float:
-    """Sample standard deviation over the mean; 0.0 for fewer than two values."""
-    if len(values) < 2:
-        return 0.0
-    m = statistics.fmean(values)
-    return statistics.stdev(values) / m if m else 0.0
-
-
-def bootstrap_ci(values: list[float], n_boot: int = 2000, seed: int = 0, alpha: float = 0.05) -> tuple[float, float, float]:
-    """(mean, lower, upper) with a percentile bootstrap over the values (here: sentences)."""
-    if not values:
-        return float("nan"), float("nan"), float("nan")
-    rng = random.Random(seed)
-    means = sorted(statistics.fmean(rng.choices(values, k=len(values))) for _ in range(n_boot))
-    return statistics.fmean(values), means[int(n_boot * alpha / 2)], means[int(n_boot * (1 - alpha / 2)) - 1]
-
-
-def paired_ci(a: dict[str, float], b: dict[str, float], **kw) -> tuple[float, float, float, int, int, int]:
-    """CI of mean(a - b) over the ids both have, plus (a better, tie, a worse) counts where lower is better."""
-    ids = sorted(set(a) & set(b))
-    diffs = [a[i] - b[i] for i in ids]
-    mean, lo, hi = bootstrap_ci(diffs, **kw)
-    better = sum(d < -1e-9 for d in diffs)
-    worse = sum(d > 1e-9 for d in diffs)
-    return mean, lo, hi, better, len(diffs) - better - worse, worse
 
 
 # --------------------------------------------------------------------------------------------------

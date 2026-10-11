@@ -3,22 +3,66 @@ persistent store: BM25 keyword search + multilingual-e5 embedding search,
 combined and reranked by a cross-encoder. Renamed from PolicyRetriever --
 this now serves any ingested document (policy, loan agreements,
 regulatory circulars), not just the hand-written policy KB it started as.
+
+One consistent snapshot. A DocumentRetriever loads every active chunk WITH
+its embedding when it is built and answers every query from that memory --
+BM25, embedding search and reranking all see exactly the same chunks. It
+used to read the text from a snapshot but run the embedding search live
+against the table, so a chunk ingested after the snapshot was found by the
+embedding search and then missing from the snapshot (a ValueError for the
+caller), while a re-ingested document's old text stayed searchable by BM25.
+Exact in-memory search is the right tool at this size (hundreds to a few
+thousand chunks: well under a megabyte of vectors); the pgvector HNSW index
+stays in the schema as the scale-out path, which would need
+hnsw.iterative_scan for the account-filtered queries. Staying current is the
+cache's job (tools/policy_tools.py): it compares corpus_fingerprint() and
+rebuilds only when the corpus actually changed.
 """
 
 import re
+from functools import lru_cache
 from pathlib import Path
 
+import numpy as np
 from rank_bm25 import BM25Okapi
 from sentence_transformers import CrossEncoder
 
 from businessflow.accounts.db import get_connection
 from businessflow.rag import query_llm
 from businessflow.rag.embeddings import embed_query
-from businessflow.rag.store import embedding_literal
 from businessflow.rag.tokenize import dominant_script as _dominant_script
 from businessflow.rag.tokenize import tokenize as _tokenize
+from businessflow.rag.tokenize import with_headings
 
 _RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"  # English-only -- see _embedding_only_results below
+
+
+@lru_cache(maxsize=1)
+def _load_reranker() -> CrossEncoder:
+    """One reranker per process, shared by every DocumentRetriever. The old code loaded a fresh one in every
+    constructor, so each 10-minute rebuild cost ~13 s (measured) on whichever request triggered it."""
+    return CrossEncoder(_RERANK_MODEL, backend="onnx", model_kwargs={"file_name": "onnx/model_quint8_avx2.onnx"})
+
+
+_ACTIVE_CHUNKS_SQL = (
+    "select id, document_text, source_document, document_type, account_id, chunk_index, headings, "
+    "embedding::real[] as embedding from document_chunks where superseded_at is null "
+    "order by source_document, chunk_index"
+)
+_FINGERPRINT_SQL = (
+    "select count(*) as total, count(*) filter (where superseded_at is null) as active, "
+    "max(created_at) filter (where superseded_at is null) as newest, "
+    "max(superseded_at) as last_superseded from document_chunks"
+)
+
+
+def corpus_fingerprint() -> tuple:
+    """A cheap summary of which chunks are active right now: it changes whenever a document is ingested,
+    superseded or purged. One small query, so a long-running process can check it every few seconds and
+    rebuild its DocumentRetriever only when it differs from the one the snapshot was built under."""
+    row = get_connection().execute(_FINGERPRINT_SQL).fetchone()
+    return (row["total"], row["active"], row["newest"], row["last_superseded"])
+
 
 # late_fee_policy.md's own real text: "...grace period (see grace_period.md)
 # is charged..." -- the exact, hand-written convention this project's
@@ -26,6 +70,8 @@ _RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"  # English-only -- see _e
 # referenced filename fragment, matched case-insensitively against known
 # source_document basenames below.
 _EXPLICIT_REFERENCE_RE = re.compile(r"\(see ([\w./-]+\.\w+)\)", re.IGNORECASE)
+
+_RRF_K = 60  # the conventional reciprocal-rank-fusion constant
 
 _MIN_TITLE_WORDS = 2  # excludes a short, generic single-word title (e.g. "faq") from ever substring-matching
 
@@ -95,26 +141,37 @@ def _min_max_normalize(raw_scores: dict[int, float]) -> dict[int, float]:
 
 
 class DocumentRetriever:
-    """Builds its BM25 index fresh from whatever's currently in the
-    persistent store at construction time -- so it picks up anything
-    ingested since the last time this was built. Rebuild (create a new
-    instance) after ingesting new documents rather than reusing a stale
-    one for the lifetime of a long-running process."""
+    """An immutable snapshot of every active chunk (text, metadata and embedding), built once at construction.
+    Rebuild -- or better, let tools/policy_tools.py's cache do it when corpus_fingerprint() changes -- rather than
+    reusing an instance for the lifetime of a long-running process.
 
-    def __init__(self):
-        self._conn = get_connection()
+    `rows` is for callers that already hold the chunks (the retrieval benchmark builds its corpus from files, with no
+    database); each row needs id, document_text, source_document, document_type, account_id, chunk_index, headings and
+    embedding. Left out, the rows are read from document_chunks.
 
-        # Active means superseded_at is null (see ingest.py's
-        # _supersede_existing_chunks) -- a corrected document's old chunks
-        # stay in the store for the compliance trail, but must never be
-        # retrievable. A plain WHERE clause now; the live ANN query in
-        # _embed_candidates uses the same condition directly rather than
-        # needing a separately-tracked exclusion list the way Chroma's
-        # filter grammar (no "is null" operator) once required.
-        rows = self._conn.execute(
-            "select id, document_text, source_document, document_type, account_id, chunk_index, headings "
-            "from document_chunks where superseded_at is null"
-        ).fetchall()
+    Two options exist so the benchmark (eval/retrieval_benchmark.py) can test them; both default to what it found:
+    `use_headings` puts each chunk's heading path in front of its text for BM25 and the reranker (measured: no
+    difference on held-out questions, so off), and `fusion` is how the final order is made -- "rerank" (the
+    cross-encoder's order) or "rrf" (reciprocal-rank fusion of the cross-encoder's and the embedding's orders).
+    `keyword_overlap_required` keeps a chunk that shares no word with the query out of the keyword candidates (when
+    the corpus holds fewer chunks with the query's words than the pool has slots, the old code padded the pool with
+    zero-score chunks in ingestion order); False restores that.
+    """
+
+    def __init__(self, rows: list[dict] | None = None, *, use_headings: bool = False, fusion: str = "rerank",
+                 keyword_overlap_required: bool = True):
+        if fusion not in ("rerank", "rrf"):
+            raise ValueError(f"fusion must be 'rerank' or 'rrf', got {fusion!r}")
+        self.fusion = fusion
+        self.keyword_overlap_required = keyword_overlap_required
+        if rows is None:
+            # The fingerprint is read BEFORE the rows: if a document lands in between, the next fingerprint check
+            # sees a difference and rebuilds, whereas the other order could record "up to date" for stale rows.
+            self.fingerprint = corpus_fingerprint()
+            rows = get_connection().execute(_ACTIVE_CHUNKS_SQL).fetchall()
+        else:
+            self.fingerprint = None
+
         self._ids = [r["id"] for r in rows]
         self._texts = [r["document_text"] for r in rows]
         self._metadatas = [
@@ -124,17 +181,18 @@ class DocumentRetriever:
             }
             for r in rows
         ]
+        self._embeddings = np.asarray([r["embedding"] for r in rows], dtype=np.float32)
 
-        self._bm25 = BM25Okapi([_tokenize(t) for t in self._texts]) if self._texts else None
+        # What BM25 and the reranker read. Not what is returned.
+        self._search_texts = [with_headings(m["headings"], t) if use_headings else t for m, t in zip(self._metadatas, self._texts)]
+        self._bm25 = BM25Okapi([_tokenize(t) for t in self._search_texts]) if self._texts else None
 
-        self._reranker = CrossEncoder(
-            _RERANK_MODEL, backend="onnx", model_kwargs={"file_name": "onnx/model_quint8_avx2.onnx"}
-        )
+        self._by_scope: dict[str, list[int]] = {}
+        for i, m in enumerate(self._metadatas):
+            self._by_scope.setdefault(m["account_id"], []).append(i)
 
-        # Recomputed fresh here, same as everything else this constructor
-        # loads -- picks up any document ingested since the last time a
-        # DocumentRetriever was built, with no separate rebuild/sync step
-        # of its own; see follow_references on retrieve() below.
+        self._reranker = _load_reranker()
+
         self._document_titles = {
             m["source_document"]: title
             for m in self._metadatas
@@ -151,16 +209,13 @@ class DocumentRetriever:
         documents plus that specific borrower's own documents -- never a
         different borrower's. document_type, if given, additionally
         restricts to chunks ingested with that exact document_type (e.g.
-        "loan_agreement") -- ingest.py has always stamped this on every
-        chunk, but nothing read it back until now; every existing caller
-        that omits it gets the previous, unfiltered behavior unchanged.
-        candidate_pool is how many candidates each of BM25 and embedding
-        search contribute before reranking, per query variant. expand=True
-        additionally generates a couple of alternate phrasings of the
-        query (query_llm.expand_query) and pools candidates across all of
-        them -- a real extra Groq call, so it's opt-in rather than
-        always-on; see eval/retrieval_benchmark.py for the measured effect
-        before deciding whether to default it on for a given caller.
+        "loan_agreement"). candidate_pool is how many candidates each of
+        BM25 and embedding search contribute before reranking, per query
+        variant. expand=True additionally
+        generates a couple of alternate phrasings of the query
+        (query_llm.expand_query) and pools candidates across all of them --
+        a real extra Groq call, so it's opt-in; see eval/retrieval_benchmark.py
+        for the measured effect.
 
         follow_references=True additionally checks each result for a
         mention of another known document (either the hand-written
@@ -169,21 +224,20 @@ class DocumentRetriever:
         _find_referenced_documents) and, for up to max_referenced_chunks
         of them, pulls in that document's own best-matching chunk too --
         even if it wouldn't have ranked in the original top_k on its own.
-        Found live: a real query at the production top_k=1 default
-        returns ONLY late_fee_policy.md's chunk for a late-fee-amount
-        question, even though that chunk's own text says "(see
-        grace_period.md)" -- the model sees the reference but never the
-        referenced content. Opt-in, same reasoning as expand=True: a real
-        extra embedding query per reference, not free, and not yet
-        measured against real traffic (see eval/retrieval_benchmark.py)."""
+
+        Each result carries score_kind: "rerank" (cross-encoder logit),
+        "embedding" (negative cosine distance) or "mixed" (min-max
+        normalised across both). Scores are only comparable within a kind.
+        """
         if not self._texts:
             return []
 
         allowed_scopes = {"general", account_id} if account_id else {"general"}
         eligible = [
-            i for i, m in enumerate(self._metadatas)
-            if m.get("account_id") in allowed_scopes and (document_type is None or m.get("document_type") == document_type)
+            i for scope in allowed_scopes for i in self._by_scope.get(scope, ())
+            if document_type is None or self._metadatas[i]["document_type"] == document_type
         ]
+        eligible.sort()
         if not eligible:
             return []
 
@@ -206,18 +260,19 @@ class DocumentRetriever:
             #     embedding search alone had already ranked it correctly.
             # So for this case, skip both BM25 and the reranker, and trust
             # the multilingual embedding ranking as-is.
-            results = self._embedding_only_results(query, top_k, candidate_pool, allowed_scopes, document_type)
+            results = self._embedding_only_results(query, top_k, candidate_pool, eligible)
         else:
             queries = query_llm.expand_query(query) if expand else [query]
-            results = self._hybrid_rerank_results(queries, eligible, top_k, candidate_pool, allowed_scopes, document_type)
+            results = self._hybrid_rerank_results(queries, eligible, top_k, candidate_pool)
 
         if follow_references and results:
-            results = self._expand_with_references(results, query, allowed_scopes, document_type, max_referenced_chunks)
+            results = self._expand_with_references(results, query, eligible, max_referenced_chunks)
         return results
 
-    def _expand_with_references(
-        self, results: list[dict], query: str, allowed_scopes: set, document_type: str | None, max_referenced_chunks: int,
-    ) -> list[dict]:
+    def _result(self, i: int, score: float, score_kind: str, **extra) -> dict:
+        return {"text": self._texts[i], "relevance_score": score, "score_kind": score_kind, **self._metadatas[i], **extra}
+
+    def _expand_with_references(self, results: list[dict], query: str, eligible: list[int], max_referenced_chunks: int) -> list[dict]:
         already_included = {r["source_document"] for r in results}
         referenced: list[str] = []
         for r in results:
@@ -225,79 +280,49 @@ class DocumentRetriever:
                 if source_document not in already_included and source_document not in referenced:
                     referenced.append(source_document)
 
+        query_vector = np.asarray(embed_query(query), dtype=np.float32)
         for source_document in referenced[:max_referenced_chunks]:
-            distance_by_id = self._embed_candidates(
-                query, candidate_pool=1, allowed_scopes=allowed_scopes,
-                document_type=document_type, source_document_filter=source_document,
-            )
-            if not distance_by_id:
-                continue  # the reference is to a document outside this caller's allowed_scopes/document_type
-            doc_id, distance = next(iter(distance_by_id.items()))
-            i = self._ids.index(doc_id)
-            results.append({
-                "text": self._texts[i],
-                "relevance_score": -distance,
-                "referenced_from": True,  # distinguishes a pulled-in chunk from one the query itself ranked
-                **{k: v for k, v in self._metadatas[i].items()},
-            })
+            in_that_document = [i for i in eligible if self._metadatas[i]["source_document"] == source_document]
+            if not in_that_document:
+                continue  # the reference is to a document outside this caller's account scope / document_type
+            distances = self._distances(query_vector, in_that_document)
+            best = min(distances, key=distances.get)
+            results.append(self._result(best, -distances[best], "embedding", referenced_from=True))
         return results
 
-    def _embed_candidates(
-        self, query: str, candidate_pool: int, allowed_scopes: set, document_type: str | None = None,
-        source_document_filter: str | None = None,
-    ) -> dict:
-        """Runs one embedding query; returns {doc_id: distance} in the
-        best-first order the ORDER BY already returns them in.
+    def _distances(self, query_vector: np.ndarray, indices: list[int]) -> dict[int, float]:
+        """Cosine distance (1 - similarity; both sides are L2-normalised) from the query to each indexed chunk."""
+        sims = self._embeddings[indices] @ query_vector
+        return {i: float(1.0 - s) for i, s in zip(indices, sims)}
 
-        A live ANN query straight against document_chunks, capped at
-        candidate_pool results -- excludes superseded chunks in the same
-        WHERE clause (not left to Python-side filtering after the fact,
-        the way __init__'s own corpus load can afford to be): a stale
-        chunk with a near-identical embedding to its own corrected
-        successor could otherwise occupy one of a small pool's slots ahead
-        of a genuinely active candidate, or get returned as a doc_id
-        self._ids (active-only) can't look up at all.
+    def _nearest(self, query_vector: np.ndarray, candidate_pool: int, eligible: list[int]) -> dict[int, float]:
+        """{chunk index: distance} for the candidate_pool nearest eligible chunks, best first."""
+        distances = self._distances(query_vector, eligible)
+        return dict(sorted(distances.items(), key=lambda kv: kv[1])[:candidate_pool])
 
-        source_document_filter, if given, scopes candidates to one
-        specific document -- used by _expand_with_references to find that
-        REFERENCED document's own best-matching chunk for the query,
-        rather than competing against the whole corpus for a top_k slot.
-        """
-        params: list = [embedding_literal(embed_query(query))]
-        where = "account_id = any(%s) and superseded_at is null"
-        params.append(list(allowed_scopes))
-        if document_type is not None:
-            where += " and document_type = %s"
-            params.append(document_type)
-        if source_document_filter is not None:
-            where += " and source_document = %s"
-            params.append(source_document_filter)
-        params.append(candidate_pool)
-        rows = self._conn.execute(
-            f"select id, embedding <=> %s::vector as distance from document_chunks "
-            f"where {where} order by distance limit %s",
-            tuple(params),
-        ).fetchall()
-        return {r["id"]: r["distance"] for r in rows}
+    def _embed_candidates(self, query: str, candidate_pool: int, eligible: list[int]) -> dict[int, float]:
+        return self._nearest(np.asarray(embed_query(query), dtype=np.float32), candidate_pool, eligible)
 
-    def _embedding_only_results(
-        self, query: str, top_k: int, candidate_pool: int, allowed_scopes: set, document_type: str | None = None,
-    ) -> list[dict]:
-        distance_by_id = self._embed_candidates(query, candidate_pool, allowed_scopes, document_type)
-        ranked_ids = list(distance_by_id)  # already best-first from the ORDER BY
-        return [
-            {
-                "text": self._texts[i],
-                "relevance_score": -distance_by_id[self._ids[i]],  # higher = more relevant, matching rerank_score's sense
-                **{k: v for k, v in self._metadatas[i].items()},
-            }
-            for i in [self._ids.index(doc_id) for doc_id in ranked_ids][:top_k]
-        ]
+    def _embedding_only_results(self, query: str, top_k: int, candidate_pool: int, eligible: list[int]) -> list[dict]:
+        distance_by_index = self._embed_candidates(query, candidate_pool, eligible)
+        return [self._result(i, -d, "embedding") for i, d in list(distance_by_index.items())[:top_k]]
 
-    def _hybrid_rerank_results(
-        self, queries: list[str], eligible: list[int], top_k: int, candidate_pool: int, allowed_scopes: set,
-        document_type: str | None = None,
-    ) -> list[dict]:
+    def _fuse(self, by_rerank: list[tuple[int, float]], query_vectors: list[np.ndarray], best_distance: dict[int, float]) -> list[tuple[int, float]]:
+        """Reciprocal-rank fusion of the cross-encoder's order and the embedding's order (each candidate's nearest
+        distance over the query variants). Parameter-free apart from the conventional k=60. The score each result
+        keeps is still its cross-encoder score, the number the 'is this answerable' check reads."""
+        candidates = [i for i, _ in by_rerank]
+        for query_vector in query_vectors:
+            for i, distance in self._distances(query_vector, candidates).items():
+                if distance < best_distance.get(i, float("inf")):
+                    best_distance[i] = distance
+        rerank_rank = {i: r for r, i in enumerate(candidates, start=1)}
+        embedding_rank = {i: r for r, i in enumerate(sorted(candidates, key=lambda i: best_distance[i]), start=1)}
+        fused = {i: 1 / (_RRF_K + rerank_rank[i]) + 1 / (_RRF_K + embedding_rank[i]) for i in candidates}
+        score = dict(by_rerank)
+        return [(i, score[i]) for i in sorted(candidates, key=lambda i: fused[i], reverse=True)]
+
+    def _hybrid_rerank_results(self, queries: list[str], eligible: list[int], top_k: int, candidate_pool: int) -> list[dict]:
         """Pools BM25 + embedding candidates across every query variant,
         then reranks the union against EVERY variant and keeps each
         candidate's best score -- a candidate only needs to answer one
@@ -305,50 +330,39 @@ class DocumentRetriever:
         whole point of expansion (queries beyond the first are only ever
         real when expand=True passed more than one variant in).
 
-        retrieve()'s own comment above explains a real, already-found bug:
         _RERANK_MODEL (English-only MS MARCO) can DEMOTE a correct
         Devanagari result when the QUERY has no Latin content -- handled
-        there by skipping straight to _embedding_only_results. That guard
-        only looks at the query. The same unreliable English-only-reranker-
-        scoring-Devanagari pairing happens here even when the query IS
-        English, if a CANDIDATE CHUNK is itself Devanagari-dominant (e.g. a
-        real Hindi-language ingested document, an RBI circular, a Hindi
-        loan clause) -- the reranker still doesn't understand that chunk's
-        language regardless of which side of the pair is Devanagari. So
-        before calling the cross-encoder, candidates are split by their OWN
-        text's dominant script: Devanagari-dominant candidates skip the
-        cross-encoder entirely and are scored by embedding distance instead
-        (the same multilingual signal _embedding_only_results already
-        trusts for this exact reranker limitation) -- reusing the distances
-        _embed_candidates already returned in the pooling loop below rather
-        than issuing another embedding query. latin/mixed/none candidates
-        are reranked exactly as before.
+        in retrieve() by skipping straight to _embedding_only_results. The
+        same unreliable pairing happens here even when the query IS
+        English, if a CANDIDATE CHUNK is itself Devanagari-dominant (a real
+        Hindi-language ingested document). So before calling the
+        cross-encoder, candidates are split by their OWN text's dominant
+        script: Devanagari-dominant candidates skip the cross-encoder
+        entirely and are scored by embedding distance instead.
+        latin/mixed/none candidates are reranked exactly as before.
 
         The two groups' scores are not on a comparable scale (cross-encoder
         logits vs. embedding distance), so each group is independently
         min-max normalized to [0, 1] (see _min_max_normalize) before the
         merged sort. Chose min-max over a plain rank-position merge because
-        it preserves within-group separation in the final score -- a
-        Devanagari candidate that's a landslide best match by embedding
-        distance should land near 1.0, not merely "ahead of its
-        groupmates," which is all rank position would encode; with only
-        rank position, a decisive win and a coin-toss margin would look
-        identical in the merged score. When there are no Devanagari
-        candidates at all (the common case), this whole split is skipped
-        and scoring is byte-for-byte the original single-group behavior --
-        no scale change for the path this fix isn't targeting.
+        it preserves within-group separation in the final score. When
+        there are no Devanagari candidates at all (the common case), this
+        whole split is skipped and the scores are the raw cross-encoder ones.
         """
         candidate_indices = set()
         best_distance: dict[int, float] = {}
+        query_vectors: list[np.ndarray] = []
         for q in queries:
             q_tokens = _tokenize(q)
             if q_tokens:
                 bm25_scores = self._bm25.get_scores(q_tokens)
-                bm25_ranked = sorted(eligible, key=lambda i: bm25_scores[i], reverse=True)
+                # A chunk sharing no word with the query is not a keyword candidate, however empty the pool is.
+                bm25_ranked = [i for i in sorted(eligible, key=lambda i: bm25_scores[i], reverse=True)
+                               if bm25_scores[i] > 0 or not self.keyword_overlap_required]
                 candidate_indices |= set(bm25_ranked[:candidate_pool])
-            embed_ids = self._embed_candidates(q, candidate_pool, allowed_scopes, document_type)
-            for doc_id, distance in embed_ids.items():
-                i = self._ids.index(doc_id)
+            query_vector = np.asarray(embed_query(q), dtype=np.float32)
+            query_vectors.append(query_vector)
+            for i, distance in self._nearest(query_vector, candidate_pool, eligible).items():
                 candidate_indices.add(i)
                 if distance < best_distance.get(i, float("inf")):
                     best_distance[i] = distance
@@ -357,43 +371,33 @@ class DocumentRetriever:
             return []
 
         devanagari_indices = {i for i in candidate_indices if _dominant_script(self._texts[i]) == "devanagari"}
-        reranked_indices = candidate_indices - devanagari_indices
+        reranked_indices = sorted(candidate_indices - devanagari_indices)
 
         best_score: dict[int, float] = {}
         if reranked_indices:
             for q in queries:
-                pairs = [(q, self._texts[i]) for i in reranked_indices]
+                pairs = [(q, self._search_texts[i]) for i in reranked_indices]
                 for i, score in zip(reranked_indices, self._reranker.predict(pairs)):
                     score = float(score)
                     if score > best_score.get(i, float("-inf")):
                         best_score[i] = score
 
         if not devanagari_indices:
-            # Common case, unchanged: no scale-merging needed or done.
             ranked = sorted(best_score.items(), key=lambda x: x[1], reverse=True)
+            if self.fusion == "rrf":
+                ranked = self._fuse(ranked, query_vectors, best_distance)
+            kind = "rerank"
         else:
             # A Devanagari candidate that never appeared in ANY query
             # variant's top candidate_pool embedding results (only entered
-            # via a BM25 tie at score 0 -- the same degenerate "whichever
-            # chunk was ingested first" tie-break retrieve()'s own comment
-            # documents for the whole-query case) has no embedding distance
-            # to reuse. Getting one would mean a fresh embedding call this
-            # fix is deliberately avoiding, so instead it's treated as the
-            # least relevant member of its own group -- conservative, not a
-            # crash-avoidance hack: the embedding stage itself never judged
-            # it a close match for any phrasing of this query.
+            # via a BM25 tie) has no embedding distance to reuse, so it is
+            # treated as the least relevant member of its own group.
             fallback_distance = max(best_distance.values(), default=0.0) + 1.0
             devanagari_raw = {i: -best_distance.get(i, fallback_distance) for i in devanagari_indices}
 
             normalized = _min_max_normalize(best_score)
             normalized.update(_min_max_normalize(devanagari_raw))
             ranked = sorted(normalized.items(), key=lambda x: x[1], reverse=True)
+            kind = "mixed"
 
-        return [
-            {
-                "text": self._texts[i],
-                "relevance_score": score,
-                **{k: v for k, v in self._metadatas[i].items()},
-            }
-            for i, score in ranked[:top_k]
-        ]
+        return [self._result(i, score, kind) for i, score in ranked[:top_k]]

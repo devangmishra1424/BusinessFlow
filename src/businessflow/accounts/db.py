@@ -14,6 +14,7 @@ before returning -- rather than holding one connection open forever.
 """
 
 import os
+from contextlib import contextmanager
 from functools import lru_cache
 
 import psycopg
@@ -73,6 +74,15 @@ class _PooledExecutor:
             # buffer, and calling fetchall() on those raises.
             rows = cursor.fetchall() if cursor.description is not None else None
             return _BufferedCursor(rows)
+
+    @contextmanager
+    def transaction(self):
+        """One pooled connection held for a BEGIN ... COMMIT block, yielded as a plain psycopg connection (rows come
+        back as dicts). Pooled connections are autocommit, so outside this every execute() commits on its own; use it
+        when several statements must succeed or fail together. An exception inside the block rolls everything back."""
+        with self._pool.connection() as conn:
+            with conn.transaction():
+                yield conn
 
 
 def check_database(timeout_seconds: int = 5) -> None:

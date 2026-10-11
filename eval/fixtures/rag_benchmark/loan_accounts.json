@@ -1,0 +1,14 @@
+{
+  "_about": "Loan terms of the nine synthetic demo accounts, frozen so the loan-agreement benchmark renders the same agreements (through scripts/seed_loan_agreements.py's own template) on any machine without a database. All names, firms and figures are made-up demo data. emi_due_date is fixed, not 'today'.",
+  "accounts": [
+    {"account_id": "BF-1001", "loan_type": "Working Capital Loan", "principal": 250000, "emi": 12500, "tenure_months": 24, "months_remaining": 14, "emi_due_date": "2026-10-07", "rate": 14.5},
+    {"account_id": "BF-1002", "loan_type": "Equipment Loan", "principal": 500000, "emi": 22000, "tenure_months": 36, "months_remaining": 20, "emi_due_date": "2026-09-29", "rate": 13.5},
+    {"account_id": "BF-1003", "loan_type": "Working Capital Loan", "principal": 800000, "emi": 35000, "tenure_months": 30, "months_remaining": 11, "emi_due_date": "2026-09-20", "rate": 18.5},
+    {"account_id": "BF-1004", "loan_type": "Business Expansion Loan", "principal": 600000, "emi": 28000, "tenure_months": 30, "months_remaining": 22, "emi_due_date": "2026-09-28", "rate": 13.75},
+    {"account_id": "BF-1005", "loan_type": "Working Capital Loan", "principal": 400000, "emi": 18000, "tenure_months": 24, "months_remaining": 10, "emi_due_date": "2026-10-05", "rate": 15.5},
+    {"account_id": "BF-1006", "loan_type": "Equipment Loan", "principal": 350000, "emi": 15000, "tenure_months": 24, "months_remaining": 18, "emi_due_date": "2026-10-20", "rate": 13.75},
+    {"account_id": "BF-1007", "loan_type": "Working Capital Loan", "principal": 500000, "emi": 20000, "tenure_months": 30, "months_remaining": 15, "emi_due_date": "2026-09-25", "rate": 12.25},
+    {"account_id": "BF-1008", "loan_type": "Equipment Loan", "principal": 750000, "emi": 30000, "tenure_months": 36, "months_remaining": 24, "emi_due_date": "2026-10-08", "rate": 17.75},
+    {"account_id": "BF-1009", "loan_type": "Working Capital Loan", "principal": 300000, "emi": 14000, "tenure_months": 24, "months_remaining": 12, "emi_due_date": "2026-10-02", "rate": 14.0}
+  ]
+}

@@ -49,19 +49,54 @@ second, genuinely multi-stage pipeline exists where that latency budget
 *doesn't* apply -- report generation runs gather -> analyze -> write -> a
 mechanical accuracy-check pass, each stage's output checked against the last.
 
-**RAG that's tuned, measured, and grounded, not just wired up.** Hybrid
+**RAG that's measured, with the numbers and their limits stated.** Hybrid
 retrieval -- BM25 keyword search plus multilingual embeddings plus a
-cross-encoder reranker -- over both the policy knowledge base and
-per-account uploaded documents (a signed loan agreement, say), backed by
-pgvector on the same Postgres project as every other table rather than a
-side vector store nobody keeps in sync. LLM-based query translation was
-built and measured against this exact KB: recall@1 went 0.61 -> 0.79 on
-Hindi/Hinglish queries once it shipped. Document ingestion (Docling)
-handles a genuinely scanned, image-only upload too -- OCR isn't a bolt-on,
-it's Docling's own bundled engine (RapidOCR), confirmed live end-to-end
-(a real image-only PDF, correctly OCR'd, chunked, embedded, and retrievable)
-and locked in by a real regression test (`tests/test_ingest.py`), not just
-assumed to work because a library flag defaults to on. Query expansion and a higher
+cross-encoder reranker -- over the policy knowledge base and each borrower's
+own uploaded documents, stored in pgvector on the same Postgres project as
+every other table. Each service answers from one in-memory snapshot of the
+chunks and their embeddings and re-checks a one-query fingerprint of the
+table every 15 seconds, so an uploaded document is searchable within
+seconds with no restart. (An earlier design read the text from a snapshot
+but ran the embedding search live against the table, and raised an error
+whenever a document arrived between the two.) Ingestion (Docling) is
+all-or-nothing: parse, check the text is readable, embed, then replace the
+old version in one transaction, so a failed or concurrent upload can never
+leave a document retired with no replacement. Uploads take PDF, Word and
+Markdown; a scanned PDF goes through Docling's bundled English OCR (rendered
+test scans, skewed and noisy ones included, came back with every key
+figure), and a scan with no readable text -- blank, too poor, or Hindi, which
+that OCR cannot read -- is refused with an explanation instead of being stored
+as junk (`tests/test_ingest_readability.py`).
+
+`python -m eval.retrieval_benchmark` rebuilds the corpus from the repo with no
+database and scores four question sets: 38 development questions, 47
+held-out ones written before any variant was run, 270 loan-agreement fact
+questions (30 distinct questions asked once per borrower; the intervals
+resample the 30), and 30 the documents cannot answer. Every change is
+compared with its parent on the same questions under a decision rule fixed in
+advance (a change ships only if a paired 95% interval clears zero), and the
+report is `eval/results/retrieval_benchmark.md`. As deployed, a correct chunk
+is among the two the agent receives for 71% of the development questions
+(55-84%), 94% of the held-out ones (85-100%) and 92% of the loan-agreement
+fact questions (82-99%), and none of the 2,160 retrievals the benchmark ran for
+borrower-scoped questions returned another borrower's document. The LLM
+translation of Hindi and Hinglish questions is worth measuring because the
+keyword and rerank stages are English-only: without it Recall@2 falls by 0.09
+on the held-out questions and 0.16 on the loan ones, both intervals below
+zero (0.08 on the development set, where the interval includes zero). A larger candidate pool, putting heading paths into the text, and
+rank fusion were each tried and none cleared the rule (a pool of 8 gained
+0.05-0.08 on the development and loan questions but its intervals touch zero,
+and it costs roughly 25-90% more latency; headings improved the development
+set by 0.06 MRR but the held-out set pointed the other way, -0.02, so the gain
+was not confirmed), so none was adopted. A score threshold for "nothing relevant"
+keeps 97% of answerable questions but drops only 35% of the in-domain
+questions the documents cannot answer, so it is not used as a safety
+mechanism. Where it still misses: loosely worded questions (Recall@2 0.76 for
+the colloquial phrasing of the loan questions, against 1.00 for the clean and
+Hinglish ones). Limits: the questions were written by the engineer who built the
+retriever, n is small, the loan agreements all come from one template, and
+ground truth is a heading or an answer string, not a human judgement of
+the chunk. Query expansion and a higher
 reasoning-effort setting were also built and A/B tested against real traffic
 -- both showed no clear win at this scale, so both stayed off by default
 rather than shipped on faith. That earlier round was a manual, run-then-
@@ -290,6 +325,14 @@ worse than one that lists them:
   through every table and query, per-org ops credentials, and per-org RAG
   scoping -- not just a schema column. Deliberately not built: this is a
   single-tenant proof of concept, not a live multi-customer product yet.
+- **Scanned-document OCR reads English, not Hindi.** Docling's bundled OCR
+  returned garbage for a clean Devanagari scan (confidence 0.50-0.57 against
+  0.93-0.99 for English), so an upload like that is refused with a message
+  asking for the text version rather than ingested. Phone photos (jpg/png)
+  are not accepted at all -- only PDF, Word and Markdown. A heavily degraded
+  English scan can also come back empty (also refused), and a moderately
+  degraded two-page one missed one figure in six, which no confidence check
+  catches. Tested on scans rendered here, not on real-world ones.
 - **Voice accent and quality.** English is spoken by Piper `en_US-lessac` (an American voice; Piper has no
   Indian-English voice, and it reads as a little mechanical) and Hindi by Piper's `hi_IN` priyamvada voice, with Meta
   MMS-TTS as the automatic fallback (`TTS_HINDI_ENGINE=mms` makes it the first choice; `PIPER_HINDI_VOICE` picks
