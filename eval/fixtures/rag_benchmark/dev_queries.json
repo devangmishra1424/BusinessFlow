@@ -1,0 +1,312 @@
+{
+  "_about": "The 38 policy questions the retriever was developed and tuned against (33 original + 5 late-fee questions added after a real borrower conversation showed 'fine'-worded questions never reached the late-fee policy). Settings are chosen on this set and confirmed on heldout_queries.json. acceptable_headings is any-of.",
+  "queries": [
+    {
+      "text": "is there someone I can talk to about a payment that's not showing up on my end",
+      "acceptable_headings": [
+        "Dispute handling"
+      ],
+      "style": "clean",
+      "language": "en"
+    },
+    {
+      "text": "yo i defo already paid tht EMI last wk trust me, sumthing wrong w ur system, pls fix???",
+      "acceptable_headings": [
+        "Dispute handling"
+      ],
+      "style": "typo_slang",
+      "language": "en"
+    },
+    {
+      "text": "mera jo late fee laga hai na wo galat hai yaar, maine to time pe paisa diya tha",
+      "acceptable_headings": [
+        "Dispute handling"
+      ],
+      "style": "hinglish",
+      "language": "hinglish"
+    },
+    {
+      "text": "somethings off with my account balance, doesnt look right to me at all",
+      "acceptable_headings": [
+        "Dispute handling"
+      ],
+      "style": "vague_colloquial",
+      "language": "en"
+    },
+    {
+      "text": "ok so this is driving me crazy the amount you guys are showing is just wrong i paid already and idk why its still saying pending this cant be right can someone look into this",
+      "acceptable_headings": [
+        "Dispute handling"
+      ],
+      "style": "run_on_venting",
+      "language": "en"
+    },
+    {
+      "text": "when does this actually get handed off to an actual human being",
+      "acceptable_headings": [
+        "Escalation policy"
+      ],
+      "style": "clean",
+      "language": "en"
+    },
+    {
+      "text": "agar mai baar baar promise tod du to kya hoga, insaan se baat hogi kya",
+      "acceptable_headings": [
+        "Escalation policy",
+        "What blocks an automated offer"
+      ],
+      "style": "hinglish",
+      "language": "hinglish"
+    },
+    {
+      "text": "can this get bumped up to a real person or nah",
+      "acceptable_headings": [
+        "Escalation policy"
+      ],
+      "style": "vague_colloquial",
+      "language": "en"
+    },
+    {
+      "text": "अगर मैं दो बार वादा तोड़ दूं तो क्या होगा",
+      "acceptable_headings": [
+        "Escalation policy",
+        "What blocks an automated offer"
+      ],
+      "style": "devanagari",
+      "language": "hi"
+    },
+    {
+      "text": "if I promise to pay by the 25th and I actually pay on the 27th does that still count",
+      "acceptable_headings": [
+        "Promise to pay"
+      ],
+      "style": "clean",
+      "language": "en"
+    },
+    {
+      "text": "does it still count if im lyk 2 days off from wat i promised",
+      "acceptable_headings": [
+        "Promise to pay"
+      ],
+      "style": "typo_slang",
+      "language": "en"
+    },
+    {
+      "text": "maine 20 tak dene ka bola tha, 2 din late ho gaya to chalega kya",
+      "acceptable_headings": [
+        "Promise to pay"
+      ],
+      "style": "hinglish",
+      "language": "hinglish"
+    },
+    {
+      "text": "why is an AI calling me, doesn't the bank just auto-deduct this every month anyway",
+      "acceptable_headings": [
+        "NACH auto-debit mandate"
+      ],
+      "style": "clean",
+      "language": "en"
+    },
+    {
+      "text": "isnt this supposed to come out on its own why am i even hearing from u about it",
+      "acceptable_headings": [
+        "NACH auto-debit mandate"
+      ],
+      "style": "vague_colloquial",
+      "language": "en"
+    },
+    {
+      "text": "mera to auto debit hai na, phir ye call kyu aa rahi hai mujhe",
+      "acceptable_headings": [
+        "NACH auto-debit mandate"
+      ],
+      "style": "hinglish",
+      "language": "hinglish"
+    },
+    {
+      "text": "can you just waive this interest for me, just this once",
+      "acceptable_headings": [
+        "What the agent cannot do"
+      ],
+      "style": "clean",
+      "language": "en"
+    },
+    {
+      "text": "look i dont have the money can u just like remove the interest or lower the rate or something i really need a break here",
+      "acceptable_headings": [
+        "What the agent cannot do"
+      ],
+      "style": "run_on_venting",
+      "language": "en"
+    },
+    {
+      "text": "interest rate thoda kam kar do na please, itna zyada nahi de sakta",
+      "acceptable_headings": [
+        "What the agent cannot do"
+      ],
+      "style": "hinglish",
+      "language": "hinglish"
+    },
+    {
+      "text": "is there any buffer time before it's actually counted as late",
+      "acceptable_headings": [
+        "Grace period"
+      ],
+      "style": "clean",
+      "language": "en"
+    },
+    {
+      "text": "wil i get charged a late fee if im jst 2 days late paying",
+      "acceptable_headings": [
+        "Grace period"
+      ],
+      "style": "typo_slang",
+      "language": "en"
+    },
+    {
+      "text": "thoda time mil sakta hai kya bina late fee lagaye",
+      "acceptable_headings": [
+        "Grace period"
+      ],
+      "style": "hinglish",
+      "language": "hinglish"
+    },
+    {
+      "text": "क्या मुझे कुछ और दिन मिल सकते हैं बिना जुर्माने के",
+      "acceptable_headings": [
+        "Grace period"
+      ],
+      "style": "devanagari",
+      "language": "hi"
+    },
+    {
+      "text": "is there any fine i would have to pay if i fail to pay my emi on time",
+      "acceptable_headings": [
+        "Late fee policy"
+      ],
+      "style": "clean",
+      "language": "en"
+    },
+    {
+      "text": "is there any fine i would have to pay",
+      "acceptable_headings": [
+        "Late fee policy"
+      ],
+      "style": "vague_colloquial",
+      "language": "en"
+    },
+    {
+      "text": "wut happens if i pay late, do i get charged extra or wat",
+      "acceptable_headings": [
+        "Late fee policy"
+      ],
+      "style": "typo_slang",
+      "language": "en"
+    },
+    {
+      "text": "agar mai EMI time pe nahi doon to koi fine lagta hai kya",
+      "acceptable_headings": [
+        "Late fee policy"
+      ],
+      "style": "hinglish",
+      "language": "hinglish"
+    },
+    {
+      "text": "क्या मुझे देर से भुगतान पर कोई जुर्माना देना होगा",
+      "acceptable_headings": [
+        "Late fee policy"
+      ],
+      "style": "devanagari",
+      "language": "hi"
+    },
+    {
+      "text": "can you stretch out my loan so the monthly amount is smaller",
+      "acceptable_headings": [
+        "Extend tenure"
+      ],
+      "style": "clean",
+      "language": "en"
+    },
+    {
+      "text": "is there a way to make the monthly hit smaller even if it takes longer overall",
+      "acceptable_headings": [
+        "Extend tenure"
+      ],
+      "style": "vague_colloquial",
+      "language": "en"
+    },
+    {
+      "text": "EMI kam karne ka koi tarika hai kya, chahe time zyada lag jaye",
+      "acceptable_headings": [
+        "Extend tenure"
+      ],
+      "style": "hinglish",
+      "language": "hinglish"
+    },
+    {
+      "text": "if I pay it all off right now in one go do I get any kind of discount",
+      "acceptable_headings": [
+        "One-time settlement"
+      ],
+      "style": "clean",
+      "language": "en"
+    },
+    {
+      "text": "honestly im so done with this loan can i just pay the whole remaining thing today and be done with it forever",
+      "acceptable_headings": [
+        "One-time settlement"
+      ],
+      "style": "run_on_venting",
+      "language": "en"
+    },
+    {
+      "text": "poora loan ek baar mein khatam karna hai, discount milega kya usme",
+      "acceptable_headings": [
+        "One-time settlement"
+      ],
+      "style": "hinglish",
+      "language": "hinglish"
+    },
+    {
+      "text": "why can't you just restructure my loan right now, whats the holdup",
+      "acceptable_headings": [
+        "What blocks an automated offer",
+        "Escalation policy"
+      ],
+      "style": "clean",
+      "language": "en"
+    },
+    {
+      "text": "how come the system wont let this go through for me",
+      "acceptable_headings": [
+        "What blocks an automated offer"
+      ],
+      "style": "vague_colloquial",
+      "language": "en"
+    },
+    {
+      "text": "whats the least amount I could pay this month and still be okay",
+      "acceptable_headings": [
+        "Partial payment for a single cycle"
+      ],
+      "style": "clean",
+      "language": "en"
+    },
+    {
+      "text": "is mahine thoda kam de doon to chalega kya, poora nahi hai mere paas abhi",
+      "acceptable_headings": [
+        "Partial payment for a single cycle"
+      ],
+      "style": "hinglish",
+      "language": "hinglish"
+    },
+    {
+      "text": "wats the min i can pay rn instead of the full emi amount",
+      "acceptable_headings": [
+        "Partial payment for a single cycle"
+      ],
+      "style": "typo_slang",
+      "language": "en"
+    }
+  ]
+}

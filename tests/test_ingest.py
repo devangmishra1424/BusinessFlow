@@ -130,3 +130,126 @@ def test_ingest_document_extracts_text_from_a_scanned_image_only_pdf_via_ocr():
         assert "36" in text
     finally:
         delete_chunks_for_document(fixture_path)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# All-or-nothing ingestion, serialised per document, and a retriever that is one consistent snapshot.
+# ---------------------------------------------------------------------------------------------------------------------
+
+import threading  # noqa: E402
+
+import psycopg  # noqa: E402
+
+from businessflow.rag import ingest as ingest_module  # noqa: E402
+from businessflow.rag.ingest import ChunkRecord, UnreadableDocumentError  # noqa: E402
+from businessflow.rag.retriever import DocumentRetriever, corpus_fingerprint  # noqa: E402
+
+
+def _active_texts(path: str) -> list[str]:
+    rows = get_connection().execute(
+        "select document_text from document_chunks where source_document = %s and superseded_at is null order by chunk_index",
+        (normalize_source_document(path),),
+    ).fetchall()
+    return [r["document_text"] for r in rows]
+
+
+def test_a_failure_while_writing_the_new_version_leaves_the_previous_one_active(monkeypatch):
+    path = _write_temp_doc("# Terms v1\n\nThe original waiver is exactly twelve percent of the outstanding balance.\n")
+    try:
+        ingest_document(path, document_type="loan_agreement")
+        before = _active_texts(path)
+        assert before and "twelve percent" in before[0]
+
+        # A NUL byte cannot be stored in a Postgres text column: the insert fails INSIDE the transaction, after the
+        # old generation was marked superseded. Everything must roll back, not leave the document retired.
+        monkeypatch.setattr(ingest_module, "parse_and_chunk", lambda p: [ChunkRecord(text="corrupt \x00 chunk text of some length", headings="")])
+        with pytest.raises(psycopg.Error):
+            ingest_document(path, document_type="loan_agreement")
+
+        assert _active_texts(path) == before
+        assert len(get_chunk_ids_for_document(path)) == len(before), "a rolled-back ingest must not leave rows behind either"
+    finally:
+        delete_chunks_for_document(path)
+        os.unlink(path)
+
+
+def test_an_unreadable_replacement_is_refused_and_the_previous_version_stays_active(monkeypatch):
+    path = _write_temp_doc("# Terms v1\n\nThe original waiver is exactly twelve percent of the outstanding balance.\n")
+    try:
+        ingest_document(path, document_type="loan_agreement")
+        before = _active_texts(path)
+
+        def unreadable(file_path):
+            raise UnreadableDocumentError("no readable text could be extracted")
+
+        monkeypatch.setattr(ingest_module, "parse_and_chunk", unreadable)
+        with pytest.raises(UnreadableDocumentError):
+            ingest_document(path, document_type="loan_agreement")
+
+        assert _active_texts(path) == before
+    finally:
+        delete_chunks_for_document(path)
+        os.unlink(path)
+
+
+def test_concurrent_uploads_of_the_same_document_leave_exactly_one_active_version():
+    path = _write_temp_doc("# Terms\n\nThe waiver clause applies once per loan and is recorded in the schedule.\n")
+    errors = []
+
+    def upload():
+        try:
+            ingest_document(path, document_type="loan_agreement")
+        except Exception as e:  # noqa: BLE001 - the test reports whatever a racing upload raises
+            errors.append(e)
+
+    try:
+        threads = [threading.Thread(target=upload) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=300)
+
+        assert not errors, errors
+        rows = get_chunk_ids_for_document(path)
+        active = [r for r in rows if r["superseded_at"] is None]
+        assert len(active) == 1, f"{len(active)} active chunks after 4 racing uploads of a one-chunk document"
+        assert len(rows) == 4, "each upload writes its own generation; all but the last are superseded"
+    finally:
+        delete_chunks_for_document(path)
+        os.unlink(path)
+
+
+def test_the_corpus_fingerprint_changes_when_a_document_is_added_replaced_or_removed():
+    path = _write_temp_doc("# Terms\n\nThe first wording of this clause is long enough to be a real chunk.\n")
+    try:
+        start = corpus_fingerprint()
+        ingest_document(path, document_type="loan_agreement")
+        added = corpus_fingerprint()
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("# Terms\n\nThe second wording of this clause is long enough to be a real chunk.\n")
+        ingest_document(path, document_type="loan_agreement")
+        replaced = corpus_fingerprint()
+        assert len({start, added, replaced}) == 3
+    finally:
+        delete_chunks_for_document(path)
+        os.unlink(path)
+    assert corpus_fingerprint() != replaced
+
+
+def test_a_retriever_built_before_an_upload_answers_from_its_snapshot_and_never_crashes():
+    # The bug this design fixes: the embedding search ran live against the table while the text came from a snapshot,
+    # so a chunk ingested after the snapshot was found by the search, was missing from the snapshot, and raised.
+    path = _write_temp_doc("# Terms\n\nA special quarterly rebate of exactly seven point five percent applies to this loan.\n")
+    try:
+        snapshot = DocumentRetriever()
+        ingest_document(path, document_type="loan_agreement", account_id="BF-1001")
+
+        results = snapshot.retrieve("what is the quarterly rebate percentage", top_k=3, account_id="BF-1001")  # must not raise
+        assert not any("seven point five" in r["text"] for r in results), "the old snapshot cannot know a later upload"
+
+        assert snapshot.fingerprint != corpus_fingerprint(), "...which is exactly what the fingerprint check detects"
+        fresh = DocumentRetriever().retrieve("what is the quarterly rebate percentage", top_k=3, account_id="BF-1001")
+        assert any("seven point five" in r["text"] for r in fresh)
+    finally:
+        delete_chunks_for_document(path)
+        os.unlink(path)

@@ -1,824 +1,2456 @@
 {
-  "expand_false": {
-    "overall": {
-      "n": 33,
-      "recall@1": 0.7879,
-      "recall@3": 0.9091,
-      "recall@5": 0.9697,
-      "mrr": 0.8571
-    },
-    "by_style": {
-      "clean": {
-        "n": 10,
-        "recall@1": 0.7,
-        "recall@3": 0.9,
-        "recall@5": 1.0,
-        "mrr": 0.82
-      },
-      "devanagari": {
-        "n": 2,
-        "recall@1": 1.0,
-        "recall@3": 1.0,
-        "recall@5": 1.0,
-        "mrr": 1.0
-      },
-      "hinglish": {
-        "n": 9,
-        "recall@1": 0.8889,
-        "recall@3": 1.0,
-        "recall@5": 1.0,
-        "mrr": 0.9444
-      },
-      "run_on_venting": {
-        "n": 3,
-        "recall@1": 1.0,
-        "recall@3": 1.0,
-        "recall@5": 1.0,
-        "mrr": 1.0
-      },
-      "typo_slang": {
-        "n": 4,
-        "recall@1": 0.75,
-        "recall@3": 0.75,
-        "recall@5": 0.75,
-        "mrr": 0.75
-      },
-      "vague_colloquial": {
-        "n": 5,
-        "recall@1": 0.6,
-        "recall@3": 0.8,
-        "recall@5": 1.0,
-        "mrr": 0.7167
-      }
-    },
-    "by_language": {
-      "en": {
-        "n": 22,
-        "recall@1": 0.7273,
-        "recall@3": 0.8636,
-        "recall@5": 0.9545,
-        "mrr": 0.8083
-      },
-      "hi": {
-        "n": 2,
-        "recall@1": 1.0,
-        "recall@3": 1.0,
-        "recall@5": 1.0,
-        "mrr": 1.0
-      },
-      "hinglish": {
-        "n": 9,
-        "recall@1": 0.8889,
-        "recall@3": 1.0,
-        "recall@5": 1.0,
-        "mrr": 0.9444
-      }
-    },
-    "rows": [
-      {
-        "query": "is there someone I can talk to about a payment that's not showing up on my end",
-        "style": "clean",
-        "language": "en",
-        "acceptable_headings": [
-          "Dispute handling"
-        ],
-        "rank": 2,
-        "top_result_headings": "Grace period policy"
-      },
-      {
-        "query": "yo i defo already paid tht EMI last wk trust me, sumthing wrong w ur system, pls fix???",
-        "style": "typo_slang",
-        "language": "en",
-        "acceptable_headings": [
-          "Dispute handling"
-        ],
-        "rank": null,
-        "top_result_headings": "Restructuring options > Partial payment for a single cycle"
-      },
-      {
-        "query": "mera jo late fee laga hai na wo galat hai yaar, maine to time pe paisa diya tha",
-        "style": "hinglish",
-        "language": "hinglish",
-        "acceptable_headings": [
-          "Dispute handling"
-        ],
-        "rank": 1,
-        "top_result_headings": "Dispute handling policy"
-      },
-      {
-        "query": "somethings off with my account balance, doesnt look right to me at all",
-        "style": "vague_colloquial",
-        "language": "en",
-        "acceptable_headings": [
-          "Dispute handling"
-        ],
-        "rank": 1,
-        "top_result_headings": "Dispute handling policy"
-      },
-      {
-        "query": "ok so this is driving me crazy the amount you guys are showing is just wrong i paid already and idk why its still saying pending this cant be right can someone look into this",
-        "style": "run_on_venting",
-        "language": "en",
-        "acceptable_headings": [
-          "Dispute handling"
-        ],
-        "rank": 1,
-        "top_result_headings": "Dispute handling policy"
-      },
-      {
-        "query": "when does this actually get handed off to an actual human being",
-        "style": "clean",
-        "language": "en",
-        "acceptable_headings": [
-          "Escalation policy"
-        ],
-        "rank": 1,
-        "top_result_headings": "Escalation policy"
-      },
-      {
-        "query": "agar mai baar baar promise tod du to kya hoga, insaan se baat hogi kya",
-        "style": "hinglish",
-        "language": "hinglish",
-        "acceptable_headings": [
-          "Escalation policy",
-          "What blocks an automated offer"
-        ],
-        "rank": 1,
-        "top_result_headings": "Restructuring options > What blocks an automated offer"
-      },
-      {
-        "query": "can this get bumped up to a real person or nah",
-        "style": "vague_colloquial",
-        "language": "en",
-        "acceptable_headings": [
-          "Escalation policy"
-        ],
-        "rank": 1,
-        "top_result_headings": "Escalation policy"
-      },
-      {
-        "query": "अगर मैं दो बार वादा तोड़ दूं तो क्या होगा",
-        "style": "devanagari",
-        "language": "hi",
-        "acceptable_headings": [
-          "Escalation policy",
-          "What blocks an automated offer"
-        ],
-        "rank": 1,
-        "top_result_headings": "Restructuring options > What blocks an automated offer"
-      },
-      {
-        "query": "if I promise to pay by the 25th and I actually pay on the 27th does that still count",
-        "style": "clean",
-        "language": "en",
-        "acceptable_headings": [
-          "Promise to pay"
-        ],
-        "rank": 1,
-        "top_result_headings": "General FAQ > Promise to pay"
-      },
-      {
-        "query": "does it still count if im lyk 2 days off from wat i promised",
-        "style": "typo_slang",
-        "language": "en",
-        "acceptable_headings": [
-          "Promise to pay"
-        ],
-        "rank": 1,
-        "top_result_headings": "General FAQ > Promise to pay"
-      },
-      {
-        "query": "maine 20 tak dene ka bola tha, 2 din late ho gaya to chalega kya",
-        "style": "hinglish",
-        "language": "hinglish",
-        "acceptable_headings": [
-          "Promise to pay"
-        ],
-        "rank": 2,
-        "top_result_headings": "Grace period policy"
-      },
-      {
-        "query": "why is an AI calling me, doesn't the bank just auto-deduct this every month anyway",
-        "style": "clean",
-        "language": "en",
-        "acceptable_headings": [
-          "NACH auto-debit mandate"
-        ],
-        "rank": 1,
-        "top_result_headings": "General FAQ > NACH auto-debit mandate"
-      },
-      {
-        "query": "isnt this supposed to come out on its own why am i even hearing from u about it",
-        "style": "vague_colloquial",
-        "language": "en",
-        "acceptable_headings": [
-          "NACH auto-debit mandate"
-        ],
-        "rank": 3,
-        "top_result_headings": "Escalation policy"
-      },
-      {
-        "query": "mera to auto debit hai na, phir ye call kyu aa rahi hai mujhe",
-        "style": "hinglish",
-        "language": "hinglish",
-        "acceptable_headings": [
-          "NACH auto-debit mandate"
-        ],
-        "rank": 1,
-        "top_result_headings": "General FAQ > NACH auto-debit mandate"
-      },
-      {
-        "query": "can you just waive this interest for me, just this once",
-        "style": "clean",
-        "language": "en",
-        "acceptable_headings": [
-          "What the agent cannot do"
-        ],
-        "rank": 1,
-        "top_result_headings": "General FAQ > What the agent cannot do"
-      },
-      {
-        "query": "look i dont have the money can u just like remove the interest or lower the rate or something i really need a break here",
-        "style": "run_on_venting",
-        "language": "en",
-        "acceptable_headings": [
-          "What the agent cannot do"
-        ],
-        "rank": 1,
-        "top_result_headings": "General FAQ > What the agent cannot do"
-      },
-      {
-        "query": "interest rate thoda kam kar do na please, itna zyada nahi de sakta",
-        "style": "hinglish",
-        "language": "hinglish",
-        "acceptable_headings": [
-          "What the agent cannot do"
-        ],
-        "rank": 1,
-        "top_result_headings": "General FAQ > What the agent cannot do"
-      },
-      {
-        "query": "is there any buffer time before it's actually counted as late",
-        "style": "clean",
-        "language": "en",
-        "acceptable_headings": [
-          "Grace period"
-        ],
-        "rank": 1,
-        "top_result_headings": "Grace period policy"
-      },
-      {
-        "query": "wil i get charged a late fee if im jst 2 days late paying",
-        "style": "typo_slang",
-        "language": "en",
-        "acceptable_headings": [
-          "Grace period"
-        ],
-        "rank": 1,
-        "top_result_headings": "Grace period policy"
-      },
-      {
-        "query": "thoda time mil sakta hai kya bina late fee lagaye",
-        "style": "hinglish",
-        "language": "hinglish",
-        "acceptable_headings": [
-          "Grace period"
-        ],
-        "rank": 1,
-        "top_result_headings": "Grace period policy"
-      },
-      {
-        "query": "क्या मुझे कुछ और दिन मिल सकते हैं बिना जुर्माने के",
-        "style": "devanagari",
-        "language": "hi",
-        "acceptable_headings": [
-          "Grace period"
-        ],
-        "rank": 1,
-        "top_result_headings": "Grace period policy"
-      },
-      {
-        "query": "can you stretch out my loan so the monthly amount is smaller",
-        "style": "clean",
-        "language": "en",
-        "acceptable_headings": [
-          "Extend tenure"
-        ],
-        "rank": 2,
-        "top_result_headings": "Restructuring options > One-time settlement"
-      },
-      {
-        "query": "is there a way to make the monthly hit smaller even if it takes longer overall",
-        "style": "vague_colloquial",
-        "language": "en",
-        "acceptable_headings": [
-          "Extend tenure"
-        ],
-        "rank": 1,
-        "top_result_headings": "Restructuring options > Extend tenure"
-      },
-      {
-        "query": "EMI kam karne ka koi tarika hai kya, chahe time zyada lag jaye",
-        "style": "hinglish",
-        "language": "hinglish",
-        "acceptable_headings": [
-          "Extend tenure"
-        ],
-        "rank": 1,
-        "top_result_headings": "Restructuring options > Extend tenure"
-      },
-      {
-        "query": "if I pay it all off right now in one go do I get any kind of discount",
-        "style": "clean",
-        "language": "en",
-        "acceptable_headings": [
-          "One-time settlement"
-        ],
-        "rank": 1,
-        "top_result_headings": "Restructuring options > One-time settlement"
-      },
-      {
-        "query": "honestly im so done with this loan can i just pay the whole remaining thing today and be done with it forever",
-        "style": "run_on_venting",
-        "language": "en",
-        "acceptable_headings": [
-          "One-time settlement"
-        ],
-        "rank": 1,
-        "top_result_headings": "Restructuring options > One-time settlement"
-      },
-      {
-        "query": "poora loan ek baar mein khatam karna hai, discount milega kya usme",
-        "style": "hinglish",
-        "language": "hinglish",
-        "acceptable_headings": [
-          "One-time settlement"
-        ],
-        "rank": 1,
-        "top_result_headings": "Restructuring options > One-time settlement"
-      },
-      {
-        "query": "why can't you just restructure my loan right now, whats the holdup",
-        "style": "clean",
-        "language": "en",
-        "acceptable_headings": [
-          "What blocks an automated offer",
-          "Escalation policy"
-        ],
-        "rank": 5,
-        "top_result_headings": "Restructuring options"
-      },
-      {
-        "query": "how come the system wont let this go through for me",
-        "style": "vague_colloquial",
-        "language": "en",
-        "acceptable_headings": [
-          "What blocks an automated offer"
-        ],
-        "rank": 4,
-        "top_result_headings": "General FAQ > NACH auto-debit mandate"
-      },
-      {
-        "query": "whats the least amount I could pay this month and still be okay",
-        "style": "clean",
-        "language": "en",
-        "acceptable_headings": [
-          "Partial payment for a single cycle"
-        ],
-        "rank": 1,
-        "top_result_headings": "Restructuring options > Partial payment for a single cycle"
-      },
-      {
-        "query": "is mahine thoda kam de doon to chalega kya, poora nahi hai mere paas abhi",
-        "style": "hinglish",
-        "language": "hinglish",
-        "acceptable_headings": [
-          "Partial payment for a single cycle"
-        ],
-        "rank": 1,
-        "top_result_headings": "Restructuring options > Partial payment for a single cycle"
-      },
-      {
-        "query": "wats the min i can pay rn instead of the full emi amount",
-        "style": "typo_slang",
-        "language": "en",
-        "acceptable_headings": [
-          "Partial payment for a single cycle"
-        ],
-        "rank": 1,
-        "top_result_headings": "Restructuring options > Partial payment for a single cycle"
-      }
-    ]
+  "date": "2026-10-11",
+  "fixtures": {
+    "dev": "13b30b5a0bb625932cbdc793243e5db44a6a304bffa0d26fca8c3f28f123b8ac",
+    "heldout": "f2276edb85abd6b85f4e68a0064d00c6e968ab2112aa30ba1b384b4f754bd2d3",
+    "negative": "6f742fa3feb2f82c88d8451f9161c5800da1f18e398fb471c6c137ebcde42562",
+    "loan_accounts": "10cfabb5da4f61916d2fd28091bfae500b66326f5ade533f9be05b13c617c920"
   },
-  "expand_true": {
-    "overall": {
-      "n": 33,
-      "recall@1": 0.8182,
-      "recall@3": 0.9091,
-      "recall@5": 0.9091,
-      "mrr": 0.8636
-    },
-    "by_style": {
-      "clean": {
-        "n": 10,
-        "recall@1": 0.7,
-        "recall@3": 0.9,
-        "recall@5": 0.9,
-        "mrr": 0.8
+  "shipped_setting": "pool 4 (as deployed)",
+  "results": {
+    "pool 4 (as deployed)": {
+      "setting": {
+        "name": "pool 4 (as deployed)",
+        "pool": 4,
+        "headings_search": false,
+        "headings_embed": false,
+        "parent": null,
+        "fusion": "rerank",
+        "keyword_overlap_required": true,
+        "translate": true
       },
-      "devanagari": {
-        "n": 2,
-        "recall@1": 1.0,
-        "recall@3": 1.0,
-        "recall@5": 1.0,
-        "mrr": 1.0
+      "dev": {
+        "n": 38,
+        "distinct": 38,
+        "recall@1": {
+          "mean": 0.6316,
+          "lo": 0.4737,
+          "hi": 0.7895
+        },
+        "recall@2": {
+          "mean": 0.7632,
+          "lo": 0.6316,
+          "hi": 0.8947
+        },
+        "recall@3": {
+          "mean": 0.8421,
+          "lo": 0.7105,
+          "hi": 0.9474
+        },
+        "recall@5": {
+          "mean": 0.8421,
+          "lo": 0.7105,
+          "hi": 0.9474
+        },
+        "mrr": {
+          "mean": 0.7237,
+          "lo": 0.5965,
+          "hi": 0.8377
+        }
       },
-      "hinglish": {
-        "n": 9,
-        "recall@1": 0.8889,
-        "recall@3": 1.0,
-        "recall@5": 1.0,
-        "mrr": 0.9444
+      "heldout": {
+        "n": 47,
+        "distinct": 47,
+        "recall@1": {
+          "mean": 0.8511,
+          "lo": 0.7447,
+          "hi": 0.9362
+        },
+        "recall@2": {
+          "mean": 0.9362,
+          "lo": 0.8511,
+          "hi": 1.0
+        },
+        "recall@3": {
+          "mean": 0.9574,
+          "lo": 0.8936,
+          "hi": 1.0
+        },
+        "recall@5": {
+          "mean": 0.9787,
+          "lo": 0.9362,
+          "hi": 1.0
+        },
+        "mrr": {
+          "mean": 0.906,
+          "lo": 0.8333,
+          "hi": 0.9681
+        }
       },
-      "run_on_venting": {
-        "n": 3,
-        "recall@1": 1.0,
-        "recall@3": 1.0,
-        "recall@5": 1.0,
-        "mrr": 1.0
+      "loan": {
+        "n": 270,
+        "distinct": 30,
+        "recall@1": {
+          "mean": 0.8259,
+          "lo": 0.6963,
+          "hi": 0.937
+        },
+        "recall@2": {
+          "mean": 0.9296,
+          "lo": 0.8444,
+          "hi": 0.9926
+        },
+        "recall@3": {
+          "mean": 0.9296,
+          "lo": 0.8444,
+          "hi": 0.9926
+        },
+        "recall@5": {
+          "mean": 0.9333,
+          "lo": 0.8593,
+          "hi": 0.9926
+        },
+        "mrr": {
+          "mean": 0.8787,
+          "lo": 0.7843,
+          "hi": 0.9593
+        }
       },
-      "typo_slang": {
-        "n": 4,
-        "recall@1": 0.75,
-        "recall@3": 0.75,
-        "recall@5": 0.75,
-        "mrr": 0.75
+      "loan_isolation_leaks": 0,
+      "loan_recall2_by_fact": {
+        "principal": 1.0,
+        "tenure": 0.667,
+        "emi": 0.852,
+        "rate": 1.0,
+        "late_fee": 1.0,
+        "settlement": 1.0,
+        "first_emi": 1.0,
+        "security": 0.926,
+        "court": 0.852,
+        "extension": 1.0
       },
-      "vague_colloquial": {
-        "n": 5,
-        "recall@1": 0.8,
-        "recall@3": 0.8,
-        "recall@5": 0.8,
-        "mrr": 0.8
+      "loan_recall2_by_phrasing": {
+        "clean": 1.0,
+        "colloquial": 0.789,
+        "hinglish": 1.0
+      },
+      "answerable_vs_unanswerable": {
+        "auc": 0.8855,
+        "answerable_scores": [
+          -6.77926778793335,
+          -4.050904750823975,
+          1.0782709121704102,
+          -5.802895545959473,
+          -7.182316780090332,
+          -1.2163769006729126,
+          -3.932846784591675,
+          -10.760900497436523,
+          -0.8380948901176453,
+          1.4633681774139404,
+          -0.5297678112983704,
+          -5.497434139251709,
+          -4.592102527618408,
+          -8.132296562194824,
+          -2.2288646697998047,
+          -1.9191334247589111,
+          -6.948146343231201,
+          -8.231992721557617,
+          -3.7676501274108887,
+          1.2773679494857788,
+          2.550680637359619,
+          -2.0182530879974365,
+          1.9195761680603027,
+          -8.394596099853516,
+          -1.0254219770431519,
+          1.5024876594543457,
+          -1.6271038055419922,
+          -9.347719192504883,
+          -9.028409957885742,
+          0.5675060749053955,
+          -3.408909320831299,
+          -4.500779628753662,
+          3.3999645709991455,
+          -4.72520112991333,
+          -6.41813325881958,
+          -6.054678440093994,
+          -4.730373859405518,
+          1.3846322298049927,
+          -2.392428398132324,
+          5.467515468597412,
+          3.178222894668579,
+          4.487529754638672,
+          5.822368621826172,
+          -1.3182615041732788,
+          6.416955471038818,
+          0.12993815541267395,
+          2.9448623657226562,
+          1.958430528640747,
+          -5.769207954406738,
+          -8.024161338806152,
+          -1.6726930141448975,
+          -0.9266260266304016,
+          -4.1983642578125,
+          -8.343183517456055,
+          1.3661030530929565,
+          -6.076930999755859,
+          -1.221276044845581,
+          4.0620245933532715,
+          -4.531519889831543,
+          4.480193138122559,
+          3.4414689540863037,
+          -0.9725840091705322,
+          0.6844931244850159,
+          -0.5398539304733276,
+          6.519902229309082,
+          -6.932417869567871,
+          -5.388937950134277,
+          5.861948490142822,
+          -8.236594200134277,
+          0.9535557627677917,
+          1.3784116506576538,
+          6.712826728820801,
+          0.6527717709541321,
+          1.3446040153503418,
+          2.242673635482788,
+          -0.5361663699150085,
+          3.6631789207458496,
+          -4.088282585144043,
+          3.615853786468506,
+          -9.839902877807617,
+          -3.4347379207611084,
+          -5.384302616119385,
+          0.04084903001785278,
+          -4.041813850402832,
+          1.0155532360076904
+        ],
+        "unanswerable_scores": [
+          -11.036758422851562,
+          -9.040427207946777,
+          -11.074016571044922,
+          -11.151016235351562,
+          -11.282732009887695,
+          -11.133816719055176,
+          -8.505624771118164,
+          -9.208038330078125,
+          -11.090867042541504,
+          -11.175713539123535,
+          -0.26278916001319885,
+          -11.133319854736328,
+          -10.34521484375,
+          -10.099294662475586,
+          -8.212594985961914,
+          -9.346160888671875,
+          -11.126275062561035,
+          1.5993742942810059,
+          -8.360289573669434,
+          -11.01453971862793,
+          -9.731204986572266,
+          -10.940865516662598,
+          -5.371364116668701,
+          -8.267169952392578,
+          1.8611598014831543,
+          -7.225976467132568,
+          -6.9518914222717285,
+          -7.23334264755249,
+          -5.8969597816467285,
+          -9.221711158752441
+        ]
+      },
+      "relevance_threshold": {
+        "threshold": -9.35,
+        "dev_kept": 0.974,
+        "heldout_kept": 0.979,
+        "loan_kept": 0.97,
+        "unanswerable_rejected": 0.467,
+        "off_topic_rejected": 0.7,
+        "near_topic_rejected": 0.35,
+        "n": {
+          "dev": 38,
+          "heldout": 47,
+          "loan": 270,
+          "unanswerable": 30
+        }
+      },
+      "latency_ms": {
+        "p50": 255.9,
+        "p95": 329.3,
+        "n": 40
       }
     },
-    "by_language": {
-      "en": {
-        "n": 22,
-        "recall@1": 0.7727,
-        "recall@3": 0.8636,
-        "recall@5": 0.8636,
-        "mrr": 0.8182
+    "pool 4, zero-overlap keyword matches allowed (old behaviour)": {
+      "setting": {
+        "name": "pool 4, zero-overlap keyword matches allowed (old behaviour)",
+        "pool": 4,
+        "headings_search": false,
+        "headings_embed": false,
+        "parent": "pool 4 (as deployed)",
+        "fusion": "rerank",
+        "keyword_overlap_required": false,
+        "translate": true
       },
-      "hi": {
-        "n": 2,
-        "recall@1": 1.0,
-        "recall@3": 1.0,
-        "recall@5": 1.0,
-        "mrr": 1.0
+      "dev": {
+        "n": 38,
+        "distinct": 38,
+        "recall@1": {
+          "mean": 0.6316,
+          "lo": 0.4737,
+          "hi": 0.7895
+        },
+        "recall@2": {
+          "mean": 0.7632,
+          "lo": 0.6316,
+          "hi": 0.8947
+        },
+        "recall@3": {
+          "mean": 0.8421,
+          "lo": 0.7105,
+          "hi": 0.9474
+        },
+        "recall@5": {
+          "mean": 0.8421,
+          "lo": 0.7105,
+          "hi": 0.9474
+        },
+        "mrr": {
+          "mean": 0.7237,
+          "lo": 0.5965,
+          "hi": 0.8377
+        }
       },
-      "hinglish": {
-        "n": 9,
-        "recall@1": 0.8889,
-        "recall@3": 1.0,
-        "recall@5": 1.0,
-        "mrr": 0.9444
+      "heldout": {
+        "n": 47,
+        "distinct": 47,
+        "recall@1": {
+          "mean": 0.8511,
+          "lo": 0.7447,
+          "hi": 0.9362
+        },
+        "recall@2": {
+          "mean": 0.9362,
+          "lo": 0.8511,
+          "hi": 1.0
+        },
+        "recall@3": {
+          "mean": 0.9574,
+          "lo": 0.8936,
+          "hi": 1.0
+        },
+        "recall@5": {
+          "mean": 0.9787,
+          "lo": 0.9362,
+          "hi": 1.0
+        },
+        "mrr": {
+          "mean": 0.906,
+          "lo": 0.8333,
+          "hi": 0.9681
+        }
+      },
+      "loan": {
+        "n": 270,
+        "distinct": 30,
+        "recall@1": {
+          "mean": 0.8259,
+          "lo": 0.6963,
+          "hi": 0.937
+        },
+        "recall@2": {
+          "mean": 0.9296,
+          "lo": 0.8444,
+          "hi": 0.9926
+        },
+        "recall@3": {
+          "mean": 0.9296,
+          "lo": 0.8444,
+          "hi": 0.9926
+        },
+        "recall@5": {
+          "mean": 0.9333,
+          "lo": 0.8593,
+          "hi": 0.9926
+        },
+        "mrr": {
+          "mean": 0.8787,
+          "lo": 0.7843,
+          "hi": 0.9593
+        }
+      },
+      "loan_isolation_leaks": 0,
+      "loan_recall2_by_fact": {
+        "principal": 1.0,
+        "tenure": 0.667,
+        "emi": 0.852,
+        "rate": 1.0,
+        "late_fee": 1.0,
+        "settlement": 1.0,
+        "first_emi": 1.0,
+        "security": 0.926,
+        "court": 0.852,
+        "extension": 1.0
+      },
+      "loan_recall2_by_phrasing": {
+        "clean": 1.0,
+        "colloquial": 0.789,
+        "hinglish": 1.0
+      },
+      "answerable_vs_unanswerable": {
+        "auc": 0.8855,
+        "answerable_scores": [
+          -6.77926778793335,
+          -4.050904750823975,
+          1.0782709121704102,
+          -5.802895545959473,
+          -7.182316780090332,
+          -1.2163769006729126,
+          -3.932846784591675,
+          -10.760900497436523,
+          -0.8380948901176453,
+          1.4633681774139404,
+          -0.5297678112983704,
+          -5.497434139251709,
+          -4.592102527618408,
+          -8.132296562194824,
+          -2.2288646697998047,
+          -1.9191334247589111,
+          -6.948146343231201,
+          -8.231992721557617,
+          -3.7676501274108887,
+          1.2773679494857788,
+          2.550680637359619,
+          -2.0182530879974365,
+          1.9195761680603027,
+          -8.394596099853516,
+          -1.0254219770431519,
+          1.5024876594543457,
+          -1.6271038055419922,
+          -9.347719192504883,
+          -9.028409957885742,
+          0.5675060749053955,
+          -3.408909320831299,
+          -4.500779628753662,
+          3.3999645709991455,
+          -4.72520112991333,
+          -6.41813325881958,
+          -6.054678440093994,
+          -4.730373859405518,
+          1.3846322298049927,
+          -2.392428398132324,
+          5.467515468597412,
+          3.178222894668579,
+          4.487529754638672,
+          5.822368621826172,
+          -1.3182615041732788,
+          6.416955471038818,
+          0.12993815541267395,
+          2.9448623657226562,
+          1.958430528640747,
+          -5.769207954406738,
+          -8.024161338806152,
+          -1.6726930141448975,
+          -0.9266260266304016,
+          -4.1983642578125,
+          -8.343183517456055,
+          1.3661030530929565,
+          -6.076930999755859,
+          -1.221276044845581,
+          4.0620245933532715,
+          -4.531519889831543,
+          4.480193138122559,
+          3.4414689540863037,
+          -0.9725840091705322,
+          0.6844931244850159,
+          -0.5398539304733276,
+          6.519902229309082,
+          -6.932417869567871,
+          -5.388937950134277,
+          5.861948490142822,
+          -8.236594200134277,
+          0.9535557627677917,
+          1.3784116506576538,
+          6.712826728820801,
+          0.6527717709541321,
+          1.3446040153503418,
+          2.242673635482788,
+          -0.5361663699150085,
+          3.6631789207458496,
+          -4.088282585144043,
+          3.615853786468506,
+          -9.839902877807617,
+          -3.4347379207611084,
+          -5.384302616119385,
+          0.04084903001785278,
+          -4.041813850402832,
+          1.0155532360076904
+        ],
+        "unanswerable_scores": [
+          -11.036758422851562,
+          -9.040427207946777,
+          -11.074016571044922,
+          -11.151016235351562,
+          -11.227808952331543,
+          -11.133816719055176,
+          -8.505624771118164,
+          -9.208038330078125,
+          -11.090867042541504,
+          -11.175713539123535,
+          -0.26278916001319885,
+          -11.133319854736328,
+          -10.34521484375,
+          -10.099294662475586,
+          -8.212594985961914,
+          -9.346160888671875,
+          -11.126275062561035,
+          1.5993742942810059,
+          -8.360289573669434,
+          -11.01453971862793,
+          -9.731204986572266,
+          -10.940865516662598,
+          -5.371364116668701,
+          -8.267169952392578,
+          1.8611598014831543,
+          -7.225976467132568,
+          -6.9518914222717285,
+          -7.23334264755249,
+          -5.8969597816467285,
+          -9.221711158752441
+        ]
+      },
+      "relevance_threshold": {
+        "threshold": -9.35,
+        "dev_kept": 0.974,
+        "heldout_kept": 0.979,
+        "loan_kept": 0.97,
+        "unanswerable_rejected": 0.467,
+        "off_topic_rejected": 0.7,
+        "near_topic_rejected": 0.35,
+        "n": {
+          "dev": 38,
+          "heldout": 47,
+          "loan": 270,
+          "unanswerable": 30
+        }
+      },
+      "latency_ms": {
+        "p50": 255.6,
+        "p95": 307.2,
+        "n": 40
       }
     },
-    "rows": [
-      {
-        "query": "is there someone I can talk to about a payment that's not showing up on my end",
-        "style": "clean",
-        "language": "en",
-        "acceptable_headings": [
-          "Dispute handling"
-        ],
-        "rank": 2,
-        "top_result_headings": "Escalation policy"
+    "pool 8": {
+      "setting": {
+        "name": "pool 8",
+        "pool": 8,
+        "headings_search": false,
+        "headings_embed": false,
+        "parent": "pool 4 (as deployed)",
+        "fusion": "rerank",
+        "keyword_overlap_required": true,
+        "translate": true
       },
-      {
-        "query": "yo i defo already paid tht EMI last wk trust me, sumthing wrong w ur system, pls fix???",
-        "style": "typo_slang",
-        "language": "en",
-        "acceptable_headings": [
-          "Dispute handling"
-        ],
-        "rank": null,
-        "top_result_headings": "Restructuring options"
+      "dev": {
+        "n": 38,
+        "distinct": 38,
+        "recall@1": {
+          "mean": 0.6316,
+          "lo": 0.4737,
+          "hi": 0.7895
+        },
+        "recall@2": {
+          "mean": 0.7895,
+          "lo": 0.6579,
+          "hi": 0.9211
+        },
+        "recall@3": {
+          "mean": 0.8684,
+          "lo": 0.7368,
+          "hi": 0.9737
+        },
+        "recall@5": {
+          "mean": 0.8947,
+          "lo": 0.7895,
+          "hi": 0.9737
+        },
+        "mrr": {
+          "mean": 0.7421,
+          "lo": 0.6193,
+          "hi": 0.8509
+        }
       },
-      {
-        "query": "mera jo late fee laga hai na wo galat hai yaar, maine to time pe paisa diya tha",
-        "style": "hinglish",
-        "language": "hinglish",
-        "acceptable_headings": [
-          "Dispute handling"
-        ],
-        "rank": 1,
-        "top_result_headings": "Dispute handling policy"
+      "heldout": {
+        "n": 47,
+        "distinct": 47,
+        "recall@1": {
+          "mean": 0.8511,
+          "lo": 0.7447,
+          "hi": 0.9362
+        },
+        "recall@2": {
+          "mean": 0.9362,
+          "lo": 0.8511,
+          "hi": 1.0
+        },
+        "recall@3": {
+          "mean": 0.9574,
+          "lo": 0.8936,
+          "hi": 1.0
+        },
+        "recall@5": {
+          "mean": 0.9787,
+          "lo": 0.9362,
+          "hi": 1.0
+        },
+        "mrr": {
+          "mean": 0.905,
+          "lo": 0.8312,
+          "hi": 0.9681
+        }
       },
-      {
-        "query": "somethings off with my account balance, doesnt look right to me at all",
-        "style": "vague_colloquial",
-        "language": "en",
-        "acceptable_headings": [
-          "Dispute handling"
-        ],
-        "rank": 1,
-        "top_result_headings": "Dispute handling policy"
+      "loan": {
+        "n": 270,
+        "distinct": 30,
+        "recall@1": {
+          "mean": 0.8481,
+          "lo": 0.7222,
+          "hi": 0.9556
+        },
+        "recall@2": {
+          "mean": 0.9667,
+          "lo": 0.9,
+          "hi": 1.0
+        },
+        "recall@3": {
+          "mean": 0.9667,
+          "lo": 0.9,
+          "hi": 1.0
+        },
+        "recall@5": {
+          "mean": 0.9667,
+          "lo": 0.9,
+          "hi": 1.0
+        },
+        "mrr": {
+          "mean": 0.9074,
+          "lo": 0.8167,
+          "hi": 0.9778
+        }
       },
-      {
-        "query": "ok so this is driving me crazy the amount you guys are showing is just wrong i paid already and idk why its still saying pending this cant be right can someone look into this",
-        "style": "run_on_venting",
-        "language": "en",
-        "acceptable_headings": [
-          "Dispute handling"
-        ],
-        "rank": 1,
-        "top_result_headings": "Dispute handling policy"
+      "loan_isolation_leaks": 0,
+      "loan_recall2_by_fact": {
+        "principal": 1.0,
+        "tenure": 0.667,
+        "emi": 1.0,
+        "rate": 1.0,
+        "late_fee": 1.0,
+        "settlement": 1.0,
+        "first_emi": 1.0,
+        "security": 1.0,
+        "court": 1.0,
+        "extension": 1.0
       },
-      {
-        "query": "when does this actually get handed off to an actual human being",
-        "style": "clean",
-        "language": "en",
-        "acceptable_headings": [
-          "Escalation policy"
-        ],
-        "rank": 1,
-        "top_result_headings": "Escalation policy"
+      "loan_recall2_by_phrasing": {
+        "clean": 1.0,
+        "colloquial": 0.9,
+        "hinglish": 1.0
       },
-      {
-        "query": "agar mai baar baar promise tod du to kya hoga, insaan se baat hogi kya",
-        "style": "hinglish",
-        "language": "hinglish",
-        "acceptable_headings": [
-          "Escalation policy",
-          "What blocks an automated offer"
+      "answerable_vs_unanswerable": {
+        "auc": 0.8863,
+        "answerable_scores": [
+          -6.77926778793335,
+          -4.050904750823975,
+          1.0782709121704102,
+          -5.802895545959473,
+          -7.182316780090332,
+          -1.2163769006729126,
+          -3.932846784591675,
+          -10.760900497436523,
+          -0.8380948901176453,
+          1.4633681774139404,
+          -0.5297678112983704,
+          -5.497434139251709,
+          -4.592102527618408,
+          -7.18691873550415,
+          -2.2288646697998047,
+          -1.9191334247589111,
+          -6.948146343231201,
+          -8.231992721557617,
+          -3.7676501274108887,
+          1.2773679494857788,
+          2.550680637359619,
+          -2.0182530879974365,
+          1.9195761680603027,
+          -8.394596099853516,
+          -1.0254219770431519,
+          1.5024876594543457,
+          -1.6271038055419922,
+          -9.347719192504883,
+          -9.028409957885742,
+          0.5675060749053955,
+          -3.408909320831299,
+          -4.500779628753662,
+          3.3999645709991455,
+          -4.72520112991333,
+          -6.41813325881958,
+          -6.054678440093994,
+          -4.730373859405518,
+          1.3846322298049927,
+          -2.392428398132324,
+          5.467515468597412,
+          3.178222894668579,
+          4.487529754638672,
+          5.822368621826172,
+          -1.3182615041732788,
+          6.416955471038818,
+          0.12993815541267395,
+          2.9448623657226562,
+          1.958430528640747,
+          -5.769207954406738,
+          -8.024161338806152,
+          -1.6726930141448975,
+          -0.9266260266304016,
+          -4.1983642578125,
+          -8.343183517456055,
+          1.3661030530929565,
+          -6.076930999755859,
+          -1.221276044845581,
+          4.0620245933532715,
+          -4.531519889831543,
+          4.480193138122559,
+          3.4414689540863037,
+          -0.9725840091705322,
+          0.6844931244850159,
+          -0.5398539304733276,
+          6.519902229309082,
+          -6.932417869567871,
+          -5.388937950134277,
+          5.861948490142822,
+          -8.236594200134277,
+          0.9535557627677917,
+          1.3784116506576538,
+          6.712826728820801,
+          0.6527717709541321,
+          1.3446040153503418,
+          2.242673635482788,
+          -0.5361663699150085,
+          3.6631789207458496,
+          -4.088282585144043,
+          3.615853786468506,
+          -9.839902877807617,
+          -3.4347379207611084,
+          -5.384302616119385,
+          0.04084903001785278,
+          -4.041813850402832,
+          1.0155532360076904
         ],
-        "rank": 1,
-        "top_result_headings": "Restructuring options > What blocks an automated offer"
+        "unanswerable_scores": [
+          -11.036758422851562,
+          -9.040427207946777,
+          -11.074016571044922,
+          -11.100379943847656,
+          -11.282732009887695,
+          -11.133816719055176,
+          -8.505624771118164,
+          -9.208038330078125,
+          -11.090867042541504,
+          -11.175713539123535,
+          -0.11592448502779007,
+          -11.133319854736328,
+          -10.34521484375,
+          -10.099294662475586,
+          -8.212594985961914,
+          -9.346160888671875,
+          -11.126275062561035,
+          1.5993742942810059,
+          -8.360289573669434,
+          -11.01453971862793,
+          -9.731204986572266,
+          -10.940865516662598,
+          -5.371364116668701,
+          -8.267169952392578,
+          1.8611598014831543,
+          -7.225976467132568,
+          -6.9518914222717285,
+          -7.23334264755249,
+          -5.8969597816467285,
+          -9.221711158752441
+        ]
       },
-      {
-        "query": "can this get bumped up to a real person or nah",
-        "style": "vague_colloquial",
-        "language": "en",
-        "acceptable_headings": [
-          "Escalation policy"
-        ],
-        "rank": 1,
-        "top_result_headings": "Escalation policy"
+      "relevance_threshold": {
+        "threshold": -9.35,
+        "dev_kept": 0.974,
+        "heldout_kept": 0.979,
+        "loan_kept": 0.97,
+        "unanswerable_rejected": 0.467,
+        "off_topic_rejected": 0.7,
+        "near_topic_rejected": 0.35,
+        "n": {
+          "dev": 38,
+          "heldout": 47,
+          "loan": 270,
+          "unanswerable": 30
+        }
       },
-      {
-        "query": "अगर मैं दो बार वादा तोड़ दूं तो क्या होगा",
-        "style": "devanagari",
-        "language": "hi",
-        "acceptable_headings": [
-          "Escalation policy",
-          "What blocks an automated offer"
-        ],
-        "rank": 1,
-        "top_result_headings": "Restructuring options > What blocks an automated offer"
-      },
-      {
-        "query": "if I promise to pay by the 25th and I actually pay on the 27th does that still count",
-        "style": "clean",
-        "language": "en",
-        "acceptable_headings": [
-          "Promise to pay"
-        ],
-        "rank": 1,
-        "top_result_headings": "General FAQ > Promise to pay"
-      },
-      {
-        "query": "does it still count if im lyk 2 days off from wat i promised",
-        "style": "typo_slang",
-        "language": "en",
-        "acceptable_headings": [
-          "Promise to pay"
-        ],
-        "rank": 1,
-        "top_result_headings": "General FAQ > Promise to pay"
-      },
-      {
-        "query": "maine 20 tak dene ka bola tha, 2 din late ho gaya to chalega kya",
-        "style": "hinglish",
-        "language": "hinglish",
-        "acceptable_headings": [
-          "Promise to pay"
-        ],
-        "rank": 2,
-        "top_result_headings": "Grace period policy"
-      },
-      {
-        "query": "why is an AI calling me, doesn't the bank just auto-deduct this every month anyway",
-        "style": "clean",
-        "language": "en",
-        "acceptable_headings": [
-          "NACH auto-debit mandate"
-        ],
-        "rank": 1,
-        "top_result_headings": "General FAQ > NACH auto-debit mandate"
-      },
-      {
-        "query": "isnt this supposed to come out on its own why am i even hearing from u about it",
-        "style": "vague_colloquial",
-        "language": "en",
-        "acceptable_headings": [
-          "NACH auto-debit mandate"
-        ],
-        "rank": 1,
-        "top_result_headings": "General FAQ > NACH auto-debit mandate"
-      },
-      {
-        "query": "mera to auto debit hai na, phir ye call kyu aa rahi hai mujhe",
-        "style": "hinglish",
-        "language": "hinglish",
-        "acceptable_headings": [
-          "NACH auto-debit mandate"
-        ],
-        "rank": 1,
-        "top_result_headings": "General FAQ > NACH auto-debit mandate"
-      },
-      {
-        "query": "can you just waive this interest for me, just this once",
-        "style": "clean",
-        "language": "en",
-        "acceptable_headings": [
-          "What the agent cannot do"
-        ],
-        "rank": 1,
-        "top_result_headings": "General FAQ > What the agent cannot do"
-      },
-      {
-        "query": "look i dont have the money can u just like remove the interest or lower the rate or something i really need a break here",
-        "style": "run_on_venting",
-        "language": "en",
-        "acceptable_headings": [
-          "What the agent cannot do"
-        ],
-        "rank": 1,
-        "top_result_headings": "General FAQ > What the agent cannot do"
-      },
-      {
-        "query": "interest rate thoda kam kar do na please, itna zyada nahi de sakta",
-        "style": "hinglish",
-        "language": "hinglish",
-        "acceptable_headings": [
-          "What the agent cannot do"
-        ],
-        "rank": 1,
-        "top_result_headings": "General FAQ > What the agent cannot do"
-      },
-      {
-        "query": "is there any buffer time before it's actually counted as late",
-        "style": "clean",
-        "language": "en",
-        "acceptable_headings": [
-          "Grace period"
-        ],
-        "rank": 1,
-        "top_result_headings": "Grace period policy"
-      },
-      {
-        "query": "wil i get charged a late fee if im jst 2 days late paying",
-        "style": "typo_slang",
-        "language": "en",
-        "acceptable_headings": [
-          "Grace period"
-        ],
-        "rank": 1,
-        "top_result_headings": "Grace period policy"
-      },
-      {
-        "query": "thoda time mil sakta hai kya bina late fee lagaye",
-        "style": "hinglish",
-        "language": "hinglish",
-        "acceptable_headings": [
-          "Grace period"
-        ],
-        "rank": 1,
-        "top_result_headings": "Grace period policy"
-      },
-      {
-        "query": "क्या मुझे कुछ और दिन मिल सकते हैं बिना जुर्माने के",
-        "style": "devanagari",
-        "language": "hi",
-        "acceptable_headings": [
-          "Grace period"
-        ],
-        "rank": 1,
-        "top_result_headings": "Grace period policy"
-      },
-      {
-        "query": "can you stretch out my loan so the monthly amount is smaller",
-        "style": "clean",
-        "language": "en",
-        "acceptable_headings": [
-          "Extend tenure"
-        ],
-        "rank": 1,
-        "top_result_headings": "Restructuring options > Extend tenure"
-      },
-      {
-        "query": "is there a way to make the monthly hit smaller even if it takes longer overall",
-        "style": "vague_colloquial",
-        "language": "en",
-        "acceptable_headings": [
-          "Extend tenure"
-        ],
-        "rank": 1,
-        "top_result_headings": "Restructuring options > Extend tenure"
-      },
-      {
-        "query": "EMI kam karne ka koi tarika hai kya, chahe time zyada lag jaye",
-        "style": "hinglish",
-        "language": "hinglish",
-        "acceptable_headings": [
-          "Extend tenure"
-        ],
-        "rank": 1,
-        "top_result_headings": "Restructuring options > Extend tenure"
-      },
-      {
-        "query": "if I pay it all off right now in one go do I get any kind of discount",
-        "style": "clean",
-        "language": "en",
-        "acceptable_headings": [
-          "One-time settlement"
-        ],
-        "rank": 1,
-        "top_result_headings": "Restructuring options > One-time settlement"
-      },
-      {
-        "query": "honestly im so done with this loan can i just pay the whole remaining thing today and be done with it forever",
-        "style": "run_on_venting",
-        "language": "en",
-        "acceptable_headings": [
-          "One-time settlement"
-        ],
-        "rank": 1,
-        "top_result_headings": "Restructuring options > One-time settlement"
-      },
-      {
-        "query": "poora loan ek baar mein khatam karna hai, discount milega kya usme",
-        "style": "hinglish",
-        "language": "hinglish",
-        "acceptable_headings": [
-          "One-time settlement"
-        ],
-        "rank": 1,
-        "top_result_headings": "Restructuring options > One-time settlement"
-      },
-      {
-        "query": "why can't you just restructure my loan right now, whats the holdup",
-        "style": "clean",
-        "language": "en",
-        "acceptable_headings": [
-          "What blocks an automated offer",
-          "Escalation policy"
-        ],
-        "rank": null,
-        "top_result_headings": "Restructuring options"
-      },
-      {
-        "query": "how come the system wont let this go through for me",
-        "style": "vague_colloquial",
-        "language": "en",
-        "acceptable_headings": [
-          "What blocks an automated offer"
-        ],
-        "rank": null,
-        "top_result_headings": "General FAQ > NACH auto-debit mandate"
-      },
-      {
-        "query": "whats the least amount I could pay this month and still be okay",
-        "style": "clean",
-        "language": "en",
-        "acceptable_headings": [
-          "Partial payment for a single cycle"
-        ],
-        "rank": 2,
-        "top_result_headings": "Restructuring options > Extend tenure"
-      },
-      {
-        "query": "is mahine thoda kam de doon to chalega kya, poora nahi hai mere paas abhi",
-        "style": "hinglish",
-        "language": "hinglish",
-        "acceptable_headings": [
-          "Partial payment for a single cycle"
-        ],
-        "rank": 1,
-        "top_result_headings": "Restructuring options > Partial payment for a single cycle"
-      },
-      {
-        "query": "wats the min i can pay rn instead of the full emi amount",
-        "style": "typo_slang",
-        "language": "en",
-        "acceptable_headings": [
-          "Partial payment for a single cycle"
-        ],
-        "rank": 1,
-        "top_result_headings": "Restructuring options > Partial payment for a single cycle"
+      "latency_ms": {
+        "p50": 378.0,
+        "p95": 447.5,
+        "n": 40
       }
-    ]
+    },
+    "pool 16": {
+      "setting": {
+        "name": "pool 16",
+        "pool": 16,
+        "headings_search": false,
+        "headings_embed": false,
+        "parent": "pool 8",
+        "fusion": "rerank",
+        "keyword_overlap_required": true,
+        "translate": true
+      },
+      "dev": {
+        "n": 38,
+        "distinct": 38,
+        "recall@1": {
+          "mean": 0.6316,
+          "lo": 0.4737,
+          "hi": 0.7895
+        },
+        "recall@2": {
+          "mean": 0.7895,
+          "lo": 0.6579,
+          "hi": 0.9211
+        },
+        "recall@3": {
+          "mean": 0.8684,
+          "lo": 0.7368,
+          "hi": 0.9737
+        },
+        "recall@5": {
+          "mean": 0.8947,
+          "lo": 0.7895,
+          "hi": 0.9737
+        },
+        "mrr": {
+          "mean": 0.7434,
+          "lo": 0.6206,
+          "hi": 0.8531
+        }
+      },
+      "heldout": {
+        "n": 47,
+        "distinct": 47,
+        "recall@1": {
+          "mean": 0.8511,
+          "lo": 0.7447,
+          "hi": 0.9362
+        },
+        "recall@2": {
+          "mean": 0.9362,
+          "lo": 0.8511,
+          "hi": 1.0
+        },
+        "recall@3": {
+          "mean": 0.9574,
+          "lo": 0.8936,
+          "hi": 1.0
+        },
+        "recall@5": {
+          "mean": 0.9574,
+          "lo": 0.8936,
+          "hi": 1.0
+        },
+        "mrr": {
+          "mean": 0.9007,
+          "lo": 0.8191,
+          "hi": 0.9681
+        }
+      },
+      "loan": {
+        "n": 270,
+        "distinct": 30,
+        "recall@1": {
+          "mean": 0.8481,
+          "lo": 0.7222,
+          "hi": 0.9556
+        },
+        "recall@2": {
+          "mean": 0.9667,
+          "lo": 0.9,
+          "hi": 1.0
+        },
+        "recall@3": {
+          "mean": 0.9667,
+          "lo": 0.9,
+          "hi": 1.0
+        },
+        "recall@5": {
+          "mean": 0.9667,
+          "lo": 0.9,
+          "hi": 1.0
+        },
+        "mrr": {
+          "mean": 0.9074,
+          "lo": 0.8167,
+          "hi": 0.9778
+        }
+      },
+      "loan_isolation_leaks": 0,
+      "loan_recall2_by_fact": {
+        "principal": 1.0,
+        "tenure": 0.667,
+        "emi": 1.0,
+        "rate": 1.0,
+        "late_fee": 1.0,
+        "settlement": 1.0,
+        "first_emi": 1.0,
+        "security": 1.0,
+        "court": 1.0,
+        "extension": 1.0
+      },
+      "loan_recall2_by_phrasing": {
+        "clean": 1.0,
+        "colloquial": 0.9,
+        "hinglish": 1.0
+      },
+      "answerable_vs_unanswerable": {
+        "auc": 0.8863,
+        "answerable_scores": [
+          -6.77926778793335,
+          -4.050904750823975,
+          1.0782709121704102,
+          -5.802895545959473,
+          -7.182316780090332,
+          -1.2163769006729126,
+          -3.932846784591675,
+          -10.760900497436523,
+          -0.8380948901176453,
+          1.4633681774139404,
+          -0.5297678112983704,
+          -5.497434139251709,
+          -4.592102527618408,
+          -7.18691873550415,
+          -2.2288646697998047,
+          -1.9191334247589111,
+          -6.948146343231201,
+          -8.231992721557617,
+          -3.7676501274108887,
+          1.2773679494857788,
+          2.550680637359619,
+          -2.0182530879974365,
+          1.9195761680603027,
+          -8.394596099853516,
+          -1.0254219770431519,
+          1.5024876594543457,
+          -1.6271038055419922,
+          -9.347719192504883,
+          -9.028409957885742,
+          0.5675060749053955,
+          -3.408909320831299,
+          -4.500779628753662,
+          3.3999645709991455,
+          -4.72520112991333,
+          -6.41813325881958,
+          -6.054678440093994,
+          -4.730373859405518,
+          1.3846322298049927,
+          -2.392428398132324,
+          5.467515468597412,
+          3.178222894668579,
+          4.487529754638672,
+          5.822368621826172,
+          -1.3182615041732788,
+          6.416955471038818,
+          0.12993815541267395,
+          2.9448623657226562,
+          1.958430528640747,
+          -5.769207954406738,
+          -8.024161338806152,
+          -1.6726930141448975,
+          -0.9266260266304016,
+          -4.1983642578125,
+          -8.343183517456055,
+          1.3661030530929565,
+          -6.076930999755859,
+          -1.221276044845581,
+          4.0620245933532715,
+          -4.531519889831543,
+          4.480193138122559,
+          3.4414689540863037,
+          -0.9725840091705322,
+          0.6844931244850159,
+          -0.5398539304733276,
+          6.519902229309082,
+          -6.932417869567871,
+          -5.388937950134277,
+          5.861948490142822,
+          -8.236594200134277,
+          0.9535557627677917,
+          1.3784116506576538,
+          6.712826728820801,
+          0.6527717709541321,
+          1.3446040153503418,
+          2.242673635482788,
+          -0.5361663699150085,
+          3.6631789207458496,
+          -4.088282585144043,
+          3.615853786468506,
+          -9.839902877807617,
+          -3.4347379207611084,
+          -5.384302616119385,
+          0.04084903001785278,
+          -4.041813850402832,
+          1.0155532360076904
+        ],
+        "unanswerable_scores": [
+          -11.036758422851562,
+          -9.040427207946777,
+          -11.074016571044922,
+          -11.100379943847656,
+          -11.227808952331543,
+          -11.133816719055176,
+          -8.505624771118164,
+          -9.208038330078125,
+          -11.090867042541504,
+          -11.175713539123535,
+          -0.11592448502779007,
+          -11.133319854736328,
+          -10.34521484375,
+          -10.099294662475586,
+          -8.212594985961914,
+          -9.346160888671875,
+          -11.126275062561035,
+          1.5993742942810059,
+          -8.360289573669434,
+          -11.01453971862793,
+          -9.731204986572266,
+          -10.940865516662598,
+          -5.371364116668701,
+          -8.267169952392578,
+          1.8611598014831543,
+          -7.225976467132568,
+          -6.9518914222717285,
+          -7.23334264755249,
+          -5.8969597816467285,
+          -9.221711158752441
+        ]
+      },
+      "relevance_threshold": {
+        "threshold": -9.35,
+        "dev_kept": 0.974,
+        "heldout_kept": 0.979,
+        "loan_kept": 0.97,
+        "unanswerable_rejected": 0.467,
+        "off_topic_rejected": 0.7,
+        "near_topic_rejected": 0.35,
+        "n": {
+          "dev": 38,
+          "heldout": 47,
+          "loan": 270,
+          "unanswerable": 30
+        }
+      },
+      "latency_ms": {
+        "p50": 570.8,
+        "p95": 608.7,
+        "n": 40
+      }
+    },
+    "pool 4 + headings in search text": {
+      "setting": {
+        "name": "pool 4 + headings in search text",
+        "pool": 4,
+        "headings_search": true,
+        "headings_embed": false,
+        "parent": "pool 4 (as deployed)",
+        "fusion": "rerank",
+        "keyword_overlap_required": true,
+        "translate": true
+      },
+      "dev": {
+        "n": 38,
+        "distinct": 38,
+        "recall@1": {
+          "mean": 0.6579,
+          "lo": 0.5,
+          "hi": 0.8158
+        },
+        "recall@2": {
+          "mean": 0.7632,
+          "lo": 0.6316,
+          "hi": 0.8947
+        },
+        "recall@3": {
+          "mean": 0.8158,
+          "lo": 0.6842,
+          "hi": 0.9211
+        },
+        "recall@5": {
+          "mean": 0.8421,
+          "lo": 0.7105,
+          "hi": 0.9474
+        },
+        "mrr": {
+          "mean": 0.7346,
+          "lo": 0.6031,
+          "hi": 0.8509
+        }
+      },
+      "heldout": {
+        "n": 47,
+        "distinct": 47,
+        "recall@1": {
+          "mean": 0.8085,
+          "lo": 0.6809,
+          "hi": 0.9149
+        },
+        "recall@2": {
+          "mean": 0.9362,
+          "lo": 0.8723,
+          "hi": 1.0
+        },
+        "recall@3": {
+          "mean": 0.9574,
+          "lo": 0.8936,
+          "hi": 1.0
+        },
+        "recall@5": {
+          "mean": 0.9787,
+          "lo": 0.9362,
+          "hi": 1.0
+        },
+        "mrr": {
+          "mean": 0.8848,
+          "lo": 0.8085,
+          "hi": 0.9521
+        }
+      },
+      "loan": {
+        "n": 270,
+        "distinct": 30,
+        "recall@1": {
+          "mean": 0.8259,
+          "lo": 0.6852,
+          "hi": 0.9407
+        },
+        "recall@2": {
+          "mean": 0.9296,
+          "lo": 0.8444,
+          "hi": 0.9926
+        },
+        "recall@3": {
+          "mean": 0.9333,
+          "lo": 0.8593,
+          "hi": 0.9926
+        },
+        "recall@5": {
+          "mean": 0.9333,
+          "lo": 0.8593,
+          "hi": 0.9926
+        },
+        "mrr": {
+          "mean": 0.879,
+          "lo": 0.7833,
+          "hi": 0.9593
+        }
+      },
+      "loan_isolation_leaks": 0,
+      "loan_recall2_by_fact": {
+        "principal": 1.0,
+        "tenure": 0.667,
+        "emi": 0.852,
+        "rate": 1.0,
+        "late_fee": 1.0,
+        "settlement": 1.0,
+        "first_emi": 1.0,
+        "security": 0.926,
+        "court": 0.852,
+        "extension": 1.0
+      },
+      "loan_recall2_by_phrasing": {
+        "clean": 1.0,
+        "colloquial": 0.789,
+        "hinglish": 1.0
+      },
+      "answerable_vs_unanswerable": {
+        "auc": 0.8882,
+        "answerable_scores": [
+          -7.140021800994873,
+          -4.752213954925537,
+          0.5306569933891296,
+          -6.965470790863037,
+          -8.32472038269043,
+          -2.2548742294311523,
+          -4.601742267608643,
+          -10.741475105285645,
+          -2.3523550033569336,
+          1.9153363704681396,
+          -1.1816805601119995,
+          -6.254761695861816,
+          -4.164679527282715,
+          -8.774005889892578,
+          -1.9242031574249268,
+          -2.5040366649627686,
+          -6.744410991668701,
+          -8.444719314575195,
+          -3.9512157440185547,
+          2.111701250076294,
+          1.968294620513916,
+          -1.7399104833602905,
+          1.8654890060424805,
+          -8.782519340515137,
+          -1.756401777267456,
+          0.4046911299228668,
+          -1.5159965753555298,
+          -10.168535232543945,
+          -9.460476875305176,
+          0.3469175398349762,
+          -3.931741952896118,
+          -4.803172588348389,
+          3.3963255882263184,
+          -3.0309691429138184,
+          -7.49387788772583,
+          -7.382338523864746,
+          -4.841032981872559,
+          0.9149667024612427,
+          -3.050234079360962,
+          5.047179698944092,
+          3.535294532775879,
+          4.4886369705200195,
+          5.153417587280273,
+          -1.290194034576416,
+          6.149345874786377,
+          0.007760687731206417,
+          3.0739893913269043,
+          1.597936987876892,
+          -6.950521945953369,
+          -8.311184883117676,
+          -2.51497483253479,
+          -1.5380204916000366,
+          -4.669628143310547,
+          -8.22097110748291,
+          1.0858129262924194,
+          -6.544144153594971,
+          -1.1082992553710938,
+          2.731492757797241,
+          -4.557274341583252,
+          4.727319240570068,
+          3.723168134689331,
+          -4.117071151733398,
+          1.2865301370620728,
+          -2.4824743270874023,
+          5.504867076873779,
+          -6.917447566986084,
+          -6.132999420166016,
+          4.885159969329834,
+          -7.761804103851318,
+          -0.4631154537200928,
+          1.78194260597229,
+          5.915298938751221,
+          -0.06272720545530319,
+          1.917961835861206,
+          0.7832503318786621,
+          -1.6265785694122314,
+          2.031907320022583,
+          -5.234236240386963,
+          3.0450475215911865,
+          -10.12753677368164,
+          -5.282526016235352,
+          -6.175874710083008,
+          -0.1403190940618515,
+          -5.238365650177002,
+          0.47409242391586304
+        ],
+        "unanswerable_scores": [
+          -11.040850639343262,
+          -9.55013656616211,
+          -11.107983589172363,
+          -11.130640029907227,
+          -11.287107467651367,
+          -11.162702560424805,
+          -9.105002403259277,
+          -9.609363555908203,
+          -11.131263732910156,
+          -11.215956687927246,
+          -0.8429267406463623,
+          -11.176003456115723,
+          -10.274835586547852,
+          -10.12282943725586,
+          -8.971527099609375,
+          -9.068604469299316,
+          -11.142524719238281,
+          0.3813755214214325,
+          -9.257736206054688,
+          -11.095303535461426,
+          -10.37404727935791,
+          -10.850226402282715,
+          -6.119828224182129,
+          -8.067282676696777,
+          2.4575231075286865,
+          -8.658733367919922,
+          -8.485122680664062,
+          -7.666810035705566,
+          -6.143862247467041,
+          -8.913658142089844
+        ]
+      },
+      "relevance_threshold": {
+        "threshold": -10.17,
+        "dev_kept": 0.974,
+        "heldout_kept": 1.0,
+        "loan_kept": 1.0,
+        "unanswerable_rejected": 0.433,
+        "off_topic_rejected": 0.7,
+        "near_topic_rejected": 0.3,
+        "n": {
+          "dev": 38,
+          "heldout": 47,
+          "loan": 270,
+          "unanswerable": 30
+        }
+      },
+      "latency_ms": {
+        "p50": 271.8,
+        "p95": 362.9,
+        "n": 40
+      }
+    },
+    "pool 4 + headings everywhere": {
+      "setting": {
+        "name": "pool 4 + headings everywhere",
+        "pool": 4,
+        "headings_search": true,
+        "headings_embed": true,
+        "parent": "pool 4 (as deployed)",
+        "fusion": "rerank",
+        "keyword_overlap_required": true,
+        "translate": true
+      },
+      "dev": {
+        "n": 38,
+        "distinct": 38,
+        "recall@1": {
+          "mean": 0.6579,
+          "lo": 0.5,
+          "hi": 0.8158
+        },
+        "recall@2": {
+          "mean": 0.7632,
+          "lo": 0.6316,
+          "hi": 0.8947
+        },
+        "recall@3": {
+          "mean": 0.8158,
+          "lo": 0.6842,
+          "hi": 0.9211
+        },
+        "recall@5": {
+          "mean": 0.8684,
+          "lo": 0.7632,
+          "hi": 0.9737
+        },
+        "mrr": {
+          "mean": 0.7399,
+          "lo": 0.6061,
+          "hi": 0.8605
+        }
+      },
+      "heldout": {
+        "n": 47,
+        "distinct": 47,
+        "recall@1": {
+          "mean": 0.8085,
+          "lo": 0.6809,
+          "hi": 0.9149
+        },
+        "recall@2": {
+          "mean": 0.9362,
+          "lo": 0.8723,
+          "hi": 1.0
+        },
+        "recall@3": {
+          "mean": 0.9574,
+          "lo": 0.8936,
+          "hi": 1.0
+        },
+        "recall@5": {
+          "mean": 0.9787,
+          "lo": 0.9362,
+          "hi": 1.0
+        },
+        "mrr": {
+          "mean": 0.8848,
+          "lo": 0.8085,
+          "hi": 0.9521
+        }
+      },
+      "loan": {
+        "n": 270,
+        "distinct": 30,
+        "recall@1": {
+          "mean": 0.8444,
+          "lo": 0.7037,
+          "hi": 0.9593
+        },
+        "recall@2": {
+          "mean": 0.9481,
+          "lo": 0.8667,
+          "hi": 1.0
+        },
+        "recall@3": {
+          "mean": 0.9519,
+          "lo": 0.8778,
+          "hi": 1.0
+        },
+        "recall@5": {
+          "mean": 0.963,
+          "lo": 0.9111,
+          "hi": 1.0
+        },
+        "mrr": {
+          "mean": 0.9003,
+          "lo": 0.8142,
+          "hi": 0.9759
+        }
+      },
+      "loan_isolation_leaks": 0,
+      "loan_recall2_by_fact": {
+        "principal": 1.0,
+        "tenure": 0.667,
+        "emi": 0.852,
+        "rate": 1.0,
+        "late_fee": 1.0,
+        "settlement": 1.0,
+        "first_emi": 1.0,
+        "security": 1.0,
+        "court": 0.963,
+        "extension": 1.0
+      },
+      "loan_recall2_by_phrasing": {
+        "clean": 1.0,
+        "colloquial": 0.856,
+        "hinglish": 0.989
+      },
+      "answerable_vs_unanswerable": {
+        "auc": 0.8875,
+        "answerable_scores": [
+          -7.140021800994873,
+          -4.752213954925537,
+          0.5306569933891296,
+          -6.965470790863037,
+          -8.743097305297852,
+          -2.2548742294311523,
+          -4.601742267608643,
+          -10.735797882080078,
+          -1.5312248468399048,
+          1.9153363704681396,
+          -1.1816805601119995,
+          -6.254761695861816,
+          -4.164679527282715,
+          -8.774005889892578,
+          -1.9242031574249268,
+          -2.5040366649627686,
+          -6.744410991668701,
+          -8.444719314575195,
+          -3.9512157440185547,
+          2.111701250076294,
+          1.968294620513916,
+          -1.7399104833602905,
+          1.8654890060424805,
+          -8.782519340515137,
+          -1.756401777267456,
+          0.4046911299228668,
+          -1.5159965753555298,
+          -10.168535232543945,
+          -9.460476875305176,
+          0.3469175398349762,
+          -3.931741952896118,
+          -4.803172588348389,
+          3.3963255882263184,
+          -3.0309691429138184,
+          -7.49387788772583,
+          -7.382338523864746,
+          -4.841032981872559,
+          0.9149667024612427,
+          -3.050234079360962,
+          5.047179698944092,
+          3.535294532775879,
+          4.4886369705200195,
+          5.153417587280273,
+          -1.290194034576416,
+          6.149345874786377,
+          0.007760687731206417,
+          3.0739893913269043,
+          1.597936987876892,
+          -6.950521945953369,
+          -8.311184883117676,
+          -2.51497483253479,
+          -1.5380204916000366,
+          -4.669628143310547,
+          -8.22097110748291,
+          1.0858129262924194,
+          -6.544144153594971,
+          -1.1082992553710938,
+          2.731492757797241,
+          -4.557274341583252,
+          4.727319240570068,
+          3.723168134689331,
+          -4.117071151733398,
+          1.2865301370620728,
+          -2.4824743270874023,
+          5.504867076873779,
+          -6.917447566986084,
+          -6.132999420166016,
+          4.885159969329834,
+          -7.761804103851318,
+          -0.4631154537200928,
+          1.78194260597229,
+          5.915298938751221,
+          -0.06272720545530319,
+          1.917961835861206,
+          0.7832503318786621,
+          -1.6265785694122314,
+          2.031907320022583,
+          -5.234236240386963,
+          3.0450475215911865,
+          -10.12753677368164,
+          -5.282526016235352,
+          -6.175874710083008,
+          -0.1403190940618515,
+          -5.238365650177002,
+          0.47409242391586304
+        ],
+        "unanswerable_scores": [
+          -11.040850639343262,
+          -9.55013656616211,
+          -11.107983589172363,
+          -11.130640029907227,
+          -11.287107467651367,
+          -11.162702560424805,
+          -9.416325569152832,
+          -9.609363555908203,
+          -11.131263732910156,
+          -11.215956687927246,
+          -0.8429267406463623,
+          -11.176003456115723,
+          -10.492830276489258,
+          -10.12282943725586,
+          -8.971527099609375,
+          -9.068604469299316,
+          -11.142524719238281,
+          0.3813755214214325,
+          -9.257736206054688,
+          -11.095303535461426,
+          -10.37404727935791,
+          -10.850226402282715,
+          -6.119828224182129,
+          -8.067282676696777,
+          2.4575231075286865,
+          -8.658733367919922,
+          -8.485122680664062,
+          -7.666810035705566,
+          -6.143862247467041,
+          -8.913658142089844
+        ]
+      },
+      "relevance_threshold": {
+        "threshold": -10.17,
+        "dev_kept": 0.974,
+        "heldout_kept": 1.0,
+        "loan_kept": 0.996,
+        "unanswerable_rejected": 0.433,
+        "off_topic_rejected": 0.7,
+        "near_topic_rejected": 0.3,
+        "n": {
+          "dev": 38,
+          "heldout": 47,
+          "loan": 270,
+          "unanswerable": 30
+        }
+      },
+      "latency_ms": {
+        "p50": 257.6,
+        "p95": 323.4,
+        "n": 40
+      }
+    },
+    "pool 4 + rank fusion": {
+      "setting": {
+        "name": "pool 4 + rank fusion",
+        "pool": 4,
+        "headings_search": false,
+        "headings_embed": false,
+        "parent": "pool 4 (as deployed)",
+        "fusion": "rrf",
+        "keyword_overlap_required": true,
+        "translate": true
+      },
+      "dev": {
+        "n": 38,
+        "distinct": 38,
+        "recall@1": {
+          "mean": 0.6316,
+          "lo": 0.4737,
+          "hi": 0.7632
+        },
+        "recall@2": {
+          "mean": 0.7632,
+          "lo": 0.6316,
+          "hi": 0.8947
+        },
+        "recall@3": {
+          "mean": 0.8421,
+          "lo": 0.7105,
+          "hi": 0.9474
+        },
+        "recall@5": {
+          "mean": 0.8684,
+          "lo": 0.7632,
+          "hi": 0.9737
+        },
+        "mrr": {
+          "mean": 0.7303,
+          "lo": 0.6009,
+          "hi": 0.8443
+        }
+      },
+      "heldout": {
+        "n": 47,
+        "distinct": 47,
+        "recall@1": {
+          "mean": 0.8511,
+          "lo": 0.7447,
+          "hi": 0.9362
+        },
+        "recall@2": {
+          "mean": 0.9362,
+          "lo": 0.8511,
+          "hi": 1.0
+        },
+        "recall@3": {
+          "mean": 0.9787,
+          "lo": 0.9362,
+          "hi": 1.0
+        },
+        "recall@5": {
+          "mean": 0.9787,
+          "lo": 0.9362,
+          "hi": 1.0
+        },
+        "mrr": {
+          "mean": 0.9078,
+          "lo": 0.8369,
+          "hi": 0.9681
+        }
+      },
+      "loan": {
+        "n": 270,
+        "distinct": 30,
+        "recall@1": {
+          "mean": 0.8444,
+          "lo": 0.7185,
+          "hi": 0.9407
+        },
+        "recall@2": {
+          "mean": 0.9222,
+          "lo": 0.837,
+          "hi": 0.9852
+        },
+        "recall@3": {
+          "mean": 0.9296,
+          "lo": 0.8444,
+          "hi": 0.9926
+        },
+        "recall@5": {
+          "mean": 0.9333,
+          "lo": 0.8593,
+          "hi": 0.9926
+        },
+        "mrr": {
+          "mean": 0.8867,
+          "lo": 0.7877,
+          "hi": 0.963
+        }
+      },
+      "loan_isolation_leaks": 0,
+      "loan_recall2_by_fact": {
+        "principal": 1.0,
+        "tenure": 0.667,
+        "emi": 0.852,
+        "rate": 1.0,
+        "late_fee": 1.0,
+        "settlement": 1.0,
+        "first_emi": 0.926,
+        "security": 0.926,
+        "court": 0.852,
+        "extension": 1.0
+      },
+      "loan_recall2_by_phrasing": {
+        "clean": 1.0,
+        "colloquial": 0.767,
+        "hinglish": 1.0
+      },
+      "answerable_vs_unanswerable": {
+        "auc": 0.8675,
+        "answerable_scores": [
+          -7.8189616203308105,
+          -4.050904750823975,
+          0.05718905106186867,
+          -7.885219097137451,
+          -7.182316780090332,
+          -1.2163769006729126,
+          -3.932846784591675,
+          -10.946100234985352,
+          -0.8380948901176453,
+          1.4633681774139404,
+          -0.5297678112983704,
+          -5.497434139251709,
+          -4.592102527618408,
+          -9.342926979064941,
+          -2.2288646697998047,
+          -1.9191334247589111,
+          -6.948146343231201,
+          -9.347630500793457,
+          -3.7676501274108887,
+          1.2773679494857788,
+          2.550680637359619,
+          -2.0182530879974365,
+          -0.36836639046669006,
+          -8.394596099853516,
+          -1.0254219770431519,
+          -0.04773513972759247,
+          -2.625368595123291,
+          -9.347719192504883,
+          -9.028409957885742,
+          0.5675060749053955,
+          -3.408909320831299,
+          -4.500779628753662,
+          3.3999645709991455,
+          -4.72520112991333,
+          -9.318050384521484,
+          -6.054678440093994,
+          -4.730373859405518,
+          1.3846322298049927,
+          -3.2030246257781982,
+          5.467515468597412,
+          3.178222894668579,
+          4.487529754638672,
+          5.822368621826172,
+          -1.3182615041732788,
+          6.416955471038818,
+          0.12993815541267395,
+          2.9448623657226562,
+          1.958430528640747,
+          -9.37185001373291,
+          -8.024161338806152,
+          -1.6726930141448975,
+          -0.9266260266304016,
+          -6.950669288635254,
+          -8.343183517456055,
+          0.6154505610466003,
+          -7.152762413024902,
+          -1.221276044845581,
+          4.0620245933532715,
+          -4.531519889831543,
+          4.480193138122559,
+          3.4414689540863037,
+          -0.9725840091705322,
+          0.6844931244850159,
+          -0.5398539304733276,
+          6.519902229309082,
+          -6.932417869567871,
+          -5.388937950134277,
+          5.861948490142822,
+          -8.236594200134277,
+          0.9535557627677917,
+          1.3784116506576538,
+          6.712826728820801,
+          0.6527717709541321,
+          1.3446040153503418,
+          2.242673635482788,
+          -0.5361663699150085,
+          3.6631789207458496,
+          -10.475090980529785,
+          3.615853786468506,
+          -9.839902877807617,
+          -3.4347379207611084,
+          -5.384302616119385,
+          0.04084903001785278,
+          -4.041813850402832,
+          1.0155532360076904
+        ],
+        "unanswerable_scores": [
+          -11.046398162841797,
+          -9.040427207946777,
+          -11.074016571044922,
+          -11.152491569519043,
+          -11.282732009887695,
+          -11.196779251098633,
+          -8.505624771118164,
+          -9.208038330078125,
+          -11.090867042541504,
+          -11.175713539123535,
+          -0.7392760515213013,
+          -11.133319854736328,
+          -10.34521484375,
+          -10.099294662475586,
+          -8.212594985961914,
+          -9.346160888671875,
+          -11.126275062561035,
+          1.5993742942810059,
+          -8.360289573669434,
+          -11.01453971862793,
+          -11.126543045043945,
+          -10.940865516662598,
+          -7.14059591293335,
+          -8.267169952392578,
+          1.8611598014831543,
+          -7.225976467132568,
+          -6.9518914222717285,
+          -8.76537799835205,
+          -5.8969597816467285,
+          -9.221711158752441
+        ]
+      },
+      "relevance_threshold": {
+        "threshold": -9.35,
+        "dev_kept": 0.974,
+        "heldout_kept": 0.936,
+        "loan_kept": 0.97,
+        "unanswerable_rejected": 0.467,
+        "off_topic_rejected": 0.7,
+        "near_topic_rejected": 0.35,
+        "n": {
+          "dev": 38,
+          "heldout": 47,
+          "loan": 270,
+          "unanswerable": 30
+        }
+      },
+      "latency_ms": {
+        "p50": 252.4,
+        "p95": 325.7,
+        "n": 40
+      }
+    },
+    "pool 4, no query translation": {
+      "setting": {
+        "name": "pool 4, no query translation",
+        "pool": 4,
+        "headings_search": false,
+        "headings_embed": false,
+        "parent": "pool 4 (as deployed)",
+        "fusion": "rerank",
+        "keyword_overlap_required": true,
+        "translate": false
+      },
+      "dev": {
+        "n": 38,
+        "distinct": 38,
+        "recall@1": {
+          "mean": 0.5,
+          "lo": 0.3421,
+          "hi": 0.6579
+        },
+        "recall@2": {
+          "mean": 0.6842,
+          "lo": 0.5263,
+          "hi": 0.8421
+        },
+        "recall@3": {
+          "mean": 0.7632,
+          "lo": 0.6316,
+          "hi": 0.8947
+        },
+        "recall@5": {
+          "mean": 0.7632,
+          "lo": 0.6316,
+          "hi": 0.8947
+        },
+        "mrr": {
+          "mean": 0.6184,
+          "lo": 0.4781,
+          "hi": 0.75
+        }
+      },
+      "heldout": {
+        "n": 47,
+        "distinct": 47,
+        "recall@1": {
+          "mean": 0.766,
+          "lo": 0.6383,
+          "hi": 0.8723
+        },
+        "recall@2": {
+          "mean": 0.8511,
+          "lo": 0.7447,
+          "hi": 0.9362
+        },
+        "recall@3": {
+          "mean": 0.8723,
+          "lo": 0.766,
+          "hi": 0.9574
+        },
+        "recall@5": {
+          "mean": 0.9149,
+          "lo": 0.8298,
+          "hi": 0.9787
+        },
+        "mrr": {
+          "mean": 0.8262,
+          "lo": 0.7252,
+          "hi": 0.9167
+        }
+      },
+      "loan": {
+        "n": 270,
+        "distinct": 30,
+        "recall@1": {
+          "mean": 0.6593,
+          "lo": 0.5,
+          "hi": 0.8074
+        },
+        "recall@2": {
+          "mean": 0.7741,
+          "lo": 0.6259,
+          "hi": 0.8963
+        },
+        "recall@3": {
+          "mean": 0.7852,
+          "lo": 0.6407,
+          "hi": 0.9037
+        },
+        "recall@5": {
+          "mean": 0.8259,
+          "lo": 0.6926,
+          "hi": 0.937
+        },
+        "mrr": {
+          "mean": 0.7293,
+          "lo": 0.5913,
+          "hi": 0.8528
+        }
+      },
+      "loan_isolation_leaks": 0,
+      "loan_recall2_by_fact": {
+        "principal": 0.667,
+        "tenure": 0.333,
+        "emi": 0.63,
+        "rate": 1.0,
+        "late_fee": 1.0,
+        "settlement": 1.0,
+        "first_emi": 0.667,
+        "security": 0.926,
+        "court": 0.852,
+        "extension": 0.667
+      },
+      "loan_recall2_by_phrasing": {
+        "clean": 1.0,
+        "colloquial": 0.789,
+        "hinglish": 0.533
+      },
+      "answerable_vs_unanswerable": {
+        "auc": 0.7898,
+        "answerable_scores": [
+          -6.77926778793335,
+          -4.050904750823975,
+          -7.629322528839111,
+          -5.802895545959473,
+          -7.182316780090332,
+          -1.2163769006729126,
+          -9.824830055236816,
+          -10.760900497436523,
+          1.4633681774139404,
+          -0.5297678112983704,
+          -11.292165756225586,
+          -4.592102527618408,
+          -8.132296562194824,
+          -6.41266393661499,
+          -1.9191334247589111,
+          -6.948146343231201,
+          -11.15346908569336,
+          -3.7676501274108887,
+          1.2773679494857788,
+          -5.322483539581299,
+          1.9195761680603027,
+          -8.394596099853516,
+          -1.0254219770431519,
+          -10.62723445892334,
+          -9.347719192504883,
+          -9.028409957885742,
+          -10.505289077758789,
+          -3.408909320831299,
+          -4.500779628753662,
+          -10.431985855102539,
+          -4.72520112991333,
+          -6.41813325881958,
+          -6.054678440093994,
+          -11.339905738830566,
+          1.3846322298049927,
+          -2.392428398132324,
+          5.467515468597412,
+          3.178222894668579,
+          -3.446293592453003,
+          -1.3182615041732788,
+          6.416955471038818,
+          0.12993815541267395,
+          -3.847785234451294,
+          1.958430528640747,
+          -5.769207954406738,
+          -8.024161338806152,
+          -1.6726930141448975,
+          -10.909826278686523,
+          -8.343183517456055,
+          1.3661030530929565,
+          -6.076930999755859,
+          -1.221276044845581,
+          4.0620245933532715,
+          -11.419637680053711,
+          4.480193138122559,
+          3.4414689540863037,
+          -0.9725840091705322,
+          -9.198575019836426,
+          -0.5398539304733276,
+          6.519902229309082,
+          -6.932417869567871,
+          -5.388937950134277,
+          5.861948490142822,
+          -8.236594200134277,
+          0.9535557627677917,
+          -5.590115070343018,
+          0.6527717709541321,
+          1.3446040153503418,
+          2.242673635482788,
+          -11.250921249389648,
+          3.6631789207458496,
+          -4.088282585144043,
+          3.615853786468506,
+          -9.839902877807617,
+          -3.4347379207611084,
+          -5.384302616119385,
+          0.04084903001785278,
+          -4.041813850402832,
+          1.0155532360076904
+        ],
+        "unanswerable_scores": [
+          -11.036758422851562,
+          -9.040427207946777,
+          -11.074016571044922,
+          -11.151016235351562,
+          -11.282732009887695,
+          -11.133816719055176,
+          -8.505624771118164,
+          -9.208038330078125,
+          -11.330979347229004,
+          -0.26278916001319885,
+          -11.133319854736328,
+          -10.34521484375,
+          -10.099294662475586,
+          -8.212594985961914,
+          -9.346160888671875,
+          -11.126275062561035,
+          1.5993742942810059,
+          -8.360289573669434,
+          -11.01453971862793,
+          -9.731204986572266,
+          -10.940865516662598,
+          -5.371364116668701,
+          -8.267169952392578,
+          1.8611598014831543,
+          -7.225976467132568,
+          -6.9518914222717285,
+          -11.223262786865234,
+          -9.221711158752441
+        ]
+      },
+      "relevance_threshold": {
+        "threshold": -11.29,
+        "dev_kept": 0.971,
+        "heldout_kept": 0.977,
+        "loan_kept": 0.981,
+        "unanswerable_rejected": 0.036,
+        "off_topic_rejected": 0.111,
+        "near_topic_rejected": 0.0,
+        "n": {
+          "dev": 35,
+          "heldout": 44,
+          "loan": 270,
+          "unanswerable": 28
+        }
+      },
+      "latency_ms": {
+        "p50": 244.5,
+        "p95": 315.8,
+        "n": 40
+      }
+    }
+  },
+  "vs_parent": {
+    "pool 4, zero-overlap keyword matches allowed (old behaviour)": {
+      "parent": "pool 4 (as deployed)",
+      "paired": {
+        "dev": {
+          "recall@2": {
+            "diff": 0.0,
+            "lo": 0.0,
+            "hi": 0.0,
+            "wins": 0,
+            "losses": 0
+          },
+          "mrr": {
+            "diff": 0.0,
+            "lo": 0.0,
+            "hi": 0.0,
+            "wins": 0,
+            "losses": 0
+          }
+        },
+        "heldout": {
+          "recall@2": {
+            "diff": 0.0,
+            "lo": 0.0,
+            "hi": 0.0,
+            "wins": 0,
+            "losses": 0
+          },
+          "mrr": {
+            "diff": 0.0,
+            "lo": 0.0,
+            "hi": 0.0,
+            "wins": 0,
+            "losses": 0
+          }
+        },
+        "loan": {
+          "recall@2": {
+            "diff": 0.0,
+            "lo": 0.0,
+            "hi": 0.0,
+            "wins": 0,
+            "losses": 0
+          },
+          "mrr": {
+            "diff": 0.0,
+            "lo": 0.0,
+            "hi": 0.0,
+            "wins": 0,
+            "losses": 0
+          }
+        }
+      },
+      "verdict": "no measurable difference -- not shipped"
+    },
+    "pool 8": {
+      "parent": "pool 4 (as deployed)",
+      "paired": {
+        "dev": {
+          "recall@2": {
+            "diff": 0.0263,
+            "lo": 0.0,
+            "hi": 0.0789,
+            "wins": 1,
+            "losses": 0
+          },
+          "mrr": {
+            "diff": 0.0184,
+            "lo": 0.0,
+            "hi": 0.05,
+            "wins": 2,
+            "losses": 0
+          }
+        },
+        "heldout": {
+          "recall@2": {
+            "diff": 0.0,
+            "lo": 0.0,
+            "hi": 0.0,
+            "wins": 0,
+            "losses": 0
+          },
+          "mrr": {
+            "diff": -0.0011,
+            "lo": -0.0032,
+            "hi": 0.0,
+            "wins": 0,
+            "losses": 1
+          }
+        },
+        "loan": {
+          "recall@2": {
+            "diff": 0.037,
+            "lo": 0.0,
+            "hi": 0.0889,
+            "wins": 10,
+            "losses": 0
+          },
+          "mrr": {
+            "diff": 0.0287,
+            "lo": -0.0009,
+            "hi": 0.0667,
+            "wins": 10,
+            "losses": 1
+          }
+        }
+      },
+      "verdict": "no measurable difference -- not shipped"
+    },
+    "pool 16": {
+      "parent": "pool 8",
+      "paired": {
+        "dev": {
+          "recall@2": {
+            "diff": 0.0,
+            "lo": 0.0,
+            "hi": 0.0,
+            "wins": 0,
+            "losses": 0
+          },
+          "mrr": {
+            "diff": 0.0013,
+            "lo": -0.0158,
+            "hi": 0.0197,
+            "wins": 1,
+            "losses": 1
+          }
+        },
+        "heldout": {
+          "recall@2": {
+            "diff": 0.0,
+            "lo": 0.0,
+            "hi": 0.0,
+            "wins": 0,
+            "losses": 0
+          },
+          "mrr": {
+            "diff": -0.0043,
+            "lo": -0.0128,
+            "hi": 0.0,
+            "wins": 0,
+            "losses": 1
+          }
+        },
+        "loan": {
+          "recall@2": {
+            "diff": 0.0,
+            "lo": 0.0,
+            "hi": 0.0,
+            "wins": 0,
+            "losses": 0
+          },
+          "mrr": {
+            "diff": 0.0,
+            "lo": 0.0,
+            "hi": 0.0,
+            "wins": 0,
+            "losses": 0
+          }
+        }
+      },
+      "verdict": "no measurable difference -- not shipped"
+    },
+    "pool 4 + headings in search text": {
+      "parent": "pool 4 (as deployed)",
+      "paired": {
+        "dev": {
+          "recall@2": {
+            "diff": 0.0,
+            "lo": 0.0,
+            "hi": 0.0,
+            "wins": 0,
+            "losses": 0
+          },
+          "mrr": {
+            "diff": 0.011,
+            "lo": -0.0066,
+            "hi": 0.0395,
+            "wins": 1,
+            "losses": 1
+          }
+        },
+        "heldout": {
+          "recall@2": {
+            "diff": 0.0,
+            "lo": -0.0638,
+            "hi": 0.0638,
+            "wins": 1,
+            "losses": 1
+          },
+          "mrr": {
+            "diff": -0.0213,
+            "lo": -0.0567,
+            "hi": 0.0035,
+            "wins": 1,
+            "losses": 3
+          }
+        },
+        "loan": {
+          "recall@2": {
+            "diff": 0.0,
+            "lo": 0.0,
+            "hi": 0.0,
+            "wins": 0,
+            "losses": 0
+          },
+          "mrr": {
+            "diff": 0.0003,
+            "lo": -0.0327,
+            "hi": 0.0259,
+            "wins": 7,
+            "losses": 6
+          }
+        }
+      },
+      "verdict": "no measurable difference -- not shipped"
+    },
+    "pool 4 + headings everywhere": {
+      "parent": "pool 4 (as deployed)",
+      "paired": {
+        "dev": {
+          "recall@2": {
+            "diff": 0.0,
+            "lo": -0.0789,
+            "hi": 0.0789,
+            "wins": 1,
+            "losses": 1
+          },
+          "mrr": {
+            "diff": 0.0162,
+            "lo": -0.0627,
+            "hi": 0.0921,
+            "wins": 3,
+            "losses": 2
+          }
+        },
+        "heldout": {
+          "recall@2": {
+            "diff": 0.0,
+            "lo": -0.0638,
+            "hi": 0.0638,
+            "wins": 1,
+            "losses": 1
+          },
+          "mrr": {
+            "diff": -0.0213,
+            "lo": -0.0567,
+            "hi": 0.0035,
+            "wins": 1,
+            "losses": 3
+          }
+        },
+        "loan": {
+          "recall@2": {
+            "diff": 0.0185,
+            "lo": -0.0074,
+            "hi": 0.0593,
+            "wins": 6,
+            "losses": 1
+          },
+          "mrr": {
+            "diff": 0.0216,
+            "lo": -0.0259,
+            "hi": 0.0802,
+            "wins": 16,
+            "losses": 7
+          }
+        }
+      },
+      "verdict": "no measurable difference -- not shipped"
+    },
+    "pool 4 + rank fusion": {
+      "parent": "pool 4 (as deployed)",
+      "paired": {
+        "dev": {
+          "recall@2": {
+            "diff": 0.0,
+            "lo": -0.1316,
+            "hi": 0.1316,
+            "wins": 3,
+            "losses": 3
+          },
+          "mrr": {
+            "diff": 0.0066,
+            "lo": -0.0768,
+            "hi": 0.0899,
+            "wins": 5,
+            "losses": 4
+          }
+        },
+        "heldout": {
+          "recall@2": {
+            "diff": 0.0,
+            "lo": -0.0638,
+            "hi": 0.0638,
+            "wins": 1,
+            "losses": 1
+          },
+          "mrr": {
+            "diff": 0.0018,
+            "lo": -0.0443,
+            "hi": 0.0479,
+            "wins": 3,
+            "losses": 2
+          }
+        },
+        "loan": {
+          "recall@2": {
+            "diff": -0.0074,
+            "lo": -0.0222,
+            "hi": 0.0,
+            "wins": 0,
+            "losses": 2
+          },
+          "mrr": {
+            "diff": 0.008,
+            "lo": -0.0401,
+            "hi": 0.0611,
+            "wins": 19,
+            "losses": 16
+          }
+        }
+      },
+      "verdict": "no measurable difference -- not shipped"
+    },
+    "pool 4, no query translation": {
+      "parent": "pool 4 (as deployed)",
+      "paired": {
+        "dev": {
+          "recall@2": {
+            "diff": -0.0789,
+            "lo": -0.1842,
+            "hi": 0.0263,
+            "wins": 1,
+            "losses": 4
+          },
+          "mrr": {
+            "diff": -0.1053,
+            "lo": -0.2105,
+            "hi": -0.0175,
+            "wins": 2,
+            "losses": 7
+          }
+        },
+        "heldout": {
+          "recall@2": {
+            "diff": -0.0851,
+            "lo": -0.1702,
+            "hi": -0.0213,
+            "wins": 0,
+            "losses": 4
+          },
+          "mrr": {
+            "diff": -0.0798,
+            "lo": -0.1578,
+            "hi": -0.016,
+            "wins": 0,
+            "losses": 5
+          }
+        },
+        "loan": {
+          "recall@2": {
+            "diff": -0.1556,
+            "lo": -0.2889,
+            "hi": -0.0333,
+            "wins": 0,
+            "losses": 42
+          },
+          "mrr": {
+            "diff": -0.1494,
+            "lo": -0.268,
+            "hi": -0.0519,
+            "wins": 0,
+            "losses": 54
+          }
+        }
+      },
+      "verdict": "hurts -- not shipped"
+    }
   }
 }

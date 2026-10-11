@@ -1,19 +1,130 @@
 """Document ingestion: parse a real file (PDF, markdown, docx -- whatever
 Docling supports) into structure-aware chunks, embed them, and add them to
 the persistent vector store. Each chunk keeps its heading path as metadata
-(e.g. "Restructuring options > One-time settlement"), not just raw text --
-that's what "contextual chunking" concretely means here.
+(e.g. "Restructuring options > One-time settlement").
+
+Ingestion is all-or-nothing. Everything that can fail (parsing, the
+readability check, embedding) runs BEFORE the database is touched, and the
+database part is a single transaction: a document is never left retired
+with no replacement, or half-inserted.
 """
 
 import hashlib
+import logging
+import math
+import re
+import threading
+from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
+from pathlib import Path
 
 from docling.chunking import HybridChunker
-from docling.document_converter import DocumentConverter
+from docling.document_converter import ConversionResult, DocumentConverter
 
 from businessflow.accounts.db import get_connection
 from businessflow.rag.embeddings import embed_passages
 from businessflow.rag.store import embedding_literal, normalize_source_document, resolve_source_document
+from businessflow.rag.tokenize import with_headings
+
+logger = logging.getLogger(__name__)
+
+
+class UnreadableDocumentError(ValueError):
+    """The file opened, but no usable text came out of it: a blank page, a scan the OCR could not read, a language the
+    bundled OCR does not know. Ingesting what little (or what garbage) did come out would silently replace a good
+    document with nothing, so the upload is refused instead."""
+
+
+# Measured on rendered test scans (see tests/test_ingest.py and the README): the bundled OCR reads English scans
+# at 0.93-0.99 confidence and fails on Devanagari at 0.50-0.57; a scan it finds nothing in yields no text at all.
+_MIN_READABLE_CHARS = 20
+_MIN_OCR_CONFIDENCE = 0.75
+_PLACEHOLDER = re.compile(r"<!--.*?-->")  # Docling writes "<!-- image -->" for a picture it could not read text from
+
+
+# Whether the heading path goes in front of the text that is embedded. Tried (eval/retrieval_benchmark.py, "headings
+# everywhere"): it lifted Recall@5 on the dev questions but did not hold on the held-out ones or the loan-agreement
+# facts, so by the benchmark's own decision rule it is not used. A change here means re-embedding every stored chunk.
+EMBED_WITH_HEADINGS = False
+
+
+@dataclass(frozen=True)
+class ChunkRecord:
+    text: str
+    headings: str  # " > "-joined heading path, "" when the chunk sits under no heading
+
+    @property
+    def embedding_text(self) -> str:
+        return with_headings(self.headings, self.text)
+
+
+# One converter and one chunker for the whole process. Building a DocumentConverter loads the layout, table and OCR
+# models; doing that on every upload made the process grow by ~100-190 MB per upload (485 -> 1366 MB over three
+# uploads, measured) and cost ~2 s each. Conversions are serialised: the models are not documented as thread-safe,
+# and one at a time is also what keeps peak memory bounded on a small VM.
+_parse_lock = threading.Lock()
+_recent_conversions: "OrderedDict[tuple, ConversionResult]" = OrderedDict()
+_RECENT_CONVERSIONS_KEPT = 2
+
+
+@lru_cache(maxsize=1)
+def _converter() -> DocumentConverter:
+    return DocumentConverter()
+
+
+@lru_cache(maxsize=1)
+def _chunker() -> HybridChunker:
+    return HybridChunker()
+
+
+def _convert(file_path: str) -> ConversionResult:
+    """Docling's conversion of file_path. The last couple are remembered by (path, mtime, size), so the loan-term
+    extraction that follows ingestion in the upload endpoint does not parse the same file a second time."""
+    stat = Path(file_path).stat()
+    key = (str(Path(file_path).resolve()), stat.st_mtime_ns, stat.st_size)
+    with _parse_lock:
+        result = _recent_conversions.get(key)
+        if result is None:
+            result = _converter().convert(file_path)
+            _recent_conversions[key] = result
+            while len(_recent_conversions) > _RECENT_CONVERSIONS_KEPT:
+                _recent_conversions.popitem(last=False)
+        else:
+            _recent_conversions.move_to_end(key)
+        return result
+
+
+def _require_readable(result: ConversionResult, records: list[ChunkRecord], file_path: str) -> None:
+    body = _PLACEHOLDER.sub(" ", " ".join(r.text for r in records))
+    readable = sum(ch.isalnum() for ch in body)
+    if readable < _MIN_READABLE_CHARS:
+        raise UnreadableDocumentError(
+            f"no readable text could be extracted from {Path(file_path).name} (found {readable} letters and digits) -- "
+            f"is it blank, or a scan too poor for OCR to read?"
+        )
+    confidence = getattr(getattr(result, "confidence", None), "ocr_score", math.nan)
+    if not math.isnan(confidence) and confidence < _MIN_OCR_CONFIDENCE:
+        raise UnreadableDocumentError(
+            f"{Path(file_path).name} could not be read reliably by OCR (confidence {confidence:.2f}, needs "
+            f"{_MIN_OCR_CONFIDENCE}) -- the bundled OCR reads English scans, not Hindi/Devanagari ones. Upload the "
+            f"text version of the document instead."
+        )
+
+
+def parse_and_chunk(file_path: str) -> list[ChunkRecord]:
+    """The file as structure-aware chunks, or UnreadableDocumentError. Touches no database."""
+    result = _convert(file_path)
+    with _parse_lock:
+        chunks = list(_chunker().chunk(result.document))
+    records = [ChunkRecord(text=c.text, headings=" > ".join(c.meta.headings or [])) for c in chunks]
+    _require_readable(result, records, file_path)
+    return records
+
+
+def embed_records(records: list[ChunkRecord]):
+    return embed_passages([r.embedding_text if EMBED_WITH_HEADINGS else r.text for r in records])
 
 
 def ingest_document(file_path: str, document_type: str, account_id: str | None = None) -> int:
@@ -25,63 +136,53 @@ def ingest_document(file_path: str, document_type: str, account_id: str | None =
     every borrower, like general policy.
 
     Re-ingesting the same file_path is safe to run twice: any existing
-    (not-already-superseded) chunks for that file are marked superseded --
-    via _supersede_existing_chunks, which sets a real superseded_at
-    timestamp on them in place -- rather than deleted, so a correction to a
-    policy/loan document doesn't erase the record of what it said before.
-    DocumentRetriever only ever considers chunks without a real
-    superseded_at value, so this is invisible to retrieval; it's only
-    reachable via a direct query against document_chunks by source_document.
+    (not-already-superseded) chunks for that file are marked superseded
+    rather than deleted, so a correction to a policy/loan document doesn't
+    erase the record of what it said before. DocumentRetriever only ever
+    considers chunks without a superseded_at value, so this is invisible to
+    retrieval; it's only reachable via a direct query by source_document.
+    Superseding and inserting happen in ONE transaction, serialised per
+    document by an advisory lock, so a failure leaves the previous version
+    exactly as it was and two concurrent uploads of the same file cannot
+    leave two active generations.
 
-    Returns the number of NEW chunks stored (matches the old contract:
-    superseded chunks from previous generations aren't counted).
+    Returns the number of NEW chunks stored. Raises UnreadableDocumentError
+    (a ValueError) for a file with no usable text, before anything is
+    written -- the previous version stays active.
     """
-    doc = DocumentConverter().convert(file_path).document
-    chunks = list(HybridChunker().chunk(doc))
-    conn = get_connection()
+    records = parse_and_chunk(file_path)
+    embeddings = embed_records(records)
 
-    # Stored (and matched against, below and in _supersede_existing_chunks/
-    # purge_orphaned_chunks) as a repo-root-relative path -- see
+    # Stored (and matched against) as a repo-root-relative path -- see
     # normalize_source_document's docstring for why an absolute one
     # would be wrong now that this store is shared across machines.
     source_document = normalize_source_document(file_path)
-
-    # One timestamp for this whole call: it's both the superseded_at value
-    # stamped on the old generation below, and (see the id comment in the
-    # loop) folded into the new generation's ids.
     now = datetime.now(timezone.utc)
-    _supersede_existing_chunks(conn, source_document, now)
 
-    if not chunks:
-        return 0
-
-    texts = [c.text for c in chunks]
-    embeddings = embed_passages(texts)
-
-    for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-        # Folds `now` in, not just source_document + index: the old id
-        # scheme (file_path + index alone) is what let re-ingestion
-        # overwrite the same ids in place, which was correct back when
-        # re-ingestion deleted-then-inserted. Now that the previous
-        # generation is kept around (marked superseded, not deleted),
-        # reusing those same ids here would upsert straight over the rows
-        # _supersede_existing_chunks just wrote above -- silently erasing
-        # the superseded marking this whole feature exists to preserve.
-        # Folding in `now` guarantees this generation's ids can't collide
-        # with the one it's superseding.
-        chunk_id = hashlib.sha1(f"{source_document}::{i}::{now.isoformat()}".encode()).hexdigest()
-        conn.execute(
-            """
-            insert into document_chunks
-                (id, source_document, document_type, account_id, chunk_index, headings, document_text, embedding)
-            values (%s, %s, %s, %s, %s, %s, %s, %s::vector)
-            """,
-            (
-                chunk_id, source_document, document_type, account_id or "general", i,
-                " > ".join(chunk.meta.headings or []), chunk.text, embedding_literal(embedding),
-            ),
+    rows = [
+        (
+            # Folds `now` in, not just source_document + index: the previous generation is kept (marked
+            # superseded, not deleted), so this generation's ids must not collide with it.
+            hashlib.sha1(f"{source_document}::{i}::{now.isoformat()}".encode()).hexdigest(),
+            source_document, document_type, account_id or "general", i, record.headings, record.text,
+            embedding_literal(embedding),
         )
-    return len(chunks)
+        for i, (record, embedding) in enumerate(zip(records, embeddings))
+    ]
+    with get_connection().transaction() as tx:
+        tx.execute("select pg_advisory_xact_lock(hashtext(%s))", (source_document,))
+        _supersede_existing_chunks(tx, source_document, now)
+        with tx.cursor() as cursor:
+            cursor.executemany(
+                """
+                insert into document_chunks
+                    (id, source_document, document_type, account_id, chunk_index, headings, document_text, embedding)
+                values (%s, %s, %s, %s, %s, %s, %s, %s::vector)
+                """,
+                rows,
+            )
+    logger.info("ingested %s: %d chunks (document_type=%s, account_id=%s)", source_document, len(rows), document_type, account_id or "general")
+    return len(rows)
 
 
 def _supersede_existing_chunks(conn, source_document: str, superseded_at: datetime) -> None:
@@ -109,16 +210,10 @@ def purge_superseded_chunks(older_than_days: int = 30) -> int:
     """The real cleanup _supersede_existing_chunks defers: that function
     marks a chunk superseded_at instead of deleting it, so a correction
     never erases the record of what a document said before -- but nothing
-    ever actually reclaimed that space, and real usage shows it adds up
-    fast (one KB doc alone accumulated 76 superseded chunks from repeated
-    re-ingestion during development). A chunk superseded this long ago has
-    had every reasonable chance to matter for a compliance/history look-
-    back; keeping it forever is unbounded growth, not a retention policy.
-
-    A plain `<` comparison against a real timestamptz column now, not a
-    Python-side filter -- Chroma's filter grammar couldn't express this
-    directly (retriever.py's own comments document why), Postgres always
-    could. Returns the number of chunks actually deleted."""
+    reclaims that space until this runs (scripts/purge_chunks.py). A chunk
+    superseded this long ago has had every reasonable chance to matter for
+    a compliance/history look-back; keeping it forever is unbounded growth,
+    not a retention policy. Returns the number of chunks actually deleted."""
     conn = get_connection()
     cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
     rows = conn.execute(
@@ -157,25 +252,14 @@ def purge_orphaned_chunks() -> int:
 
 
 def extract_document_text(file_path: str) -> str:
-    """Parses file_path with the same Docling converter ingest_document()
-    uses, and returns the WHOLE document as one markdown string -- for a
-    caller that wants the full text (e.g. to hand to an LLM extraction
-    pass, see rag/extraction.py's extract_loan_terms), not the chunked/
-    embedded form ingest_document() stores.
+    """The WHOLE document as one markdown string -- for a caller that wants
+    the full text (e.g. to hand to an LLM extraction pass, see
+    rag/extraction.py's extract_loan_terms), not the chunked/embedded form
+    ingest_document() stores. Uses the same conversion ingest_document()
+    just made (see _convert), so an upload does not parse its file twice.
 
-    Parses file_path independently of ingest_document() -- a caller that
-    needs both (an account document upload wanting both RAG ingestion and
-    structured-field extraction) parses the same file twice. Acceptable
-    for a single-document, ops-driven upload, not a hot path -- and it
-    keeps ingest_document's own signature, return type, and already-
-    tested contract completely unchanged rather than bolting a second
-    concern onto it.
-
-    export_to_markdown() (verified against the installed docling version
-    via DoclingDocument's real export_to_* methods) rather than
-    export_to_text(), since markdown keeps table structure -- relevant
-    for a loan agreement's numeric terms, which sometimes appear in a
-    table rather than a sentence.
+    export_to_markdown() rather than export_to_text(), since markdown keeps
+    table structure -- relevant for a loan agreement's numeric terms, which
+    sometimes appear in a table rather than a sentence.
     """
-    doc = DocumentConverter().convert(file_path).document
-    return doc.export_to_markdown()
+    return _convert(file_path).document.export_to_markdown()

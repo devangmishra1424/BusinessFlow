@@ -1389,3 +1389,73 @@ def test_resolving_a_dispute_tells_the_borrower_how_it_ended(reseed_accounts):
         ("BF-1003",),
     ).fetchone()["message"]
     assert "reviewed it and closed it" in message and "Fee reviewed and removed." in message
+
+
+def _blank_scan_pdf() -> bytes:
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("L", (1240, 900), 255).save(buffer, "PDF", resolution=150)
+    return buffer.getvalue()
+
+
+@_pg_skip
+@_ops_key_skip
+def test_upload_of_a_scan_with_no_readable_text_is_refused_and_stores_nothing(reseed_accounts):
+    # A blank (or unreadable, or Hindi) scan used to be ingested as "<!-- image -->" or garbage, replacing a good
+    # document with nothing. It must be a clear 422 that leaves no file and no chunks.
+    from pathlib import Path
+
+    from businessflow.rag.store import get_chunk_ids_for_document
+
+    saved_path = Path(__file__).resolve().parents[1] / "data" / "documents" / "BF-1001" / "blank_scan.pdf"
+    response = client.post(
+        "/accounts/BF-1001/documents",
+        files={"file": ("blank_scan.pdf", _blank_scan_pdf(), "application/pdf")},
+        data={"document_type": "loan_agreement"},
+        headers=_auth(),
+    )
+
+    assert response.status_code == 422
+    assert "no readable text" in response.json()["detail"]
+    assert not saved_path.exists() and not saved_path.parent.exists()
+    assert get_chunk_ids_for_document(str(saved_path)) == []
+
+
+@_pg_skip
+@_ops_key_skip
+def test_a_rejected_reupload_leaves_the_previous_version_in_place_on_disk_and_in_the_index(reseed_accounts):
+    from pathlib import Path
+
+    from businessflow.rag.store import delete_chunks_for_document, get_chunk_texts_for_document
+
+    saved_path = Path(__file__).resolve().parents[1] / "data" / "documents" / "BF-1001" / "test_keep_previous.md"
+    original = b"# Terms\n\nA special one-time retention waiver of exactly nine percent applies to this specific loan."
+    try:
+        first = client.post(
+            "/accounts/BF-1001/documents",
+            files={"file": ("test_keep_previous.md", original, "text/markdown")},
+            data={"document_type": "loan_agreement"},
+            headers=_auth(),
+        )
+        assert first.status_code == 200
+        before = sorted(get_chunk_texts_for_document(str(saved_path)), key=lambda r: r["document_text"])
+
+        # Same filename, nothing readable in it: refused, and the good version must survive untouched.
+        second = client.post(
+            "/accounts/BF-1001/documents",
+            files={"file": ("test_keep_previous.md", b"\n\n", "text/markdown")},
+            data={"document_type": "loan_agreement"},
+            headers=_auth(),
+        )
+
+        assert second.status_code == 422
+        assert saved_path.read_bytes() == original
+        assert sorted(get_chunk_texts_for_document(str(saved_path)), key=lambda r: r["document_text"]) == before
+        assert all(r["superseded_at"] is None for r in get_chunk_texts_for_document(str(saved_path)))
+    finally:
+        delete_chunks_for_document(str(saved_path))
+        saved_path.unlink(missing_ok=True)
+
