@@ -46,7 +46,7 @@ from businessflow.outbound.compose import draft_clarification_message
 from businessflow.outbound.run import run_daily_pass
 from businessflow.rag.extraction import extract_loan_terms
 from businessflow.rate_limit import RateLimiter
-from businessflow.rag.ingest import UnreadableDocumentError, extract_document_text, ingest_document
+from businessflow.rag.ingest import SuspiciousDocumentError, UnreadableDocumentError, extract_document_text, ingest_document
 from businessflow.tools.escalation_tools import escalate_to_human
 
 logger = logging.getLogger(__name__)
@@ -749,14 +749,15 @@ async def upload_account_document(
             chunks_stored = await asyncio.to_thread(
                 ingest_document, str(saved_path), document_type=document_type, account_id=account_id
             )
-        except (ConversionError, UnreadableDocumentError) as e:
+        except (ConversionError, UnreadableDocumentError, SuspiciousDocumentError) as e:
             # ConversionError: the extension passed our allow-list check, but the bytes behind it aren't a real,
             # parseable document of that type (corrupt file, wrong content under this extension). Docling raises its
             # own error for exactly this -- caught specifically, not via a bare `except Exception`, so a genuinely
             # unexpected failure still propagates as a 500 instead of being misreported as "bad input".
             # UnreadableDocumentError: it parsed, but nothing usable came out (a blank page, a scan the OCR cannot
-            # read, Hindi script). Either way ingest_document() wrote nothing to the index, and the previous version
-            # of this document, if any, is put back.
+            # read, Hindi script). SuspiciousDocumentError: it contains text written to instruct an AI (indirect prompt
+            # injection). In every case ingest_document() wrote nothing to the index, and the previous version of this
+            # document, if any, is put back.
             _rollback_upload(saved_path, previous, account_dir)
             detail = f"could not parse this file as {extension}: {e}" if isinstance(e, ConversionError) else str(e)
             raise HTTPException(status_code=422, detail=detail) from e

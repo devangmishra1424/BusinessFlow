@@ -175,6 +175,21 @@ async def _tool_specs() -> list[dict]:
     ]
 
 
+_account_scoped_tool_names: frozenset[str] | None = None
+
+
+async def _account_scoped_tools() -> frozenset[str]:
+    """Names of the tools that take an account_id, read from the tools' own schemas (so a new tool is covered without
+    touching this)."""
+    global _account_scoped_tool_names
+    if _account_scoped_tool_names is None:
+        tools = await mcp.list_tools()
+        _account_scoped_tool_names = frozenset(
+            t.name for t in tools if "account_id" in ((t.parameters or {}).get("properties") or {})
+        )
+    return _account_scoped_tool_names
+
+
 @langfuse.observe(name="tool_call", as_type="tool")
 async def _execute_tool_call(tool_call, verified_account_id: str | None = None) -> str:
     tool_name = tool_call.function.name
@@ -182,6 +197,8 @@ async def _execute_tool_call(tool_call, verified_account_id: str | None = None) 
         arguments = json.loads(tool_call.function.arguments)
     except json.JSONDecodeError as e:
         return json.dumps({"error": f"invalid arguments JSON from model: {e}"})
+    if not isinstance(arguments, dict):
+        return json.dumps({"error": "tool arguments must be a JSON object"})
 
     account_id = arguments.get("account_id")
 
@@ -201,6 +218,12 @@ async def _execute_tool_call(tool_call, verified_account_id: str | None = None) 
                 f"ask the caller for {account_id}'s access key before discussing or acting on it."
             ),
         })
+
+    # In a verified session the account is never the model's to choose. A mismatch is refused above; an omitted
+    # account_id is filled in here, so what a tool acts on (and what check_policy searches) does not depend on the model
+    # remembering, or being told, which account it is talking about.
+    if verified_account_id is not None and account_id is None and tool_name in await _account_scoped_tools():
+        arguments["account_id"] = account_id = verified_account_id
 
     try:
         result = await mcp.call_tool(tool_name, arguments)
@@ -295,6 +318,13 @@ def _finalize_reply(conversation: list[dict], verified_account_id: str | None) -
         user_message = conversation[turn_start].get("content") or ""
         tools_called_this_turn = {name for name, _ in extract_new_tool_calls(conversation, turn_start)}
         failure = check_unverified_restructuring_claim(user_message, tools_called_this_turn)
+
+    if not failure:
+        failure = grounding.check_fabricated_waiver(reply_text)
+
+    if not failure:
+        system_prompt = next((m.get("content") or "" for m in conversation if m.get("role") == "system"), "")
+        failure = grounding.check_prompt_leak(reply_text, system_prompt)
 
     if not failure:
         return conversation, reply_text
