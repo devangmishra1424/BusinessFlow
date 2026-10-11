@@ -1,0 +1,52 @@
+{
+  "date": "2026-10-11",
+  "fabricated_caught": {
+    "k": 417,
+    "n": 417,
+    "rate": 1.0,
+    "lo": 0.991,
+    "hi": 1.0
+  },
+  "fabricated_caught_by_format": {
+    "Devanagari digits": "50/50",
+    "Hindi suffix": "50/50",
+    "INR": "50/50",
+    "Indian grouping": "50/50",
+    "Rs no dot": "50/50",
+    "Rs.": "50/50",
+    "invented link": "7/7",
+    "lakh": "10/10",
+    "rupee sign": "50/50",
+    "rupees after": "50/50"
+  },
+  "grounded_wrongly_blocked": {
+    "k": 0,
+    "n": 258,
+    "rate": 0.0,
+    "lo": 0.0,
+    "hi": 0.015
+  },
+  "grounded_by_format_passed": {
+    "Devanagari digits": "30/30",
+    "Hindi suffix": "30/30",
+    "INR": "30/30",
+    "Indian grouping": "30/30",
+    "Rs no dot": "30/30",
+    "Rs.": "30/30",
+    "lakh": "5/5",
+    "no figure": "3/3",
+    "real link": "6/6",
+    "rounded": "4/4",
+    "rupee sign": "30/30",
+    "rupees after": "30/30"
+  },
+  "derived_but_correct_blocked": {
+    "k": 5,
+    "n": 5,
+    "rate": 1.0,
+    "lo": 0.566,
+    "hi": 1.0
+  },
+  "missed_examples": [],
+  "wrongly_blocked_examples": []
+}
