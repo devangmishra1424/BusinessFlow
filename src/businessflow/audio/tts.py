@@ -1,12 +1,24 @@
 """Text-to-speech: Piper for English (a local ONNX voice file, downloaded
-separately into data/models/piper/ -- not bundled with pip install), Meta
-MMS-TTS for Hindi (via transformers, auto-downloaded from Hugging Face on
-first use). Both return the same shape -- a mono float32 tensor + its
-sample rate -- so downstream code doesn't care which engine produced it.
+separately into data/models/piper/ -- not bundled with pip install). Hindi
+is Piper's hi_IN voice by default (fetched from Hugging Face when a service
+starts, about 60 MB) with Meta MMS-TTS (via transformers, also auto-downloaded) as
+the fallback, or the first choice with TTS_HINDI_ENGINE=mms. Every engine
+returns the same shape -- a mono float32 tensor + its sample rate -- so
+downstream code doesn't care which produced it.
+
+Why Piper for Hindi (eval/tts_benchmark.py, results in eval/results/tts_benchmark.md; 40 sentences
+x 3 repeats (32 Devanagari scored for clarity, 8 Roman-script for robustness), criteria fixed beforehand, read back by Whisper large-v3): character error 7.3%
+against MMS's 12.8% (the gain is in numbers and acronyms), 7x faster on 2 CPU threads (real-time factor
+0.10 vs 0.74), steadier from one repeat to the next, and +138 MB in a fresh process against MMS's +175 MB
+on a VM with 3.8 GB. A listener ranked Piper's priyamvada voice above MMS. Kokoro Hindi ranked first by
+ear and was the clearest, but it costs roughly 700 MB and runs at about half real time on those 2
+threads, so it was not adopted for this VM. The Hindi voice file (~63 MB) is fetched by prefetch_voices()
+when a service starts, not during a reply.
 """
 
 import io
 import logging
+import os
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -15,6 +27,8 @@ from pathlib import Path
 import soundfile as sf
 import torch
 import torchaudio
+from huggingface_hub import hf_hub_download
+from huggingface_hub.errors import LocalEntryNotFoundError
 from piper import PiperVoice
 from transformers import AutoTokenizer, VitsModel
 
@@ -56,6 +70,78 @@ def _mms_hindi():
     return tokenizer, model
 
 
+_HINDI_ENGINES = ("piper", "mms")
+_PIPER_HINDI_REPO = "rhasspy/piper-voices"
+
+
+def _hindi_engine_order() -> list[str]:
+    """TTS_HINDI_ENGINE picks the first choice; the other is the fallback. Read at call time so a deployment can
+    flip it; a typo fails loudly rather than silently using the default."""
+    preferred = os.environ.get("TTS_HINDI_ENGINE", "piper").strip().lower()
+    if preferred not in _HINDI_ENGINES:
+        raise ValueError(f"TTS_HINDI_ENGINE must be one of {_HINDI_ENGINES}, got {preferred!r}")
+    return [preferred] + [e for e in _HINDI_ENGINES if e != preferred]
+
+
+def _piper_hindi_voice_name() -> str:
+    return os.environ.get("PIPER_HINDI_VOICE", "priyamvada").strip()  # rohan, pratham and priyamvada exist (medium)
+
+
+def _fetch_piper_hindi(voice_name: str, *, local_only: bool) -> str:
+    """Path of the Hindi voice's model file; the config file has to sit next to it, so both are fetched."""
+    filename = f"hi/hi_IN/{voice_name}/medium/hi_IN-{voice_name}-medium.onnx"
+    model_path = hf_hub_download(_PIPER_HINDI_REPO, filename, local_files_only=local_only)
+    hf_hub_download(_PIPER_HINDI_REPO, filename + ".json", local_files_only=local_only)
+    return model_path
+
+
+@lru_cache(maxsize=4)
+def _piper_hindi(voice_name: str) -> PiperVoice:
+    """Piper's Hindi voice. The cached copy is used without a network call (hf_hub_download otherwise asks
+    Hugging Face whether the file changed, and waits out its timeout when the site is unreachable); only a voice
+    that has never been fetched goes to the network -- normally prefetch_voices() did that at service start."""
+    try:
+        model_path = _fetch_piper_hindi(voice_name, local_only=True)
+    except LocalEntryNotFoundError:
+        model_path = _fetch_piper_hindi(voice_name, local_only=False)
+    return PiperVoice.load(model_path)
+
+
+def prefetch_voices() -> None:
+    """Called once when a service starts: puts the Hindi voice file on disk so the first Hindi reply does not
+    download 63 MB (in the Telegram bot that would also freeze every chat while it ran). Downloads only -- the
+    model is not loaded, so this costs disk, not memory. Never raises for a download problem: the text replies
+    do not depend on it and speak_hindi falls back to MMS-TTS. A bad TTS_HINDI_ENGINE does raise, here at start
+    instead of at the first Hindi reply."""
+    if _hindi_engine_order()[0] != "piper":
+        return
+    voice_name = _piper_hindi_voice_name()
+    try:
+        _fetch_piper_hindi(voice_name, local_only=False)
+    except OSError:  # huggingface_hub's errors (no network, 404, timeout) all derive from OSError
+        logger.error(
+            "Could not fetch the Piper Hindi voice %r: Hindi replies will use the MMS-TTS fallback until it can be. "
+            "Check that this machine can reach huggingface.co (or PIPER_HINDI_VOICE), then restart the service.",
+            voice_name, exc_info=True,
+        )
+    else:
+        logger.info("Piper Hindi voice %r is on disk", voice_name)
+
+
+# Piper hands back audio normalised to a peak of exactly 1.0 (full scale), which leaves no headroom: after the lossy
+# Opus step every voice reply goes through, the decoded waveform overshoots 1.0 on most clips (7 of 12 measured, up to
+# 1.009) and a player or a 16-bit conversion clips it. Peaks are kept at -1 dBFS. Only ever turned DOWN, never up.
+_PEAK_LIMIT = 0.891  # 10 ** (-1 / 20)
+
+
+def _limit_peak(audio: torch.Tensor, limit: float = _PEAK_LIMIT) -> torch.Tensor:
+    """audio scaled down so its largest sample is at most `limit`; unchanged if it is already quieter."""
+    if audio.numel() == 0:
+        return audio
+    peak = float(audio.abs().max())
+    return audio if peak <= limit else audio * (limit / peak)
+
+
 def _join_with_gaps(chunks: list[torch.Tensor], sample_rate: int, gap_seconds: float = _SENTENCE_GAP_SECONDS) -> torch.Tensor:
     """Concatenates chunks with gap_seconds (default _SENTENCE_GAP_SECONDS)
     of silence between each pair -- never a leading or trailing gap, and no
@@ -81,7 +167,7 @@ def speak_english(text: str) -> Speech:
     chunks = list(voice.synthesize(text))
     sample_rate = chunks[0].sample_rate
     audio = _join_with_gaps([torch.from_numpy(c.audio_float_array) for c in chunks], sample_rate)
-    return Speech(audio=audio, sample_rate=sample_rate)
+    return Speech(audio=_limit_peak(audio), sample_rate=sample_rate)
 
 
 # Hindi's own sentence terminator is the danda ("।"), not a period -- "."
@@ -138,8 +224,30 @@ def _synthesize_mms(tokenizer, model, text: str) -> torch.Tensor | None:
         return model(**inputs).waveform[0]
 
 
+def _speak_hindi_run(run: str) -> tuple[torch.Tensor, int] | None:
+    """One Devanagari run through the first Hindi engine that works: (audio, sample rate), or None when the engine has
+    nothing it can say. The engines fail in unrelated ways (a Hugging Face download, onnxruntime, torch), so any
+    failure of one means "try the next"; each is logged with its traceback, and if every engine fails the last error
+    is raised."""
+    last_error: Exception | None = None
+    for engine in _hindi_engine_order():
+        try:
+            if engine == "piper":
+                chunks = list(_piper_hindi(_piper_hindi_voice_name()).synthesize(run))
+                if not chunks:
+                    return None
+                return torch.cat([torch.from_numpy(c.audio_float_array) for c in chunks]), chunks[0].sample_rate
+            tokenizer, model = _mms_hindi()
+            audio = _synthesize_mms(tokenizer, model, run)
+            return None if audio is None else (audio, model.config.sampling_rate)
+        except Exception as e:  # noqa: BLE001 -- see the docstring: any engine failure means "fall back", never "stay silent"
+            logger.warning("Hindi voice engine %r failed for a run (%s); trying the next", engine, e, exc_info=True)
+            last_error = e
+    raise RuntimeError("no Hindi voice engine could speak this text") from last_error
+
+
 def speak_hindi(text: str) -> Speech:
-    """Hindi TTS via Meta's MMS-TTS, with any Latin-script runs (English words, acronyms, or a whole
+    """Hindi TTS (Piper's hi_IN voice, falling back to Meta's MMS-TTS; see the module docstring), with any Latin-script runs (English words, acronyms, or a whole
     reply the model wrote in Roman script) spoken by the English voice instead of being dropped.
     Downloads model weights on first call (cached by huggingface_hub after that, not re-downloaded
     per call). Synthesized one sentence at a time (see _split_hindi_sentences) and joined with the same
@@ -147,8 +255,6 @@ def speak_hindi(text: str) -> Speech:
 
     Raises ValueError when the text has nothing speakable at all (no letters), so a caller can tell the
     user the voice is unavailable instead of sending silence."""
-    tokenizer, model = _mms_hindi()
-    hindi_rate = model.config.sampling_rate
     sentences = _split_hindi_sentences(text) or [text]  # whitespace-only input has no sentence boundary at all
 
     spoken: list[list[tuple[torch.Tensor, int]]] = []  # per sentence: [(audio, sample rate)] per run
@@ -157,9 +263,9 @@ def speak_hindi(text: str) -> Speech:
         pieces: list[tuple[torch.Tensor, int]] = []
         for script, run in _script_runs(sentence):
             if script == "hi":
-                audio = _synthesize_mms(tokenizer, model, run)
-                if audio is not None:
-                    pieces.append((audio, hindi_rate))
+                hindi = _speak_hindi_run(run)
+                if hindi is not None:
+                    pieces.append(hindi)
             else:
                 english = speak_english(run)
                 pieces.append((english.audio, english.sample_rate))
@@ -182,7 +288,7 @@ def speak_hindi(text: str) -> Speech:
     sentence_audio = [
         _join_with_gaps([at_target(a, r) for a, r in pieces], target, _RUN_GAP_SECONDS) for pieces in spoken
     ]
-    return Speech(audio=_join_with_gaps(sentence_audio, target), sample_rate=target)
+    return Speech(audio=_limit_peak(_join_with_gaps(sentence_audio, target)), sample_rate=target)
 
 
 # Opus (the codec every channel encodes spoken replies as, for compact

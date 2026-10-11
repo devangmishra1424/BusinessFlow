@@ -1,0 +1,15 @@
+{
+  "id": "mishradevang14/businessflow-tts-score",
+  "title": "BusinessFlow TTS Score",
+  "code_file": "score_tts.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "true",
+  "dataset_sources": ["mishradevang14/businessflow-tts-benchmark-audio"],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}

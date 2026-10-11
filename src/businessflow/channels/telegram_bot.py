@@ -70,7 +70,7 @@ from businessflow.agent.loop import (
     verify_and_start_conversation,
 )
 from businessflow.audio.asr import transcribe
-from businessflow.audio.tts import encode_ogg_opus, speak_english, speak_hindi
+from businessflow.audio.tts import encode_ogg_opus, prefetch_voices, speak_english, speak_hindi
 from businessflow.audio.vad import trim_to_speech
 from businessflow.audio.verbalizer import verbalize
 from businessflow.channels.credentials import looks_like_credentials, parse_credentials, parse_telegram_start_payload
@@ -807,6 +807,13 @@ async def on_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await _send_spoken_reply(update, chat_id, reply_text)
 
 
+async def _on_start(application: Application) -> None:
+    """post_init: runs once before polling begins. The Hindi voice is fetched here, off the event loop, so the
+    first Hindi reply does not download it mid-conversation (a blocking download would freeze every chat)."""
+    await _register_commands(application)
+    await asyncio.to_thread(prefetch_voices)
+
+
 async def _register_commands(application: Application) -> None:
     # Telegram's own "/" autocomplete menu reads this list -- real,
     # native discoverability for a borrower who doesn't know a command
@@ -849,7 +856,7 @@ def main() -> None:
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set -- copy .env.example to .env and fill it in")
 
-    application = Application.builder().token(token).post_init(_register_commands).build()
+    application = Application.builder().token(token).post_init(_on_start).build()
     application.add_handler(CommandHandler("start", on_start))
     application.add_handler(CommandHandler("reset", on_reset))
     application.add_handler(CommandHandler("hindi", on_hindi))

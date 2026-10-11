@@ -33,10 +33,12 @@ separate FastAPI app on port 8001 -- run both side by side, they don't
 share state or a port.
 """
 
+import asyncio
 import io
 import logging
 import threading
 import uuid
+from contextlib import asynccontextmanager
 from datetime import date, datetime
 from pathlib import Path
 
@@ -70,7 +72,7 @@ from businessflow.agent.loop import (
     verify_and_start_conversation,
 )
 from businessflow.audio.asr import transcribe
-from businessflow.audio.tts import encode_ogg_opus, speak_english, speak_hindi
+from businessflow.audio.tts import encode_ogg_opus, prefetch_voices, speak_english, speak_hindi
 from businessflow.audio.vad import trim_to_speech
 from businessflow.audio.verbalizer import verbalize
 from businessflow.channels.credentials import looks_like_credentials, parse_credentials
@@ -84,7 +86,14 @@ _MAX_VOICE_NOTE_SECONDS = 120  # same bound as telegram_bot.py -- an explicit ca
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="BusinessFlow Chat API")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    # The Hindi voice is fetched before the first request, so the first Hindi "speak" tap does not download 63 MB.
+    await asyncio.to_thread(prefetch_voices)
+    yield
+
+
+app = FastAPI(title="BusinessFlow Chat API", lifespan=_lifespan)
 
 # The borrower-facing chat's static frontend -- mounted at the bottom of
 # this file, after every API route, same reasoning as ops/api.py's own
