@@ -49,6 +49,7 @@ import logging
 import os
 
 import groq
+import psycopg
 import soundfile as sf
 import torch
 import torchaudio
@@ -73,6 +74,8 @@ from businessflow.audio.asr import transcribe
 from businessflow.audio.tts import encode_ogg_opus, prefetch_voices, speak_english, speak_hindi
 from businessflow.audio.vad import trim_to_speech
 from businessflow.audio.verbalizer import verbalize
+from businessflow.channels.abilities import abilities_for, find_ability
+from businessflow.channels.abilities import intro as abilities_intro
 from businessflow.channels.credentials import looks_like_credentials, parse_credentials, parse_telegram_start_payload
 from businessflow.channels.reminder_actions import run_action as run_reminder_action
 from businessflow.tools.account_tools import flag_dispute, get_payment_history, get_payment_status
@@ -375,16 +378,19 @@ async def _handle_start_payload(chat_id: int, payload: str) -> str | None:
 
 
 async def on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
     if context.args:
-        reply = await _handle_start_payload(update.effective_chat.id, context.args[0])
+        reply = await _handle_start_payload(chat_id, context.args[0])
         if reply is not None:
-            await update.message.reply_text(reply)
+            # The buttons reflect what actually happened: the full list after a verified deep link, the general one after a bad key.
+            await update.message.reply_text(reply, reply_markup=await _abilities_markup(chat_id))
             return
 
     await update.message.reply_text(
         'Send your account ID and 6-digit access key together as TEXT (e.g. "BF-1001 482913") '
         "to discuss your loan, or just start talking -- text or voice -- for a general question. "
-        "Send /menu any time to see everything I can do."
+        "Tap an option below, or send /menu for quick actions.",
+        reply_markup=await _abilities_markup(chat_id),
     )
 
 
@@ -631,6 +637,71 @@ async def on_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("What would you like to do?", reply_markup=keyboard)
 
 
+# The "what I can help with" buttons (channels/abilities.py -- the same list the browser chat shows). Unlike /menu, whose
+# buttons run a command directly, a tap here is the same as typing the button's sentence: it goes through the normal
+# assistant turn. The callback carries only the entry's id; the sentence is looked up again when it is tapped.
+_ABILITY_GONE = {
+    "en": "That option isn't available any more -- send /help to see the current ones.",
+    "hi": "यह विकल्प अब उपलब्ध नहीं है -- मौजूदा विकल्प देखने के लिए /help भेजें।",
+}
+_ABILITY_ECHO = {"en": "You asked: {}", "hi": "आपने पूछा: {}"}
+
+
+def _ability_context(chat_id: int) -> tuple[str, bool]:
+    """(language, verified) for this chat's buttons, looked up the way the slash commands do (a chat linked to an account
+    counts as verified even after a restart). If the database cannot be reached the general buttons are shown instead, and
+    that is logged: a failed lookup must not stop /start or /help from answering."""
+    session_language = (_sessions.get(chat_id) or {}).get("language")
+    try:
+        account_id = _verified_account_id(chat_id)
+        return session_language or _language_for(chat_id, account_id), account_id is not None
+    except psycopg.Error:
+        logger.warning("could not look up chat_id=%s for the option buttons; showing the general ones", chat_id, exc_info=True)
+        return session_language or _language_choice.get(chat_id, "en"), False
+
+
+def _ability_keyboard(language: str, verified: bool) -> InlineKeyboardMarkup:
+    """One button per row (the labels are long), each carrying only its id."""
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(a["label"], callback_data=f"ab:{a['id']}")] for a in abilities_for(language, verified)]
+    )
+
+
+async def _abilities_markup(chat_id: int) -> InlineKeyboardMarkup:
+    language, verified = await asyncio.to_thread(_ability_context, chat_id)
+    return _ability_keyboard(language, verified)
+
+
+async def on_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    language, verified = await asyncio.to_thread(_ability_context, chat_id)
+    await update.message.reply_text(abilities_intro(language), reply_markup=_ability_keyboard(language, verified))
+
+
+def _ability_for_tap(chat_id: int, ability_id: str) -> tuple[str, dict | None]:
+    """(language, entry) for a tapped button, or (language, None) when this chat may not use it any more -- a button left over
+    from before a reset, or from before verification. Decoupled from python-telegram-bot's types so it is testable with
+    plain arguments."""
+    language, verified = _ability_context(chat_id)
+    return language, find_ability(language, verified, ability_id)
+
+
+async def _run_ability_tap(query, context: ContextTypes.DEFAULT_TYPE, chat_id: int, ability_id: str) -> None:
+    language, ability = await asyncio.to_thread(_ability_for_tap, chat_id, ability_id)
+    if ability is None:
+        await query.message.reply_text(_ABILITY_GONE[language if language in _ABILITY_GONE else "en"])
+        return
+    if ability["reply"]:
+        await query.message.reply_text(ability["reply"])  # answered as it stands: no assistant turn
+        return
+    # Shown first, because a tap leaves no message of the borrower's own in the chat to answer.
+    await query.message.reply_text(_ABILITY_ECHO[language if language in _ABILITY_ECHO else "en"].format(ability["prompt"]))
+    reply = await _agent_reply(context, chat_id, ability["prompt"])
+    await query.message.reply_text(reply)
+    if _voice_preference.get(chat_id):
+        await _send_spoken_reply(query.message, chat_id, reply)
+
+
 async def on_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -651,6 +722,10 @@ async def on_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await query.message.reply_text(result.text)
         if result.done:
             await _drop_action_buttons(query)
+        return
+
+    if data.startswith("ab:"):
+        await _run_ability_tap(query, context, chat_id, data.split(":", 1)[1])
         return
 
     if not data.startswith("menu:"):
@@ -704,7 +779,7 @@ def _voice_unavailable_note(language: str) -> str:
     )
 
 
-async def _send_spoken_reply(update: Update, chat_id: int, reply: str) -> None:
+async def _send_spoken_reply(message, chat_id: int, reply: str) -> None:
     # Best-effort: the text reply already succeeded and was already sent
     # by the caller -- a TTS failure here shouldn't take that back, just
     # skip the bonus spoken version. Broad except is deliberate (VAD/ASR/
@@ -720,11 +795,11 @@ async def _send_spoken_reply(update: Update, chat_id: int, reply: str) -> None:
         # said why, so it looked like the voice feature did not work for Hindi at all. The text reply was
         # already sent; say that the spoken one is missing.
         try:
-            await update.message.reply_text(_voice_unavailable_note(language))
+            await message.reply_text(_voice_unavailable_note(language))
         except TelegramError:
             logger.warning("Could not send the voice-unavailable note to chat_id=%s", chat_id, exc_info=True)
         return
-    await update.message.reply_voice(voice=voice_bytes)
+    await message.reply_voice(voice=voice_bytes)
 
 
 async def _keep_typing(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
@@ -745,8 +820,9 @@ async def _keep_typing(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None
         await asyncio.sleep(4)
 
 
-async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
+async def _agent_reply(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str) -> str:
+    """One text turn: the reply to `text` as if the borrower had typed it, with the typing indicator showing meanwhile.
+    Typed messages and the "what I can help with" buttons both come through here."""
     typing_task = asyncio.create_task(_keep_typing(context, chat_id))
     try:
         # See handle_incoming_voice's comment on the same to_thread call --
@@ -756,12 +832,26 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         # this against any voice turn for the same chat that might still be
         # in flight -- see _get_session_lock.
         async with _get_session_lock(chat_id):
-            reply = await asyncio.to_thread(handle_incoming_message, chat_id, update.message.text)
+            return await asyncio.to_thread(handle_incoming_message, chat_id, text)
     finally:
         typing_task.cancel()
-    await update.message.reply_text(reply)
+
+
+def _has_verified_session(chat_id: int) -> bool:
+    session = _sessions.get(chat_id)
+    return bool(session and session["account_id"])
+
+
+async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    was_verified = _has_verified_session(chat_id)
+    reply = await _agent_reply(context, chat_id, update.message.text)
+    # Just verified by typing the credentials: show what can be done now (the in-memory session is checked on purpose, so
+    # this costs no database lookup on every message).
+    markup = await _abilities_markup(chat_id) if not was_verified and _has_verified_session(chat_id) else None
+    await update.message.reply_text(reply, reply_markup=markup)
     if _voice_preference.get(chat_id):
-        await _send_spoken_reply(update, chat_id, reply)
+        await _send_spoken_reply(update.message, chat_id, reply)
 
 
 def _transcript_echo(transcript: str) -> str:
@@ -804,7 +894,7 @@ async def on_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Voice in still gets voice out (matches the modality), but the text
     # answer is no longer voice-only.
     await update.message.reply_text(reply_text)
-    await _send_spoken_reply(update, chat_id, reply_text)
+    await _send_spoken_reply(update.message, chat_id, reply_text)
 
 
 async def _on_start(application: Application) -> None:
@@ -829,7 +919,8 @@ async def _register_commands(application: Application) -> None:
             ("closure", "Request a loan closure certificate"),
             ("language", "Change your language"),
             ("voice", "Toggle spoken replies on/off"),
-            ("menu", "Show all options as buttons"),
+            ("help", "What I can help with"),
+            ("menu", "Show quick actions as buttons"),
             ("reset", "Start over"),
         ]
     )
@@ -870,6 +961,7 @@ def main() -> None:
     application.add_handler(CommandHandler("closure", on_closure))
     application.add_handler(CommandHandler("voice", on_voice_toggle))
     application.add_handler(CommandHandler("menu", on_menu))
+    application.add_handler(CommandHandler("help", on_help))
     application.add_handler(CallbackQueryHandler(on_callback_query))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_message))
     application.add_handler(MessageHandler(filters.VOICE, on_voice_message))

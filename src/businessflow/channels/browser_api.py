@@ -25,7 +25,10 @@ TTS is on-demand per reply (POST .../speech), not generated for every
 assistant message automatically -- the frontend only calls it when a
 borrower taps the speaker icon on a specific bubble they want to hear,
 so synthesis compute is spent only on replies someone actually wants
-spoken.
+spoken. With the page's "Naturalise tone" option on, it asks for the
+prepared words instead (POST .../speech-text) and speaks them with a
+natural voice from the borrower's own browser, falling back to the
+server voice if that voice never starts.
 
 Run: uvicorn businessflow.channels.browser_api:app --reload
 (defaults to port 8000). The ops dashboard API (ops/api.py) is a
@@ -75,6 +78,7 @@ from businessflow.audio.asr import transcribe
 from businessflow.audio.tts import encode_ogg_opus, prefetch_voices, speak_english, speak_hindi
 from businessflow.audio.vad import trim_to_speech
 from businessflow.audio.verbalizer import verbalize
+from businessflow.channels.abilities import abilities_for, intro
 from businessflow.channels.credentials import looks_like_credentials, parse_credentials
 from businessflow.ops.flags import Flag, compute_flags
 from businessflow.rate_limit import RateLimiter
@@ -764,6 +768,66 @@ def speech_endpoint(conversation_id: str, req: SpeechRequest):
         logger.warning("TTS synthesis failed for conversation_id=%s: %s", conversation_id, e, exc_info=True)
         raise HTTPException(status_code=502, detail="text-to-speech is temporarily unavailable -- please try again") from e
     return Response(content=audio_bytes, media_type="audio/ogg")
+
+
+class SpeechTextRequest(BaseModel):
+    # A reply is a few sentences. The speech endpoint above takes any size because making audio is its own natural limit;
+    # this one only rewrites text, so it needs an explicit cap instead.
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class SpeechTextResponse(BaseModel):
+    text: str
+    language: str
+
+
+@app.post("/conversations/{conversation_id}/speech-text", response_model=SpeechTextResponse)
+def speech_text_endpoint(conversation_id: str, req: SpeechTextRequest):
+    """The words /speech would have spoken, as text instead of audio: the same verbalize() step (account ids spelled out,
+    rupee amounts in lakh/crore or Devanagari, phone numbers in groups, ...) in this conversation's own language. The chat
+    page's "Naturalise tone" option reads this with a natural-sounding voice from the borrower's own browser, so that voice
+    says the same thing the server voice would, and no audio is synthesised here (which also makes this the cheap call).
+    Same session rules as /speech: the language is the conversation's, never one the client supplies."""
+    session = _conversations.get(conversation_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"no conversation found for id={conversation_id!r}")
+    if not req.text.strip():
+        raise HTTPException(status_code=400, detail="text must not be empty")
+    language = session["language"]
+    return SpeechTextResponse(text=verbalize(req.text, language), language=language)
+
+
+class AbilityOut(BaseModel):
+    id: str
+    label: str
+    # Exactly one is set: `prompt` is sent as the borrower's next message; `reply` is shown as it stands (no assistant turn).
+    prompt: str | None = None
+    reply: str | None = None
+
+
+class AbilitiesResponse(BaseModel):
+    language: str
+    verified: bool
+    intro: str
+    abilities: list[AbilityOut]
+
+
+@app.get("/conversations/{conversation_id}/abilities", response_model=AbilitiesResponse)
+def abilities_endpoint(conversation_id: str):
+    """The "what I can help with" buttons for this chat (channels/abilities.py, the same list Telegram shows). Decided by the
+    session, never by the client: the language is the conversation's, and an unverified chat is only offered what it can
+    actually do, so it never sees a button the assistant would have to refuse. Verification can happen mid-chat, so the page
+    asks again after it does."""
+    session = _conversations.get(conversation_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"no conversation found for id={conversation_id!r}")
+    language = session["language"]
+    return AbilitiesResponse(
+        language=language,
+        verified=session["account_id"] is not None,
+        intro=intro(language),
+        abilities=abilities_for(language, session["account_id"] is not None),
+    )
 
 
 @app.get("/conversations/{conversation_id}/dashboard", response_model=DashboardResponse)

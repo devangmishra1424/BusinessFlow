@@ -973,6 +973,120 @@ def test_speech_endpoint_returns_real_playable_audio_in_the_conversations_langua
     assert len(data) > 0
 
 
+# --- POST /conversations/{id}/speech-text -------------------------------------
+# What the chat page's "Naturalise tone" option reads with a browser voice: the same words /speech would have spoken.
+# An anonymous conversation needs no account lookup, so these run without a database.
+
+
+def _start_anonymous_conversation(language: str) -> str:
+    response = client.post("/conversations", json={"language": language})
+    assert response.status_code == 200
+    return response.json()["conversation_id"]
+
+
+def test_speech_text_endpoint_404s_for_unknown_conversation():
+    response = client.post("/conversations/does-not-exist/speech-text", json={"text": "hello"})
+
+    assert response.status_code == 404
+
+
+def test_speech_text_endpoint_rejects_empty_whitespace_and_oversized_text():
+    conversation_id = _start_anonymous_conversation("en")
+
+    assert client.post(f"/conversations/{conversation_id}/speech-text", json={"text": ""}).status_code == 422
+    assert client.post(f"/conversations/{conversation_id}/speech-text", json={"text": "   "}).status_code == 400
+    assert client.post(f"/conversations/{conversation_id}/speech-text", json={"text": "x" * 4001}).status_code == 422
+    assert client.post(f"/conversations/{conversation_id}/speech-text", json={}).status_code == 422
+
+
+def test_speech_text_endpoint_returns_the_words_the_speech_endpoint_would_speak_in_english():
+    conversation_id = _start_anonymous_conversation("en")
+    reply = "Your EMI of ₹4,500 for account BF-1001 is due on 2026-10-15."
+
+    response = client.post(f"/conversations/{conversation_id}/speech-text", json={"text": reply})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["language"] == "en"
+    assert body["text"] == browser_api.verbalize(reply, "en")  # one source of truth for what gets spoken
+    assert "₹" not in body["text"] and "BF-1001" not in body["text"] and "2026-10-15" not in body["text"]
+    assert "four thousand, five hundred rupees" in body["text"].lower()
+    assert "B F, one zero zero one" in body["text"]  # the account id, spelled out so a listener can write it down
+
+
+def test_speech_text_endpoint_uses_the_conversations_language_not_one_the_client_supplies():
+    conversation_id = _start_anonymous_conversation("hi")
+
+    response = client.post(f"/conversations/{conversation_id}/speech-text", json={"text": "aapka EMI ₹4,500 hai", "language": "en"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["language"] == "hi"
+    assert body["text"] == browser_api.verbalize("aapka EMI ₹4,500 hai", "hi")
+    assert "four thousand" not in body["text"].lower()  # Hindi words for the amount, not English ones
+
+
+def test_speech_text_endpoint_makes_no_audio(monkeypatch):
+    # The point of the endpoint is that no synthesis happens; a regression that called a TTS engine here would defeat it.
+    def _must_not_be_called(*args, **kwargs):
+        raise AssertionError("speech-text must not synthesise audio")
+
+    monkeypatch.setattr(browser_api, "speak_english", _must_not_be_called)
+    monkeypatch.setattr(browser_api, "speak_hindi", _must_not_be_called)
+    monkeypatch.setattr(browser_api, "encode_ogg_opus", _must_not_be_called)
+    conversation_id = _start_anonymous_conversation("en")
+
+    response = client.post(f"/conversations/{conversation_id}/speech-text", json={"text": "hello there"})
+
+    assert response.status_code == 200
+
+
+# --- GET /conversations/{id}/abilities -----------------------------------------
+# The "what I can help with" buttons. The session decides what is offered, so these need no database: a verified session is
+# simulated by writing the two fields the endpoint reads into the in-memory conversation table.
+
+
+def test_abilities_endpoint_404s_for_unknown_conversation():
+    assert client.get("/conversations/does-not-exist/abilities").status_code == 404
+
+
+def test_abilities_for_an_unverified_chat_offer_only_what_it_can_do():
+    conversation_id = _start_anonymous_conversation("en")
+
+    response = client.get(f"/conversations/{conversation_id}/abilities")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["verified"] is False and body["language"] == "en"
+    assert [a["id"] for a in body["abilities"]] == ["policy", "verify", "more"]
+    assert body["intro"].startswith("Here are a few things")
+
+
+def test_abilities_for_a_verified_chat_include_the_account_entries_and_end_with_more_questions(monkeypatch):
+    monkeypatch.setitem(browser_api._conversations, "verified-test", {"account_id": "BF-1001", "language": "en", "messages": []})
+
+    body = client.get("/conversations/verified-test/abilities").json()
+
+    ids = [a["id"] for a in body["abilities"]]
+    assert body["verified"] is True
+    assert {"status", "pay", "history", "dispute", "person"} <= set(ids)
+    assert "verify" not in ids
+    assert ids[-1] == "more"
+    status = next(a for a in body["abilities"] if a["id"] == "status")
+    assert status["prompt"] and status["reply"] is None
+
+
+def test_abilities_follow_the_conversations_language_and_pick_up_a_mid_chat_verification(monkeypatch):
+    monkeypatch.setitem(browser_api._conversations, "switch-test", {"account_id": None, "language": "hi", "messages": []})
+    before = client.get("/conversations/switch-test/abilities").json()
+    browser_api._conversations["switch-test"]["account_id"] = "BF-1001"  # what a successful in-chat verification does
+    after = client.get("/conversations/switch-test/abilities").json()
+
+    assert before["language"] == "hi" and "verify" in [a["id"] for a in before["abilities"]]
+    assert "status" in [a["id"] for a in after["abilities"]] and "verify" not in [a["id"] for a in after["abilities"]]
+    assert len(after["abilities"]) > len(before["abilities"])
+
+
 @_pg_skip
 def test_dashboard_requests_hide_system_tickets_and_include_the_borrowers_own_dispute(reseed_accounts):
     # Live: Fatima's "Your requests" showed "Guardrail blocked a reply: ... [12500.0]" and

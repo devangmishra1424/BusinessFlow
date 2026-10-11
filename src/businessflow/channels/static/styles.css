@@ -506,6 +506,37 @@ button, input { font-family: inherit; }
 }
 .icon-btn:hover { color: var(--text-0); border-color: var(--border-strong); }
 
+/* A slim bar under the chat header: "What can you help with?" and "Naturalise tone" (app.js "Option buttons", "Voice output"). */
+.tone-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 8px 20px;
+  background: var(--bg-0); border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.tone-bar[hidden] { display: none; }
+.tone-btn {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-1); border-radius: var(--radius-pill);
+  padding: 5px 14px; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: all 0.15s var(--ease);
+}
+.tone-btn:hover:not(:disabled) { color: var(--text-0); border-color: var(--border-strong); }
+.tone-btn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+.tone-btn:disabled { color: var(--text-3); cursor: wait; }
+.tone-btn[hidden] { display: none; }
+
+/* "What I can help with": tappable suggestions in the conversation (app.js "Option buttons"). */
+.msg-row.abilities { align-self: flex-start; max-width: 92%; }
+.abilities-intro { margin: 0 0 8px; font-size: 13px; color: var(--text-2); line-height: 1.45; }
+.ability-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.ability-chip {
+  border: 1px solid var(--accent); background: var(--surface); color: var(--accent); border-radius: var(--radius-pill);
+  padding: 8px 14px; font: inherit; font-size: 13.5px; font-weight: 600; text-align: left; cursor: pointer; transition: all 0.15s var(--ease);
+}
+.ability-chip:hover:not(:disabled) { background: var(--accent-dim); }
+.ability-chip:disabled { color: var(--text-3); border-color: var(--border); cursor: not-allowed; }
+.tone-note { font-size: 12.5px; color: var(--text-2); line-height: 1.45; max-width: 62ch; }
+@media (max-width: 520px) {
+  .tone-bar { padding: 8px 14px; }
+  .tone-btn, .ability-chip { min-height: 44px; }
+}
+
 .message-list {
   flex: 1; overflow-y: auto; padding: 24px 20px; display: flex; flex-direction: column; gap: 14px;
   max-width: 720px; width: 100%; margin: 0 auto;
