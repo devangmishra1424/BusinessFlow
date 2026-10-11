@@ -223,9 +223,9 @@ def test_hindi_document_candidate_is_not_demoted_by_the_english_only_reranker(mo
 
         monkeypatch.setattr(retriever._reranker, "predict", guarded_predict)
 
-        # top_k as big as the pool (candidate_pool is never below top_k), so "rank" below is a real position over
-        # the whole candidate set, not just "in/out of top_k".
-        results = retriever.retrieve(query, top_k=12, candidate_pool=12)
+        # top_k big enough to return every candidate this pool produces,
+        # so "rank" below is a real position, not just "in/out of top_k".
+        results = retriever.retrieve(query, top_k=50, candidate_pool=6)
 
         # If guarded_predict had raised, this test would already have
         # failed above -- reaching here means the skip-path held for

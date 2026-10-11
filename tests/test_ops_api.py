@@ -1119,6 +1119,9 @@ def test_upload_non_loan_agreement_document_never_attempts_rate_extraction(resee
 @_pg_skip
 @_ops_key_skip
 def test_list_documents_returns_uploaded_files_newest_first(reseed_accounts):
+    # Real sentences, not just a heading: a document with no body text has nothing to ingest and is refused (422).
+    OLDER_BODY = b"# Older\n\nThe older of two documents ops uploaded for this borrower."
+    NEWER_BODY = b"# Newer\n\nThe newer of two documents ops uploaded for this borrower."
     from pathlib import Path
 
     from businessflow.rag.store import delete_chunks_for_document
@@ -1129,14 +1132,14 @@ def test_list_documents_returns_uploaded_files_newest_first(reseed_accounts):
     try:
         older = client.post(
             "/accounts/BF-1001/documents",
-            files={"file": ("test_older.md", b"# older doc", "text/markdown")},
+            files={"file": ("test_older.md", OLDER_BODY, "text/markdown")},
             data={"document_type": "kyc"},
             headers=_auth(),
         )
         assert older.status_code == 200
         newer = client.post(
             "/accounts/BF-1001/documents",
-            files={"file": ("test_newer.md", b"# newer doc", "text/markdown")},
+            files={"file": ("test_newer.md", NEWER_BODY, "text/markdown")},
             data={"document_type": "kyc"},
             headers=_auth(),
         )
@@ -1152,7 +1155,7 @@ def test_list_documents_returns_uploaded_files_newest_first(reseed_accounts):
         # the one uploaded just before it.
         assert names.index("test_newer.md") < names.index("test_older.md")
         newer_entry = next(d for d in body if d["filename"] == "test_newer.md")
-        assert newer_entry["size_bytes"] == len(b"# newer doc")
+        assert newer_entry["size_bytes"] == len(NEWER_BODY)
         assert newer_entry["uploaded_at"] is not None
     finally:
         for path in (older_path, newer_path):
@@ -1189,7 +1192,7 @@ def test_download_document_serves_the_real_uploaded_bytes(reseed_accounts):
     from businessflow.rag.store import delete_chunks_for_document
 
     saved_path = Path(__file__).resolve().parents[1] / "data" / "documents" / "BF-1001" / "test_download.md"
-    body = b"# a document ops uploaded and should be able to download back"
+    body = b"# Download test\n\nA document ops uploaded and should be able to download back, byte for byte."
     try:
         upload = client.post(
             "/accounts/BF-1001/documents",

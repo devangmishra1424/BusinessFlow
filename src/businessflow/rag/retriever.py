@@ -211,7 +211,7 @@ class DocumentRetriever:
         restricts to chunks ingested with that exact document_type (e.g.
         "loan_agreement"). candidate_pool is how many candidates each of
         BM25 and embedding search contribute before reranking, per query
-        variant (never fewer than top_k). expand=True additionally
+        variant. expand=True additionally
         generates a couple of alternate phrasings of the query
         (query_llm.expand_query) and pools candidates across all of them --
         a real extra Groq call, so it's opt-in; see eval/retrieval_benchmark.py
@@ -240,7 +240,6 @@ class DocumentRetriever:
         eligible.sort()
         if not eligible:
             return []
-        candidate_pool = max(candidate_pool, top_k)
 
         if query_llm.needs_translation(query):
             query = query_llm.translate_to_english(query)
