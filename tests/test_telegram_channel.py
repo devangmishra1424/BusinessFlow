@@ -574,3 +574,19 @@ def test_the_voice_unavailable_note_follows_the_language():
 
     assert "text above" in _voice_unavailable_note("en")
     assert any("\u0900" <= ch <= "\u097f" for ch in _voice_unavailable_note("hi"))
+
+
+def test_the_bot_prefetches_the_hindi_voice_after_registering_commands_and_before_polling(monkeypatch):
+    # post_init runs once before polling starts: the voice download belongs there, not in the first Hindi reply.
+    order = []
+
+    class FakeBot:
+        async def set_my_commands(self, commands):
+            order.append("commands")
+
+    class FakeApplication:
+        bot = FakeBot()
+
+    monkeypatch.setattr(telegram_bot, "prefetch_voices", lambda: order.append("prefetch"))
+    asyncio.run(telegram_bot._on_start(FakeApplication()))
+    assert order == ["commands", "prefetch"]

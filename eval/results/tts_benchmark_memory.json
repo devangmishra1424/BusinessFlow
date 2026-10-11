@@ -1,0 +1,23 @@
+{
+ "new_piper": {
+  "engine": "new_piper",
+  "rss_base_mb": 449,
+  "rss_after_first_synth_mb": 587,
+  "growth_mb": 138,
+  "first_call_s": 6.0
+ },
+ "new_mms": {
+  "engine": "new_mms",
+  "rss_base_mb": 449,
+  "rss_after_first_synth_mb": 624,
+  "growth_mb": 175,
+  "first_call_s": 4.0
+ },
+ "old_deployed": {
+  "engine": "old_deployed",
+  "rss_base_mb": 453,
+  "rss_after_first_synth_mb": 627,
+  "growth_mb": 175,
+  "first_call_s": 4.0
+ }
+}

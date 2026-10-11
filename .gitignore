@@ -64,3 +64,8 @@ seed_c.log
 # Local agent-harness dev-server config -- personal to this machine's
 # directory layout, not project content.
 .claude/
+
+# TTS benchmark: generated audio and the baseline source copied from git
+.bench_old/
+eval/results/tts_benchmark_audio/
+kaggle/tts-score-kernel/dataset/

@@ -1,0 +1,352 @@
+{
+ "baseline_rev": "6d5773d",
+ "engines": {
+  "new_piper": {
+   "clips": 120,
+   "failed": 0,
+   "empty": 0,
+   "errors": [],
+   "load_s": 6.4,
+   "by_category": {
+    "hi_plain": {
+     "clips": 30,
+     "ok": 30,
+     "cer": {
+      "mean": 0.0502,
+      "lo": 0.0282,
+      "hi": 0.0758
+     },
+     "wer": {
+      "mean": 0.1542,
+      "lo": 0.0939,
+      "hi": 0.2212
+     }
+    },
+    "hi_numbers": {
+     "clips": 30,
+     "ok": 30,
+     "cer": {
+      "mean": 0.1315,
+      "lo": 0.0459,
+      "hi": 0.2775
+     },
+     "wer": {
+      "mean": 0.2688,
+      "lo": 0.145,
+      "hi": 0.4235
+     }
+    },
+    "hi_acronyms": {
+     "clips": 24,
+     "ok": 24,
+     "cer": {
+      "mean": 0.1254,
+      "lo": 0.0566,
+      "hi": 0.1998
+     },
+     "wer": {
+      "mean": 0.2247,
+      "lo": 0.1404,
+      "hi": 0.3075
+     }
+    },
+    "hi_long": {
+     "clips": 12,
+     "ok": 12,
+     "cer": {
+      "mean": 0.0623,
+      "lo": 0.0353,
+      "hi": 0.0819
+     },
+     "wer": {
+      "mean": 0.1992,
+      "lo": 0.1125,
+      "hi": 0.2933
+     }
+    },
+    "hinglish_roman": {
+     "clips": 24,
+     "ok": 24
+    }
+   },
+   "pooled_cer": {
+    "mean": 0.0959,
+    "lo": 0.0573,
+    "hi": 0.1512
+   },
+   "pooled_wer": {
+    "mean": 0.2133,
+    "lo": 0.1594,
+    "hi": 0.274
+   },
+   "duration_cv_mean": 0.0234,
+   "identical_transcript_share": 0.094,
+   "rms_dbfs_std": 1.24,
+   "clipped_clips": 120,
+   "lead_ms_mean": 51.3,
+   "trail_ms_mean": 119.3,
+   "rtf_mean": 0.1,
+   "sample_rates": [
+    22050
+   ],
+   "memory": {
+    "engine": "new_piper",
+    "rss_base_mb": 449,
+    "rss_after_first_synth_mb": 587,
+    "growth_mb": 138,
+    "first_call_s": 6.0
+   }
+  },
+  "new_mms": {
+   "clips": 120,
+   "failed": 0,
+   "empty": 0,
+   "errors": [],
+   "load_s": 4.9,
+   "by_category": {
+    "hi_plain": {
+     "clips": 30,
+     "ok": 30,
+     "cer": {
+      "mean": 0.0631,
+      "lo": 0.0384,
+      "hi": 0.088
+     },
+     "wer": {
+      "mean": 0.203,
+      "lo": 0.1293,
+      "hi": 0.2811
+     }
+    },
+    "hi_numbers": {
+     "clips": 30,
+     "ok": 30,
+     "cer": {
+      "mean": 0.1606,
+      "lo": 0.0956,
+      "hi": 0.2449
+     },
+     "wer": {
+      "mean": 0.3885,
+      "lo": 0.2913,
+      "hi": 0.4971
+     }
+    },
+    "hi_acronyms": {
+     "clips": 24,
+     "ok": 24,
+     "cer": {
+      "mean": 0.2369,
+      "lo": 0.1611,
+      "hi": 0.3204
+     },
+     "wer": {
+      "mean": 0.316,
+      "lo": 0.2173,
+      "hi": 0.4261
+     }
+    },
+    "hi_long": {
+     "clips": 12,
+     "ok": 12,
+     "cer": {
+      "mean": 0.0948,
+      "lo": 0.0666,
+      "hi": 0.1354
+     },
+     "wer": {
+      "mean": 0.2941,
+      "lo": 0.2112,
+      "hi": 0.351
+     }
+    },
+    "hinglish_roman": {
+     "clips": 24,
+     "ok": 24
+    }
+   },
+   "pooled_cer": {
+    "mean": 0.141,
+    "lo": 0.1046,
+    "hi": 0.1837
+   },
+   "pooled_wer": {
+    "mean": 0.3006,
+    "lo": 0.2465,
+    "hi": 0.3582
+   },
+   "duration_cv_mean": 0.041,
+   "identical_transcript_share": 0.031,
+   "rms_dbfs_std": 0.9,
+   "clipped_clips": 42,
+   "lead_ms_mean": 251.9,
+   "trail_ms_mean": 316.0,
+   "rtf_mean": 0.728,
+   "sample_rates": [
+    16000,
+    22050
+   ],
+   "memory": {
+    "engine": "new_mms",
+    "rss_base_mb": 449,
+    "rss_after_first_synth_mb": 624,
+    "growth_mb": 175,
+    "first_call_s": 4.0
+   }
+  },
+  "old_deployed": {
+   "clips": 40,
+   "failed": 8,
+   "empty": 0,
+   "errors": [
+    "RuntimeError: narrow(): length must be non-negative."
+   ],
+   "load_s": 6.0,
+   "by_category": {
+    "hi_plain": {
+     "clips": 10,
+     "ok": 10,
+     "cer": {
+      "mean": 0.0766,
+      "lo": 0.0511,
+      "hi": 0.1005
+     },
+     "wer": {
+      "mean": 0.2296,
+      "lo": 0.1536,
+      "hi": 0.3067
+     }
+    },
+    "hi_numbers": {
+     "clips": 10,
+     "ok": 10,
+     "cer": {
+      "mean": 0.1854,
+      "lo": 0.1282,
+      "hi": 0.2407
+     },
+     "wer": {
+      "mean": 0.3877,
+      "lo": 0.2712,
+      "hi": 0.4938
+     }
+    },
+    "hi_acronyms": {
+     "clips": 8,
+     "ok": 8,
+     "cer": {
+      "mean": 0.231,
+      "lo": 0.1804,
+      "hi": 0.2781
+     },
+     "wer": {
+      "mean": 0.2904,
+      "lo": 0.1994,
+      "hi": 0.379
+     }
+    },
+    "hi_long": {
+     "clips": 4,
+     "ok": 4,
+     "cer": {
+      "mean": 0.1079,
+      "lo": 0.0782,
+      "hi": 0.1375
+     },
+     "wer": {
+      "mean": 0.3048,
+      "lo": 0.2083,
+      "hi": 0.4012
+     }
+    },
+    "hinglish_roman": {
+     "clips": 8,
+     "ok": 0
+    }
+   },
+   "pooled_cer": {
+    "mean": 0.1531,
+    "lo": 0.1226,
+    "hi": 0.1847
+   },
+   "pooled_wer": {
+    "mean": 0.3036,
+    "lo": 0.2495,
+    "hi": 0.3588
+   },
+   "duration_cv_mean": null,
+   "identical_transcript_share": null,
+   "rms_dbfs_std": 0.82,
+   "clipped_clips": 0,
+   "lead_ms_mean": 335.3,
+   "trail_ms_mean": 340.0,
+   "rtf_mean": 0.983,
+   "sample_rates": [
+    16000
+   ],
+   "memory": {
+    "engine": "old_deployed",
+    "rss_base_mb": 453,
+    "rss_after_first_synth_mb": 627,
+    "growth_mb": 175,
+    "first_call_s": 4.0
+   }
+  }
+ },
+ "paired_piper_minus_mms": {
+  "mean": -0.0451,
+  "lo": -0.0815,
+  "hi": -0.0085,
+  "piper_better": 23,
+  "tie": 2,
+  "piper_worse": 7
+ },
+ "leakage": {
+  "old": {
+   "digit_runs_left": 5,
+   "latin_words_left": 8
+  },
+  "new": {
+   "digit_runs_left": 0,
+   "latin_words_left": 6
+  }
+ },
+ "criteria": [
+  {
+   "name": "C1 robustness",
+   "passed": true,
+   "detail": "0 failed, 0 empty of 120"
+  },
+  {
+   "name": "C2 clarity",
+   "passed": true,
+   "detail": "CER piper 0.0959 vs mms 0.141; paired diff -0.0451 [-0.0815, -0.0085]"
+  },
+  {
+   "name": "C3 consistency",
+   "passed": true,
+   "detail": "duration CV piper 0.0234 vs mms 0.041; identical transcripts 0.094 vs 0.031"
+  },
+  {
+   "name": "C4 audio hygiene",
+   "passed": false,
+   "detail": "120 clipped; loudness std 1.24 dB"
+  },
+  {
+   "name": "C5 resources",
+   "passed": true,
+   "detail": "RTF piper 0.1 vs mms 0.728; memory growth piper 138 MB vs mms 175 MB"
+  },
+  {
+   "name": "C6 leakage",
+   "passed": true,
+   "detail": "digit runs left new 0 (old 5); Latin words left new 6 (old 8, dropped by the old pipeline)"
+  },
+  {
+   "name": "C7 regression (hi_plain)",
+   "passed": true,
+   "detail": "CER piper 0.0502 vs old deployed 0.0766"
+  }
+ ],
+ "all_passed": false
+}

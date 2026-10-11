@@ -1042,3 +1042,11 @@ def test_paying_emi_plus_the_late_fee_through_a_real_link_is_a_plain_payment(res
     assert response.status_code == 200
     body = response.json()
     assert body["kind"] == "regular" and body["late_fee_paid"] == 500.0 and body["pending_emi_credit"] == 0.0
+
+
+def test_the_chat_api_prefetches_the_hindi_voice_when_it_starts(monkeypatch):
+    # Entering the TestClient as a context manager runs the app's lifespan (the module-level `client` does not).
+    calls = []
+    monkeypatch.setattr(browser_api, "prefetch_voices", lambda: calls.append("prefetch"))
+    with TestClient(app):
+        assert calls == ["prefetch"]

@@ -336,3 +336,114 @@ def test_a_mixed_reply_stays_at_the_piper_rate_with_no_resampling(monkeypatch):
     # Both Piper voices are 22050 Hz, so a Hindi sentence with an English word needs no resampling at all.
     monkeypatch.delenv("TTS_HINDI_ENGINE", raising=False)
     assert speak_hindi("आपका भुगतान WhatsApp से हुआ।").sample_rate == 22050
+
+
+# ---------------------------------------------------------------------------
+# Headroom. Found by tests/test_tts_benchmark.py's audio-hygiene criterion: Piper's output peaks at exactly 1.0, and
+# after Opus encoding 7 of 12 real clips decoded above 1.0 (a player or 16-bit conversion clips them).
+# ---------------------------------------------------------------------------
+
+from businessflow.audio.tts import _PEAK_LIMIT, _limit_peak  # noqa: E402
+
+
+def test_limit_peak_turns_a_full_scale_signal_down_to_minus_one_dbfs():
+    audio = torch.tensor([0.0, 1.0, -1.0, 0.5])
+    limited = _limit_peak(audio)
+    assert float(limited.abs().max()) == pytest.approx(_PEAK_LIMIT, abs=1e-6)
+    assert torch.allclose(limited / limited.abs().max(), audio / audio.abs().max())  # the shape is untouched, only the level
+
+
+def test_limit_peak_never_turns_a_quiet_signal_up_and_leaves_empty_audio_alone():
+    quiet = torch.tensor([0.1, -0.2, 0.3])
+    assert torch.equal(_limit_peak(quiet), quiet)
+    assert _limit_peak(torch.zeros(0)).numel() == 0
+    assert torch.equal(_limit_peak(torch.zeros(5)), torch.zeros(5))
+
+
+@_piper_skip
+def test_spoken_english_and_hindi_keep_headroom_and_survive_opus_without_clipping(monkeypatch):
+    monkeypatch.delenv("TTS_HINDI_ENGINE", raising=False)
+    for speech in (speak_english("Your payment has gone through successfully. Thank you very much."),
+                   speak_hindi("आपका भुगतान सफलतापूर्वक हो गया है। आपका बहुत धन्यवाद।")):
+        assert float(speech.audio.abs().max()) <= _PEAK_LIMIT + 1e-6
+        decoded, _ = sf.read(io.BytesIO(encode_ogg_opus(speech)), dtype="float32")  # float decode is not clipped to +-1
+        assert float(abs(decoded).max()) <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# Start-up prefetch of the Hindi voice, and the cache-first lookup. No network, no model: the fetch is replaced.
+# ---------------------------------------------------------------------------
+
+import logging  # noqa: E402
+
+from huggingface_hub.errors import LocalEntryNotFoundError  # noqa: E402
+
+from businessflow.audio import tts as tts_module  # noqa: E402
+
+
+def test_prefetch_downloads_the_piper_hindi_voice_once(monkeypatch, caplog):
+    monkeypatch.delenv("TTS_HINDI_ENGINE", raising=False)
+    monkeypatch.setenv("PIPER_HINDI_VOICE", "priyamvada")
+    calls = []
+    monkeypatch.setattr(tts_module, "_fetch_piper_hindi", lambda name, *, local_only: calls.append((name, local_only)) or "/cache/x.onnx")
+    with caplog.at_level(logging.INFO, logger="businessflow.audio.tts"):
+        tts_module.prefetch_voices()
+    assert calls == [("priyamvada", False)]  # a download, not a load: nothing here builds a model
+    assert any("on disk" in r.getMessage() for r in caplog.records)
+
+
+def test_a_failed_prefetch_is_logged_with_what_to_do_and_does_not_stop_the_service(monkeypatch, caplog):
+    monkeypatch.delenv("TTS_HINDI_ENGINE", raising=False)
+
+    def unreachable(name, *, local_only):
+        raise ConnectionError("huggingface.co unreachable")
+
+    monkeypatch.setattr(tts_module, "_fetch_piper_hindi", unreachable)
+    with caplog.at_level(logging.ERROR, logger="businessflow.audio.tts"):
+        tts_module.prefetch_voices()  # must return, not raise: the text replies do not depend on the voice
+    record = next(r for r in caplog.records if r.levelno == logging.ERROR)
+    assert "huggingface.co" in record.getMessage() and "MMS-TTS fallback" in record.getMessage()
+    assert record.exc_info and record.exc_info[0] is ConnectionError  # the real cause is on record
+
+
+def test_prefetch_leaves_piper_alone_when_mms_is_the_first_choice(monkeypatch):
+    monkeypatch.setenv("TTS_HINDI_ENGINE", "mms")
+    monkeypatch.setattr(tts_module, "_fetch_piper_hindi", lambda *a, **k: pytest.fail("a 63 MB download nobody asked for"))
+    tts_module.prefetch_voices()
+
+
+def test_prefetch_fails_loudly_at_start_on_a_mistyped_engine(monkeypatch):
+    monkeypatch.setenv("TTS_HINDI_ENGINE", "pipr")
+    with pytest.raises(ValueError, match="TTS_HINDI_ENGINE"):
+        tts_module.prefetch_voices()
+
+
+def test_a_cached_hindi_voice_is_loaded_without_touching_the_network(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tts_module, "_fetch_piper_hindi", lambda name, *, local_only: calls.append(local_only) or "/cache/v.onnx")
+    monkeypatch.setattr(tts_module.PiperVoice, "load", staticmethod(lambda path: ("voice", path)))
+    tts_module._piper_hindi.cache_clear()
+    try:
+        assert tts_module._piper_hindi("cached_voice") == ("voice", "/cache/v.onnx")
+    finally:
+        tts_module._piper_hindi.cache_clear()
+    assert calls == [True]  # one cache-only lookup, no download
+
+
+def test_a_hindi_voice_that_was_never_fetched_is_downloaded_on_first_use(monkeypatch):
+    calls = []
+
+    def fetch(name, *, local_only):
+        calls.append(local_only)
+        if local_only:
+            raise LocalEntryNotFoundError("not cached")
+        return "/cache/v.onnx"
+
+    monkeypatch.setattr(tts_module, "_fetch_piper_hindi", fetch)
+    monkeypatch.setattr(tts_module.PiperVoice, "load", staticmethod(lambda path: ("voice", path)))
+    tts_module._piper_hindi.cache_clear()
+    try:
+        assert tts_module._piper_hindi("fresh_voice") == ("voice", "/cache/v.onnx")
+    finally:
+        tts_module._piper_hindi.cache_clear()
+    assert calls == [True, False]  # cache first, then the network

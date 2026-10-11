@@ -1,0 +1,49 @@
+{
+  "_about": "Hindi replies of the kind the agent speaks, written for eval/tts_benchmark.py. Categories: hi_plain (Devanagari only), hi_numbers (digits, amounts, dates, percentages, IDs, phone numbers: exercises the verbalizer), hi_acronyms (Latin acronyms and brand words inside a Hindi sentence), hi_long (several sentences), hinglish_roman (a reply written in Roman script: the case that used to give no voice at all). hinglish_roman is scored for success only, not for word errors: a read-back of Roman-script Hindi has no single correct spelling.",
+  "sentences": [
+    {"id": "hi_plain_01", "category": "hi_plain", "text": "आपकी अगली किस्त जल्द ही देय होने वाली है।"},
+    {"id": "hi_plain_02", "category": "hi_plain", "text": "कृपया समय पर भुगतान करें ताकि कोई विलंब शुल्क न लगे।"},
+    {"id": "hi_plain_03", "category": "hi_plain", "text": "आपका खाता अभी सक्रिय है और कोई विवाद दर्ज नहीं है।"},
+    {"id": "hi_plain_04", "category": "hi_plain", "text": "मैं आपकी मदद के लिए यहाँ हूँ, बताइए आपको क्या जानना है।"},
+    {"id": "hi_plain_05", "category": "hi_plain", "text": "आपका अनुरोध एक एजेंट को भेज दिया गया है, वे जल्द ही आपसे संपर्क करेंगे।"},
+    {"id": "hi_plain_06", "category": "hi_plain", "text": "आपका ऋण पूरी तरह चुकाया जा चुका है, बहुत धन्यवाद।"},
+    {"id": "hi_plain_07", "category": "hi_plain", "text": "छूट अवधि के भीतर भुगतान करने पर कोई शुल्क नहीं लगता।"},
+    {"id": "hi_plain_08", "category": "hi_plain", "text": "अगर आपको इस रकम पर आपत्ति है तो कृपया बताइए कि क्या हुआ।"},
+    {"id": "hi_plain_09", "category": "hi_plain", "text": "आपकी पुनर्गठन की माँग समीक्षा के लिए भेज दी गई है।"},
+    {"id": "hi_plain_10", "category": "hi_plain", "text": "भुगतान की पुष्टि होने के बाद आपको एक संदेश मिलेगा।"},
+
+    {"id": "hi_numbers_01", "category": "hi_numbers", "text": "आपकी अगली किस्त ₹5,000 की है।"},
+    {"id": "hi_numbers_02", "category": "hi_numbers", "text": "अंतिम तारीख 15 अक्टूबर है।"},
+    {"id": "hi_numbers_03", "category": "hi_numbers", "text": "आपकी किस्त 2026-10-15 तक देय है।"},
+    {"id": "hi_numbers_04", "category": "hi_numbers", "text": "आपकी बकाया राशि ₹1,25,000 है।"},
+    {"id": "hi_numbers_05", "category": "hi_numbers", "text": "विलंब शुल्क ₹500 लगेगा।"},
+    {"id": "hi_numbers_06", "category": "hi_numbers", "text": "आपके खाते में 3 महीने बाकी हैं।"},
+    {"id": "hi_numbers_07", "category": "hi_numbers", "text": "ब्याज दर 12.5% प्रति वर्ष है।"},
+    {"id": "hi_numbers_08", "category": "hi_numbers", "text": "आपका खाता क्रमांक BF-1001 है।"},
+    {"id": "hi_numbers_09", "category": "hi_numbers", "text": "कृपया 98765 43210 पर संपर्क करें।"},
+    {"id": "hi_numbers_10", "category": "hi_numbers", "text": "पिछले 6 महीनों में 4 भुगतान समय पर हुए।"},
+
+    {"id": "hi_acronyms_01", "category": "hi_acronyms", "text": "आप UPI से भुगतान कर सकते हैं।"},
+    {"id": "hi_acronyms_02", "category": "hi_acronyms", "text": "आपकी EMI इस महीने की 5 तारीख को कटेगी।"},
+    {"id": "hi_acronyms_03", "category": "hi_acronyms", "text": "आपका NACH मैंडेट अभी सक्रिय नहीं है।"},
+    {"id": "hi_acronyms_04", "category": "hi_acronyms", "text": "KYC पूरा करने के लिए अपना पैन कार्ड भेजें।"},
+    {"id": "hi_acronyms_05", "category": "hi_acronyms", "text": "OTP किसी के साथ साझा न करें।"},
+    {"id": "hi_acronyms_06", "category": "hi_acronyms", "text": "आपका SMS संदेश मिल गया है।"},
+    {"id": "hi_acronyms_07", "category": "hi_acronyms", "text": "आप WhatsApp पर भी जवाब दे सकते हैं।"},
+    {"id": "hi_acronyms_08", "category": "hi_acronyms", "text": "UPI या NEFT से भुगतान किया जा सकता है।"},
+
+    {"id": "hi_long_01", "category": "hi_long", "text": "नमस्ते, मैं आपके ऋण खाते में मदद के लिए हूँ। आपकी अगली किस्त पाँच हज़ार रुपये की है। इसकी अंतिम तारीख पंद्रह अक्टूबर है। कृपया समय पर भुगतान करें।"},
+    {"id": "hi_long_02", "category": "hi_long", "text": "आपका भुगतान सफलतापूर्वक दर्ज हो गया है। आपकी बकाया राशि अब शून्य है। यदि आपको कोई प्रमाणपत्र चाहिए तो मैं एक एजेंट को भेज सकता हूँ।"},
+    {"id": "hi_long_03", "category": "hi_long", "text": "मुझे खेद है कि आपको असुविधा हुई। मैंने आपके खाते पर विवाद दर्ज कर दिया है। जब तक कोई कर्मचारी इसकी जाँच नहीं कर लेता, कोई वसूली कार्रवाई नहीं होगी।"},
+    {"id": "hi_long_04", "category": "hi_long", "text": "छूट अवधि तीन दिन की होती है। इस अवधि के भीतर भुगतान करने पर कोई विलंब शुल्क नहीं लगता। उसके बाद पाँच सौ रुपये का शुल्क लगता है।"},
+
+    {"id": "hinglish_roman_01", "category": "hinglish_roman", "text": "Aapki agli kist paanch hazaar rupaye ki hai."},
+    {"id": "hinglish_roman_02", "category": "hinglish_roman", "text": "Kripya samay par bhugtan karein."},
+    {"id": "hinglish_roman_03", "category": "hinglish_roman", "text": "Aapka khata abhi active hai."},
+    {"id": "hinglish_roman_04", "category": "hinglish_roman", "text": "Main aapki madad ke liye yahan hoon."},
+    {"id": "hinglish_roman_05", "category": "hinglish_roman", "text": "Aapka request agent ko bhej diya gaya hai."},
+    {"id": "hinglish_roman_06", "category": "hinglish_roman", "text": "Late fee sirf grace period ke baad lagta hai."},
+    {"id": "hinglish_roman_07", "category": "hinglish_roman", "text": "Aap UPI se payment kar sakte hain."},
+    {"id": "hinglish_roman_08", "category": "hinglish_roman", "text": "Dhanyavaad, aapka din shubh ho."}
+  ]
+}
