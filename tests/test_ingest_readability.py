@@ -41,10 +41,12 @@ def test_a_page_with_no_usable_text_is_refused(text):
         _require_readable(_result(math.nan), _records(text), "scan.pdf")
 
 
-def test_the_minimum_is_twenty_letters_and_digits():
-    _require_readable(_result(math.nan), _records("a" * 20), "x.md")
+def test_the_minimum_is_eight_letters_and_digits_and_a_heading_counts():
+    _require_readable(_result(math.nan), _records("a" * 8), "x.md")
     with pytest.raises(UnreadableDocumentError):
-        _require_readable(_result(math.nan), _records("a" * 19), "x.md")
+        _require_readable(_result(math.nan), _records("a" * 7), "x.md")
+    # a document that is only a title is still text
+    _require_readable(_result(math.nan), [ChunkRecord(text="", headings="Late fee policy")], "x.md")
 
 
 def test_a_scan_the_ocr_is_unsure_about_is_refused_with_a_message_that_says_what_to_do():
@@ -124,7 +126,7 @@ _DEVANAGARI_FONTS = ["Nirmala.ttc", "NotoSansDevanagari-Regular.ttf", "Lohit-Dev
 
 
 def _scan_pdf(path: Path, lines: list[str], font) -> str:
-    image = Image.new("L", (1240, 900), 255)
+    image = Image.new("L", (1700, 900), 255)
     draw = ImageDraw.Draw(image)
     y = 60
     for line in lines:
@@ -147,15 +149,19 @@ def test_a_clean_english_scan_is_read_with_its_figures_intact(tmp_path):
     font = _font(_LATIN_FONTS, 34)
     if font is None:
         pytest.skip("no TrueType font available to render the scan")
+    # short lines: a wider font (CI renders with DejaVu) must not push the end of a line off the page
     path = _scan_pdf(tmp_path / "english_scan.pdf", [
-        "Sanctioned Principal Amount: Rs. 250,000. Tenure: 24 months.",
-        "Monthly EMI Amount: Rs. 12,500.00. The Loan carries interest at 14.5% per annum.",
+        "Principal Amount: Rs. 250,000.",
+        "Tenure: 24 months.",
+        "Monthly EMI Amount: Rs. 12,500.00.",
+        "Interest at 14.5% per annum.",
     ], font)
 
     text = " ".join(r.text for r in parse_and_chunk(path))
 
+    squash = lambda t: "".join(t.split())  # OCR spacing is not what this test is about ("24months" is still read)
     for figure in ("250,000", "24 months", "12,500", "14.5"):
-        assert figure in text, f"{figure!r} lost in OCR: {text!r}"
+        assert squash(figure) in squash(text), f"{figure!r} lost in OCR: {text!r}"
 
 
 def test_a_hindi_scan_is_refused_because_the_bundled_ocr_cannot_read_devanagari(tmp_path):

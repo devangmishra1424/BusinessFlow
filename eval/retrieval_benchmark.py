@@ -146,12 +146,20 @@ class Translator:
         self.path.write_text(json.dumps(self.table, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def install_translator(translator: Translator) -> None:
+def install_translator(translator: Translator):
+    """Replaces query_llm.translate_to_english with the frozen lookup; returns a function that puts the real one back
+    (a test that installs it must call that, or every later test in the process would translate from this table)."""
     from businessflow.rag import query_llm
 
     if not hasattr(query_llm, "_real_translate"):
         query_llm._real_translate = query_llm.translate_to_english
+    previous = query_llm.translate_to_english
     query_llm.translate_to_english = translator
+
+    def restore() -> None:
+        query_llm.translate_to_english = previous
+
+    return restore
 
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -435,6 +443,16 @@ def evaluate(corpus: Corpus, settings: list[Setting], dev, heldout, loans, negat
     from businessflow.rag import query_llm
 
     real_needs_translation = query_llm.needs_translation
+    try:
+        return _evaluate_settings(corpus, settings, dev, heldout, loans, negatives, loan_clusters, real_needs_translation)
+    finally:
+        query_llm.needs_translation = real_needs_translation
+
+
+def _evaluate_settings(corpus, settings, dev, heldout, loans, negatives, loan_clusters, real_needs_translation) -> dict:
+    from businessflow.rag import query_llm
+
+    results: dict = {}
     for s in settings:
         t0 = time.perf_counter()
         query_llm.needs_translation = real_needs_translation if s.translate else (lambda q: False)
@@ -459,7 +477,6 @@ def evaluate(corpus: Corpus, settings: list[Setting], dev, heldout, loans, negat
             "latency_ms": latency_ms(corpus, s, dev + heldout),
             "_ranks": {"dev": dev_r, "heldout": held_r, "loan": loan_r},
         }
-    query_llm.needs_translation = real_needs_translation
     return results
 
 
@@ -522,7 +539,7 @@ def markdown(summary: dict) -> str:
 
 def run(settings: list[Setting], refresh: bool) -> dict:
     sys.stdout.reconfigure(encoding="utf-8")
-    install_translator(Translator(refresh))
+    install_translator(Translator(refresh))  # this process is the benchmark; nothing else runs in it, so it is not undone
     dev_fx, held_fx, neg_fx = load_fixture("dev_queries.json"), load_fixture("heldout_queries.json"), load_fixture("negative_queries.json")
     corpus = build_corpus()
     loans = loan_questions(corpus)

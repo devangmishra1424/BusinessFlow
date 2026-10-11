@@ -37,9 +37,11 @@ class UnreadableDocumentError(ValueError):
     document with nothing, so the upload is refused instead."""
 
 
-# Measured on rendered test scans (see tests/test_ingest.py and the README): the bundled OCR reads English scans
-# at 0.93-0.99 confidence and fails on Devanagari at 0.50-0.57; a scan it finds nothing in yields no text at all.
-_MIN_READABLE_CHARS = 20
+# Measured on rendered test scans (see tests/test_ingest_readability.py and the README): the bundled OCR reads English
+# scans at 0.93-0.99 confidence and fails on Devanagari at 0.50-0.57; a scan it finds nothing in yields no text at all
+# or a few stray characters ("-T IIr", "h"). The length floor only has to catch that; it is deliberately not a "too short
+# to be a real document" rule (a one-line note is a fine document), and it counts headings as text.
+_MIN_READABLE_CHARS = 8
 _MIN_OCR_CONFIDENCE = 0.75
 _PLACEHOLDER = re.compile(r"<!--.*?-->")  # Docling writes "<!-- image -->" for a picture it could not read text from
 
@@ -97,7 +99,7 @@ def _convert(file_path: str) -> ConversionResult:
 
 
 def _require_readable(result: ConversionResult, records: list[ChunkRecord], file_path: str) -> None:
-    body = _PLACEHOLDER.sub(" ", " ".join(r.text for r in records))
+    body = _PLACEHOLDER.sub(" ", " ".join(f"{r.headings} {r.text}" for r in records))
     readable = sum(ch.isalnum() for ch in body)
     if readable < _MIN_READABLE_CHARS:
         raise UnreadableDocumentError(

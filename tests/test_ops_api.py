@@ -1001,6 +1001,8 @@ def test_upload_document_rejects_a_file_over_the_size_cap(reseed_accounts):
 
     from businessflow.ops.api import _MAX_UPLOAD_BYTES
 
+    account_dir = Path(__file__).resolve().parents[1] / "data" / "documents" / "BF-1001"
+    folder_existed_before = account_dir.exists()  # another test may have left an empty one behind
     oversized_body = b"x" * (_MAX_UPLOAD_BYTES + 1)
     response = client.post(
         "/accounts/BF-1001/documents",
@@ -1012,10 +1014,8 @@ def test_upload_document_rejects_a_file_over_the_size_cap(reseed_accounts):
 
     saved_path = Path(__file__).resolve().parents[1] / "data" / "documents" / "BF-1001" / "big.md"
     assert not saved_path.exists()
-    # A rejected upload shouldn't leave an empty account directory behind
-    # either -- only true when this was the account's only upload attempt,
-    # which it is here since reseed_accounts doesn't touch the filesystem.
-    assert not saved_path.parent.exists()
+    # A rejected upload must not create an account directory it didn't find (uploads are staged elsewhere first).
+    assert account_dir.exists() == folder_existed_before
 
 
 @_pg_skip
@@ -1411,6 +1411,7 @@ def test_upload_of_a_scan_with_no_readable_text_is_refused_and_stores_nothing(re
     from businessflow.rag.store import get_chunk_ids_for_document
 
     saved_path = Path(__file__).resolve().parents[1] / "data" / "documents" / "BF-1001" / "blank_scan.pdf"
+    folder_existed_before = saved_path.parent.exists()
     response = client.post(
         "/accounts/BF-1001/documents",
         files={"file": ("blank_scan.pdf", _blank_scan_pdf(), "application/pdf")},
@@ -1420,7 +1421,8 @@ def test_upload_of_a_scan_with_no_readable_text_is_refused_and_stores_nothing(re
 
     assert response.status_code == 422
     assert "no readable text" in response.json()["detail"]
-    assert not saved_path.exists() and not saved_path.parent.exists()
+    assert not saved_path.exists()
+    assert folder_existed_before or not saved_path.parent.exists()  # created nothing it did not clean up
     assert get_chunk_ids_for_document(str(saved_path)) == []
 
 

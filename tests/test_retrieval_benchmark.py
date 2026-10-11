@@ -153,3 +153,21 @@ def test_the_loan_questions_have_ground_truth_in_every_borrowers_own_agreement()
         )
         for fact, answer in rb._agreement_facts(account, t).items():
             assert answer.lower() in text.lower(), f"{account['account_id']} {fact}={answer!r}"
+
+
+def test_installing_the_frozen_translator_can_be_undone():
+    # The quality-gate test installs it for the whole module; left in place it made a later test file raise KeyError on
+    # any question the frozen table did not hold.
+    from businessflow.rag import query_llm
+
+    before = query_llm.translate_to_english
+    restore = rb.install_translator(rb.Translator(refresh=False))
+    assert query_llm.translate_to_english is not before
+    restore()
+    assert query_llm.translate_to_english is before
+
+
+def test_a_question_without_a_frozen_translation_is_an_error_not_a_silent_fallback():
+    translator = rb.Translator(refresh=False)
+    with pytest.raises(KeyError, match="no frozen translation"):
+        translator("a question nobody ever froze a translation for")

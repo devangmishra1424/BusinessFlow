@@ -35,13 +35,19 @@ def test_the_benchmarks_shipped_setting_is_what_production_runs():
 
 @pytest.fixture(scope="module")
 def shipped_results():
-    rb.install_translator(rb.Translator(refresh=False))
-    corpus = rb.build_corpus()
-    shipped = next(s for s in rb.SETTINGS if s.name == rb.SHIPPED)
-    dev = rb.load_fixture("dev_queries.json")["queries"]
-    held = rb.load_fixture("heldout_queries.json")["queries"]
-    negatives = rb.load_fixture("negative_queries.json")["queries"]
-    return rb.evaluate(corpus, [shipped], dev, held, rb.loan_questions(corpus), negatives)[rb.SHIPPED]
+    # The benchmark replaces query_llm.translate_to_english with a lookup of frozen translations. Undo that afterwards:
+    # left in place it made a later test file (test_retriever.py) raise KeyError on a query the table does not hold.
+    restore = rb.install_translator(rb.Translator(refresh=False))
+    try:
+        corpus = rb.build_corpus()
+        shipped = next(s for s in rb.SETTINGS if s.name == rb.SHIPPED)
+        dev = rb.load_fixture("dev_queries.json")["queries"]
+        held = rb.load_fixture("heldout_queries.json")["queries"]
+        negatives = rb.load_fixture("negative_queries.json")["queries"]
+        yield rb.evaluate(corpus, [shipped], dev, held, rb.loan_questions(corpus), negatives)[rb.SHIPPED]
+    finally:
+        restore()
+
 
 
 @pytest.mark.parametrize("question_set", ["dev", "heldout", "loan"])
