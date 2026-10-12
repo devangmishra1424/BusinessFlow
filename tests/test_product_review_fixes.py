@@ -7,6 +7,7 @@ connection), so the logic under test is the real logic.
 """
 
 import asyncio
+import contextlib
 import dataclasses
 from datetime import date, datetime, timedelta, timezone
 
@@ -40,6 +41,11 @@ class _FakeConn:
         self.sink.append((" ".join(sql.split()), params))
         return self
 
+    @contextlib.contextmanager
+    def transaction(self):
+        # record_payment runs in one transaction; the recorder is its own connection inside it.
+        yield self
+
 
 def _pay(monkeypatch, account: Account, amount: float, payment_date: date = TODAY, **kw):
     """Runs the REAL store.record_payment against `account` with the DB
@@ -48,6 +54,8 @@ def _pay(monkeypatch, account: Account, amount: float, payment_date: date = TODA
     sink = []
     monkeypatch.setattr(store, "get_connection", lambda: _FakeConn(sink))
     monkeypatch.setattr(store, "get_account_or_raise", lambda _id: account)
+    # The account is read under a row lock inside the transaction (store._lock_account).
+    monkeypatch.setattr(store, "_lock_account", lambda _conn, _id: account)
     result = store.record_payment(account.account_id, amount, payment_date=payment_date, **kw)
     after = dataclasses.replace(
         account, principal_amount=result["principal_amount"], emi_amount=result["emi_amount"],
