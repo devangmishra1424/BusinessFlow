@@ -50,7 +50,10 @@ def _load_promises(account_id: str) -> list[PromiseToPay]:
     ]
 
 
-def _row_to_account(row: dict) -> Account:
+def _row_to_account(row: dict, with_history: bool = True) -> Account:
+    """with_history=False skips the payment-history and promise lookups: they take
+    their own pooled connections, which a caller holding a transaction must not do
+    (see _lock_account)."""
     return Account(
         account_id=row["account_id"],
         borrower_name=row["borrower_name"],
@@ -69,8 +72,8 @@ def _row_to_account(row: dict) -> Account:
         pending_emi_credit=float(row["pending_emi_credit"]),
         interest_rate_pct=float(row["interest_rate_pct"]) if row["interest_rate_pct"] is not None else None,
         telegram_chat_id=row["telegram_chat_id"],
-        payment_history=_load_payment_history(row["account_id"]),
-        promises=_load_promises(row["account_id"]),
+        payment_history=_load_payment_history(row["account_id"]) if with_history else [],
+        promises=_load_promises(row["account_id"]) if with_history else [],
     )
 
 
@@ -638,11 +641,46 @@ def record_payment(
       apply_extra_to_next must be True (credit it -- what is still due this
       cycle is emi_amount - credit) or False (record only, no effect on the
       schedule); None raises ExtraPaymentDecisionRequiredError.
+
+    Atomic, and serialised per account: the payment row and the account
+    update commit together, and the account row is locked (FOR UPDATE) from
+    the read to the commit. Before, they were separate autocommit statements
+    after an unlocked read, so two payments on one account at the same moment
+    (two payment links, or a link and an ops entry) both started from the same
+    balance and one update was lost.
     """
+    with get_connection().transaction() as tx:
+        return _record_payment_in(tx, account_id, amount, payment_date, apply_extra_to_next, payment_scheme)
+
+
+def _lock_account(conn, account_id: str) -> Account:
+    """The account, read inside the caller's open transaction and locked
+    until it commits, so payments on one account apply one after another.
+
+    Without payment history or promises: payment arithmetic never uses them,
+    and loading them would check a SECOND connection out of the pool while this
+    one is held. With the pool capped at 5, a burst of simultaneous confirms
+    each holding one connection could then wait on each other for good."""
+    row = conn.execute("select * from accounts where account_id = %s for update", (account_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"No account found for account_id={account_id!r}")
+    return _row_to_account(row, with_history=False)
+
+
+def _record_payment_in(
+    conn,
+    account_id: str,
+    amount: float,
+    payment_date: date | None,
+    apply_extra_to_next: bool | None,
+    payment_scheme: str | None,
+) -> dict:
+    """record_payment's body, run on the caller's open transaction (see
+    record_payment for the rules). redeem_payment_token uses it directly so
+    the token and the payment commit, or roll back, together."""
     if payment_date is None:
         payment_date = current_date()
-    conn = get_connection()
-    account = get_account_or_raise(account_id)
+    account = _lock_account(conn, account_id)
 
     due_this_cycle = round(account.emi_amount - account.pending_emi_credit, 2)
     on_time = payment_date <= account.emi_due_date
@@ -799,29 +837,38 @@ def redeem_payment_token(
     apply_extra_to_next: bool | None = None,
     payment_scheme: str | None = None,
 ) -> dict:
-    """Redeems a payment token and records the payment according to the selected scheme."""
-    conn = get_connection()
-    row = conn.execute(
-        "select account_id, amount, expires_at, used_at from payment_tokens where token = %s",
-        (token,),
-    ).fetchone()
-    if row is None:
-        raise PaymentTokenNotFoundError(f"no payment token found for token={token!r}")
-    if row["used_at"] is not None:
-        raise PaymentTokenAlreadyUsedError("this payment link has already been used")
-    if row["expires_at"] < datetime.now(timezone.utc):
-        raise PaymentTokenExpiredError("this payment link has expired")
+    """Redeems a payment token and records the payment according to the selected scheme.
 
-    account = get_account_or_raise(row["account_id"])
-    due_this_cycle = round(account.emi_amount - account.pending_emi_credit, 2)
-    if float(row["amount"]) + 0.01 < due_this_cycle and apply_extra_to_next is None:
-        raise ExtraPaymentDecisionRequiredError(
-            f"amount {row['amount']} is less than the {due_this_cycle} due this cycle for "
-            f"account_id={row['account_id']!r} -- apply_extra_to_next must be specified"
+    One transaction, with the token row locked (SELECT ... FOR UPDATE) from
+    the check to the commit. A second confirm of the same link -- a double
+    tap, or a retry while the first is still running -- waits for the first
+    to finish, then finds the link used and is refused. Before, the check and
+    "mark used" were separate autocommit statements with no condition on
+    used_at, so two confirms at the same moment could both pass the check and
+    record the payment twice.
+
+    Marking the link used and recording the payment commit together: if the
+    payment cannot be recorded (a short payment with no decision, a database
+    error), nothing is written and the link stays usable, rather than being
+    burned with nothing paid."""
+    with get_connection().transaction() as tx:
+        row = tx.execute(
+            "select account_id, amount, expires_at, used_at from payment_tokens where token = %s for update",
+            (token,),
+        ).fetchone()
+        if row is None:
+            raise PaymentTokenNotFoundError(f"no payment token found for token={token!r}")
+        if row["used_at"] is not None:
+            raise PaymentTokenAlreadyUsedError("this payment link has already been used")
+        if row["expires_at"] < datetime.now(timezone.utc):
+            raise PaymentTokenExpiredError("this payment link has expired")
+
+        tx.execute("update payment_tokens set used_at = now() where token = %s", (token,))
+        # A short payment with no decision raises ExtraPaymentDecisionRequiredError
+        # in here, which rolls back the line above too: the link stays usable.
+        return _record_payment_in(
+            tx, row["account_id"], float(row["amount"]), None, apply_extra_to_next, payment_scheme,
         )
-
-    conn.execute("update payment_tokens set used_at = now() where token = %s", (token,))
-    return record_payment(row["account_id"], float(row["amount"]), apply_extra_to_next=apply_extra_to_next, payment_scheme=payment_scheme)
 
 
 _ESCALATION_COLUMNS = "escalation_id, account_id, reason, status, created_at, resolved_at, proposed_changes, resolution_reason"
