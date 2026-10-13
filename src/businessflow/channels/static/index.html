@@ -3,68 +3,121 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>BusinessFlow · Chat</title>
+<title>BusinessFlow · Your loan, in plain words</title>
+<meta name="description" content="BusinessFlow: see what your loan needs, pay in one tap, and ask in English or Hindi." />
+<meta name="theme-color" content="#005da8" />
+<link rel="icon" type="image/svg+xml" href="/static/brand-mark.svg" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/styles.css?v=14" />
+<link rel="stylesheet" href="/static/styles.css?v=15" />
 </head>
 <body>
 
 <div id="start-screen" class="start-screen">
-  <div class="start-glow"></div>
-  <div class="start-card">
-    <div class="brand">
-      <div class="brand-mark">BF</div>
-      <div class="brand-name">BusinessFlow</div>
+  <aside class="start-aside">
+    <div class="brand on-dark">
+      <img class="brand-mark" src="/static/brand-mark.svg" alt="" />
+      <div class="brand-name">Business<b class="brand-accent">Flow</b></div>
     </div>
-    <p class="start-tagline">Talk to us about your loan — in English, Hindi, or however's easiest.</p>
+    <div class="start-aside-body">
+      <h1 class="start-headline">Your loan, in plain words.</h1>
+      <p class="start-headline-hi" lang="hi">आपका लोन, आसान शब्दों में।</p>
 
-    <div class="start-tabs">
-      <button class="start-tab active" data-mode="verified">My account</button>
-      <button class="start-tab" data-mode="anonymous">Just a question</button>
-      <button class="start-tab" data-mode="ops">Ops team</button>
-    </div>
-
-    <form id="start-form" autocomplete="off">
-      <div id="verified-fields">
-        <label class="field-label" for="start-account-picker">Choose an account</label>
-        <select id="start-account-picker">
-          <option value="" selected disabled>Select a borrower…</option>
-        </select>
-      </div>
-
-      <div id="lang-field">
-        <label class="field-label">Language</label>
-        <div class="lang-toggle">
-          <button type="button" class="lang-btn active" data-lang="en">English</button>
-          <button type="button" class="lang-btn" data-lang="hi">हिन्दी</button>
+      <!-- An illustration of the real product, not a promise: a borrower asks the way people
+           actually type, the assistant answers with the same "due now" figure the dashboard shows,
+           and offers the one-tap payment. Decorative, so hidden from screen readers. -->
+      <figure class="start-demo" aria-hidden="true">
+        <div class="demo-bubble demo-user">is mahine kitna dena hai?</div>
+        <div class="demo-typing"><span></span><span></span><span></span></div>
+        <div class="demo-bubble demo-bot">
+          ₹35,500 is due now: this month's EMI of ₹35,000 plus a ₹500 late fee.
+          <span class="demo-pay">Pay ₹35,500</span>
         </div>
-      </div>
+        <div class="demo-chip">✓ Checked your account</div>
+      </figure>
 
-      <button type="submit" id="start-submit-btn" class="start-submit">
-        Start chatting
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-      <p id="start-error" class="start-error" hidden></p>
-    </form>
-    <p class="start-hint">Your account key stays on this device — it's only sent to verify you, once.</p>
-  </div>
+      <ul class="start-points">
+        <li>
+          <span class="start-point-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="17" rx="2.5" stroke="currentColor" stroke-width="2"/><path d="M3 9h18M8 2v4M16 2v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+          <span><b>See what's due</b>The exact amount, and how it was worked out.</span>
+        </li>
+        <li>
+          <span class="start-point-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="2" y="5" width="20" height="14" rx="2.5" stroke="currentColor" stroke-width="2"/><path d="M2 10h20" stroke="currentColor" stroke-width="2"/></svg></span>
+          <span><b>Pay in one tap</b>Straight from your dashboard, or any amount you choose.</span>
+        </li>
+        <li>
+          <span class="start-point-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          <span><b>Ask in English or हिन्दी</b>Type it, or say it out loud.</span>
+        </li>
+        <li>
+          <span class="start-point-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M3 18v-2a4 4 0 0 1 4-4h1M17 18v-2a4 4 0 0 0-4-4h-1M12 12a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          <span><b>Reach a person</b>Raise a concern and follow it right here.</span>
+        </li>
+      </ul>
+    </div>
+  </aside>
+
+  <main class="start-main">
+    <div class="start-card">
+      <div class="brand start-card-brand">
+        <img class="brand-mark" src="/static/brand-mark.svg" alt="" />
+        <div class="brand-name">Business<b class="brand-accent">Flow</b></div>
+      </div>
+      <h2 class="start-title">Welcome</h2>
+      <p class="start-tagline">Talk to us about your loan — in English, Hindi, or however's easiest.</p>
+
+      <div class="start-tabs">
+        <button class="start-tab active" data-mode="verified">My account</button>
+        <button class="start-tab" data-mode="anonymous">Just a question</button>
+        <button class="start-tab" data-mode="ops">Ops team</button>
+      </div>
+      <p class="start-mode-hint" id="start-mode-hint"></p>
+
+      <form id="start-form" autocomplete="off">
+        <div id="verified-fields">
+          <label class="field-label" for="start-account-picker">Choose an account</label>
+          <select id="start-account-picker">
+            <option value="" selected disabled>Select a borrower…</option>
+          </select>
+        </div>
+
+        <div id="lang-field">
+          <label class="field-label">Language</label>
+          <div class="lang-toggle">
+            <button type="button" class="lang-btn active" data-lang="en">English</button>
+            <button type="button" class="lang-btn" data-lang="hi">हिन्दी</button>
+          </div>
+        </div>
+
+        <button type="submit" id="start-submit-btn" class="start-submit">
+          Start chatting
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <p id="start-error" class="start-error" hidden></p>
+      </form>
+      <p class="start-hint">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" stroke-width="2"/><path d="M8 11V7a4 4 0 1 1 8 0v4" stroke="currentColor" stroke-width="2"/></svg>
+        Your account key stays on this device — it's only sent to verify you, once.
+      </p>
+    </div>
+  </main>
 </div>
 
 <div id="dashboard-screen" class="dashboard-screen" hidden>
   <header class="dash-header">
     <div class="brand small">
-      <div class="brand-mark">BF</div>
-      <div class="brand-name">BusinessFlow</div>
+      <img class="brand-mark" src="/static/brand-mark.svg" alt="" />
+      <div class="brand-name">Business<b class="brand-accent">Flow</b></div>
     </div>
     <div class="dash-header-right">
       <span class="account-chip" id="dash-account-chip"></span>
-      <button class="icon-btn" id="dash-refresh-btn" title="Refresh">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M3 12a9 9 0 1 1 3 6.7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M3 21v-6h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <button class="icon-btn" id="dash-refresh-btn" title="Refresh" aria-label="Refresh">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M20.5 12a8.5 8.5 0 1 1-2.5-6l2.5 2.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M20.5 3.5v5h-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
-      <button class="icon-btn" id="dash-restart-btn" title="Start over">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" stroke-width="2"/><path d="M8 11V7a4 4 0 1 1 8 0v4" stroke="currentColor" stroke-width="2"/></svg>
+      <button class="ghost-btn" id="dash-restart-btn" title="Start over">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Sign out</span>
       </button>
     </div>
   </header>
@@ -81,112 +134,146 @@
     </div>
 
     <div class="dash-body" id="dash-body" hidden>
-      <section class="due-card" id="due-card" aria-live="polite" hidden></section>
-      <div class="dash-warnings" id="dash-warnings"></div>
-      <div class="action-result" id="warnings-action-result" hidden></div>
-
-      <div class="hero-actions-row">
-      <section class="dash-hero">
-        <div class="hero-identity">
-          <div class="hero-avatar" id="dash-avatar"></div>
-          <div class="hero-identity-text">
-            <h1 id="dash-borrower-name"></h1>
-            <p id="dash-business-name"></p>
-          </div>
+      <section class="dash-greeting">
+        <div class="hero-avatar" id="dash-avatar"></div>
+        <div class="hero-identity-text">
+          <p class="eyebrow">Your account</p>
+          <h1 id="dash-borrower-name"></h1>
+          <p id="dash-business-name"></p>
         </div>
+      </section>
 
-        <div class="hero-main">
-          <div class="hero-ring-card">
-            <div class="ring-stack" id="dash-ring-stack"></div>
-            <div class="ring-caption">
-              <div class="ring-caption-value" id="dash-ring-value"></div>
-              <div class="ring-caption-label">months left of <span id="dash-tenure"></span></div>
+      <section class="due-card" id="due-card" aria-live="polite" hidden></section>
+
+      <section class="attention" id="attention-section" hidden>
+        <h2 class="dash-section-title">Needs your attention</h2>
+        <div class="dash-warnings" id="dash-warnings"></div>
+        <div class="action-result" id="warnings-action-result" hidden></div>
+      </section>
+
+      <div class="dash-grid">
+        <section class="panel dash-hero">
+          <div class="panel-head">
+            <h2 class="dash-section-title">Your loan</h2>
+          </div>
+          <div class="hero-main">
+            <div class="hero-ring-card">
+              <div class="ring-stack" id="dash-ring-stack"></div>
+              <div class="ring-caption">
+                <div class="ring-caption-value" id="dash-ring-value"></div>
+                <div class="ring-caption-label">months left of <span id="dash-tenure"></span></div>
+              </div>
+            </div>
+            <div class="hero-stats" id="dash-hero-stats"></div>
+          </div>
+        </section>
+
+        <section class="panel dash-actions-section">
+          <div class="panel-head">
+            <h2 class="dash-section-title">Quick actions</h2>
+          </div>
+          <div class="dash-actions">
+            <div class="action-card">
+              <button type="button" class="action-btn" id="action-dispute-btn">
+                <span class="action-btn-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 9v4m0 4h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+                <span class="action-btn-text">
+                  <span class="action-btn-label">Something looks wrong</span>
+                  <span class="action-btn-sub">Tell us what isn't right on your account</span>
+                </span>
+                <svg class="action-btn-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="m9 6 6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <form class="action-form" id="dispute-form" hidden>
+                <label class="field-label" for="dispute-reason">What looks wrong?</label>
+                <textarea id="dispute-reason" rows="2" placeholder="e.g. I already paid this EMI on the 3rd"></textarea>
+                <div class="action-form-row">
+                  <button type="submit" class="btn-primary" id="dispute-submit-btn">Submit</button>
+                  <button type="button" class="btn-cancel" id="dispute-cancel-btn">Cancel</button>
+                </div>
+              </form>
+              <div class="action-result" id="dispute-result" hidden></div>
+            </div>
+
+            <div class="action-card">
+              <button type="button" class="action-btn" id="action-agent-btn">
+                <span class="action-btn-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M3 18v-2a4 4 0 0 1 4-4h1M17 18v-2a4 4 0 0 0-4-4h-1M12 12a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM21 18v-1a3 3 0 0 0-2.5-2.96M17 5.13a3 3 0 0 1 0 5.74" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                <span class="action-btn-text">
+                  <span class="action-btn-label">Talk to our team</span>
+                  <span class="action-btn-sub">A person will pick this up</span>
+                </span>
+                <svg class="action-btn-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="m9 6 6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <form class="action-form" id="agent-form" hidden>
+                <label class="field-label" for="agent-reason">What do you need help with? (optional)</label>
+                <textarea id="agent-reason" rows="2" placeholder="Optional details for our team"></textarea>
+                <div class="action-form-row">
+                  <button type="submit" class="btn-primary" id="agent-submit-btn">Send request</button>
+                  <button type="button" class="btn-cancel" id="agent-cancel-btn">Cancel</button>
+                </div>
+              </form>
+              <div class="action-result" id="agent-result" hidden></div>
+            </div>
+
+            <div class="action-card">
+              <button type="button" class="action-btn" id="action-payment-btn">
+                <span class="action-btn-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="2" y="5" width="20" height="14" rx="2.5" stroke="currentColor" stroke-width="2"/><path d="M2 10h20" stroke="currentColor" stroke-width="2"/></svg></span>
+                <span class="action-btn-text">
+                  <span class="action-btn-label">Pay a different amount</span>
+                  <span class="action-btn-sub">Choose how much to pay</span>
+                </span>
+                <svg class="action-btn-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="m9 6 6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <form class="action-form" id="payment-form" hidden>
+                <label class="field-label" for="payment-amount">Amount (₹)</label>
+                <input id="payment-amount" type="number" min="1" step="0.01" placeholder="e.g. 5000" />
+                <div class="action-form-row">
+                  <button type="submit" class="btn-primary" id="payment-submit-btn">Continue to pay</button>
+                  <button type="button" class="btn-cancel" id="payment-cancel-btn">Cancel</button>
+                </div>
+              </form>
+              <div class="action-result" id="payment-result" hidden></div>
             </div>
           </div>
-          <div class="hero-stats" id="dash-hero-stats"></div>
-        </div>
-      </section>
-
-      <section class="dash-section dash-actions-section">
-        <h2 class="dash-section-title">Quick actions</h2>
-        <div class="dash-actions">
-          <div class="action-card">
-            <button type="button" class="action-btn" id="action-dispute-btn">
-              <span class="action-btn-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 9v4m0 4h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
-              <span class="action-btn-label">Something looks wrong</span>
-              <span class="action-btn-sub">Tell us what isn't right on your account</span>
-            </button>
-            <form class="action-form" id="dispute-form" hidden>
-              <label class="field-label" for="dispute-reason">What looks wrong?</label>
-              <textarea id="dispute-reason" rows="2" placeholder="e.g. I already paid this EMI on the 3rd"></textarea>
-              <div class="action-form-row">
-                <button type="submit" class="btn-primary" id="dispute-submit-btn">Submit</button>
-                <button type="button" class="btn-cancel" id="dispute-cancel-btn">Cancel</button>
-              </div>
-            </form>
-            <div class="action-result" id="dispute-result" hidden></div>
-          </div>
-
-          <div class="action-card">
-            <button type="button" class="action-btn" id="action-agent-btn">
-              <span class="action-btn-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M3 18v-2a4 4 0 0 1 4-4h1M17 18v-2a4 4 0 0 0-4-4h-1M12 12a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM21 18v-1a3 3 0 0 0-2.5-2.96M17 5.13a3 3 0 0 1 0 5.74" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-              <span class="action-btn-label">Talk to our team</span>
-              <span class="action-btn-sub">A person will pick this up</span>
-            </button>
-            <form class="action-form" id="agent-form" hidden>
-              <label class="field-label" for="agent-reason">What do you need help with? (optional)</label>
-              <textarea id="agent-reason" rows="2" placeholder="Optional details for our team"></textarea>
-              <div class="action-form-row">
-                <button type="submit" class="btn-primary" id="agent-submit-btn">Send request</button>
-                <button type="button" class="btn-cancel" id="agent-cancel-btn">Cancel</button>
-              </div>
-            </form>
-            <div class="action-result" id="agent-result" hidden></div>
-          </div>
-
-          <div class="action-card">
-            <button type="button" class="action-btn" id="action-payment-btn">
-              <span class="action-btn-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="2" y="5" width="20" height="14" rx="2.5" stroke="currentColor" stroke-width="2"/><path d="M2 10h20" stroke="currentColor" stroke-width="2"/></svg></span>
-              <span class="action-btn-label">Pay a different amount</span>
-              <span class="action-btn-sub">Choose how much to pay</span>
-            </button>
-            <form class="action-form" id="payment-form" hidden>
-              <label class="field-label" for="payment-amount">Amount (₹)</label>
-              <input id="payment-amount" type="number" min="1" step="0.01" placeholder="e.g. 5000" />
-              <div class="action-form-row">
-                <button type="submit" class="btn-primary" id="payment-submit-btn">Continue to pay</button>
-                <button type="button" class="btn-cancel" id="payment-cancel-btn">Cancel</button>
-              </div>
-            </form>
-            <div class="action-result" id="payment-result" hidden></div>
-          </div>
-        </div>
-      </section>
+        </section>
       </div>
 
-      <section class="dash-section">
-        <button type="button" class="dash-section-title collapsible" id="timeline-toggle-btn" aria-expanded="true">
-          Payment timeline
-          <svg class="collapse-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
-        <div class="dash-timeline" id="dash-timeline"></div>
-      </section>
+      <div class="dash-grid dash-grid-split">
+        <section class="panel">
+          <div class="panel-head">
+            <h2 class="dash-section-title">Payment timeline</h2>
+            <span class="panel-legend">
+              <span><i class="dtl-dot paid-on-time"></i>Paid</span>
+              <span><i class="dtl-dot overdue"></i>Overdue</span>
+              <span><i class="dtl-dot upcoming"></i>Scheduled</span>
+            </span>
+          </div>
+          <div class="dash-timeline" id="dash-timeline"></div>
+          <button type="button" class="panel-more" id="timeline-toggle-btn" aria-expanded="false" aria-controls="dash-timeline" hidden></button>
+        </section>
 
-      <section class="dash-section">
-        <h2 class="dash-section-title">Your requests</h2>
-        <div class="dash-escalations" id="dash-escalations"></div>
-      </section>
+        <div class="dash-stack">
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="dash-section-title">Your requests</h2>
+            </div>
+            <div class="dash-escalations" id="dash-escalations"></div>
+          </section>
 
-      <section class="dash-section">
-        <h2 class="dash-section-title">Documents</h2>
-        <div class="dash-documents" id="dash-documents"></div>
-      </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="dash-section-title">Documents</h2>
+            </div>
+            <div class="dash-documents" id="dash-documents"></div>
+          </section>
 
-      <section class="dash-section">
-        <h2 class="dash-section-title">Messages from us</h2>
-        <p class="dash-section-sub">Everything we send you — reminders, decisions and replies — is listed here, whether or not you use Telegram.</p>
-        <div class="dash-messages" id="dash-messages"></div>
-      </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="dash-section-title">Messages from us</h2>
+            </div>
+            <p class="dash-section-sub">Everything we send you — reminders, decisions and replies — is listed here, whether or not you use Telegram.</p>
+            <div class="dash-messages" id="dash-messages"></div>
+          </section>
+        </div>
+      </div>
     </div>
   </main>
 
@@ -199,18 +286,21 @@
 <div id="chat-screen" class="chat-screen" hidden>
   <header class="chat-header">
     <div class="chat-header-left">
-      <button class="icon-btn" id="chat-back-btn" title="Close chat" hidden>
+      <button class="icon-btn" id="chat-back-btn" title="Close chat" aria-label="Close chat" hidden>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M18 6 6 18M6 6l12 12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
       </button>
       <div class="brand small">
-        <div class="brand-mark">BF</div>
-        <div class="brand-name">BusinessFlow</div>
+        <img class="brand-mark" src="/static/brand-mark.svg" alt="" />
+        <div class="brand-text">
+          <div class="brand-name">Business<b class="brand-accent">Flow</b></div>
+          <div class="brand-sub">Loan assistant</div>
+        </div>
       </div>
     </div>
     <div class="chat-header-right">
       <span class="account-chip" id="account-chip" hidden></span>
-      <button class="icon-btn" id="restart-btn" title="Start over">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M3 12a9 9 0 1 1 3 6.7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M3 21v-6h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <button class="icon-btn" id="restart-btn" title="Start over" aria-label="Start over">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6L3.5 8.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.5 3.5v5h5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
     </div>
   </header>
@@ -223,23 +313,25 @@
 
   <main id="message-list" class="message-list"></main>
 
-  <form id="message-form" class="message-form" autocomplete="off">
-    <button type="button" id="mic-btn" class="mic-btn" title="Record a voice message" aria-label="Record voice message">
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    </button>
-    <div id="recording-indicator" class="recording-indicator" hidden>
-      <span class="rec-dot"></span>
-      <span id="recording-timer">0:00</span>
-      <span class="recording-hint">Tap the mic to stop</span>
-    </div>
-    <input id="message-input" type="text" placeholder="Type your message…" autocomplete="off" />
-    <button type="submit" id="send-btn" class="send-btn" aria-label="Send">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 12h16M13 5l7 7-7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    </button>
-  </form>
+  <div class="composer-wrap">
+    <form id="message-form" class="message-form" autocomplete="off">
+      <button type="button" id="mic-btn" class="mic-btn" title="Record a voice message" aria-label="Record voice message">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div id="recording-indicator" class="recording-indicator" hidden>
+        <span class="rec-dot"></span>
+        <span id="recording-timer">0:00</span>
+        <span class="recording-hint">Tap the mic to stop</span>
+      </div>
+      <input id="message-input" type="text" placeholder="Type your message…" autocomplete="off" />
+      <button type="submit" id="send-btn" class="send-btn" aria-label="Send">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 12h16M13 5l7 7-7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </form>
+  </div>
 </div>
 
 <script src="/static/naturalvoice.js?v=1"></script>
-<script src="/static/app.js?v=10"></script>
+<script src="/static/app.js?v=11"></script>
 </body>
 </html>

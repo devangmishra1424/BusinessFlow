@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="BusinessFlow">
+  <!-- BusinessFlow mark: a speech bubble carrying a single flowing line:
+       a conversation that keeps a small business's loan moving. -->
+  <rect width="32" height="32" rx="8" fill="#005da8"/>
+  <path d="M13.5 22.4 A8 8 0 1 0 9.08 18 L6.5 25 Z" fill="#ffffff"/>
+  <path d="M11.8 17.2 C13.8 17.2 14.3 12.6 16.6 12.6 S19.3 15.2 21.1 13.2" fill="none" stroke="#005da8" stroke-width="2.4" stroke-linecap="round"/>
+</svg>

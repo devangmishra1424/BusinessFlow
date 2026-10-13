@@ -168,6 +168,16 @@ function _resetSubmitBtnLabel() {
   $submitBtn.innerHTML = _SUBMIT_BTN_LABELS[state.mode] || _SUBMIT_BTN_LABELS.verified;
 }
 
+// One line under the tabs saying what each choice leads to, so nobody has to
+// try all three to find out.
+const _MODE_HINTS = {
+  verified: "Pick your account to see what's due, pay, and chat about it.",
+  anonymous: "Ask a general question, no account needed. You can still verify later in the chat.",
+  ops: "For the operations team: opens the portfolio dashboard.",
+};
+const $modeHint = document.getElementById("start-mode-hint");
+$modeHint.textContent = _MODE_HINTS[state.mode];
+
 document.querySelectorAll(".start-tab").forEach((tab) =>
   tab.addEventListener("click", () => {
     document.querySelectorAll(".start-tab").forEach((t) => t.classList.remove("active"));
@@ -175,6 +185,7 @@ document.querySelectorAll(".start-tab").forEach((tab) =>
     state.mode = tab.dataset.mode;
     $verifiedFields.hidden = state.mode !== "verified";
     $langField.hidden = state.mode === "ops";
+    $modeHint.textContent = _MODE_HINTS[state.mode];
     _resetSubmitBtnLabel();
   })
 );
@@ -331,6 +342,7 @@ function restartAll() {
   stopPlayback();
   state.conversationId = null;
   state.accountId = null;
+  timelineExpanded = false; // the next account starts with the short view again
   document.getElementById("message-list").innerHTML = "";
   $accountPicker.value = "";
   $chatScreen.hidden = true;
@@ -1213,6 +1225,7 @@ function renderDashboard(data) {
       </div>`;
     })
     .join("");
+  document.getElementById("attention-section").hidden = warnings.length === 0;
 
   // Everything we've sent this borrower -- staff messages, decisions, dispute
   // outcomes, reminders -- whether or not Telegram delivered it.
@@ -1263,15 +1276,8 @@ function renderDashboard(data) {
     )
     .join("");
 
-  // Payment timeline -- real history then projected EMIs, one chronological list.
-  document.getElementById("dash-timeline").innerHTML = timeline.length
-    ? timeline
-        .map(
-          (t) =>
-            `<div class="dtl-row"><div class="dtl-dot ${t.status}"></div><div class="dtl-info"><b>${fmtInr(t.amount)}</b> \u2014 ${escapeHtml(t.label)}<div class="dtl-meta">${fmtDate(t.date)}</div></div></div>`
-        )
-        .join("")
-    : `<p class="dash-no-data">No payment history and no scheduled EMIs.</p>`;
+  _lastTimeline = timeline;
+  renderTimeline();
 
   // The borrower's own requests and disputes, in their terms (the server never
   // sends internal system tickets or raw staff wording -- see _build_requests).
@@ -1389,15 +1395,44 @@ document.getElementById("dash-retry-btn").addEventListener("click", loadDashboar
 document.getElementById("dash-refresh-btn").addEventListener("click", loadDashboard);
 document.getElementById("dash-restart-btn").addEventListener("click", restartAll);
 
-// Payment timeline can run to dozens of scheduled EMIs on a long tenure --
-// collapsible so it doesn't dominate the dashboard by default weight, but
-// starts open since it's real, relevant data, not something to hide.
+// Payment timeline -- real history, then projected EMIs, one chronological
+// list. It can run to dozens of scheduled EMIs on a long tenure, so by default
+// it shows what matters now: the latest entries that already happened (paid,
+// or overdue) and the next few scheduled. "Show all" lists every entry. The
+// near term is never hidden, only the far end of the schedule.
+const TIMELINE_RECENT = 3;
+const TIMELINE_UPCOMING = 3;
 const $timelineToggleBtn = document.getElementById("timeline-toggle-btn");
 const $dashTimeline = document.getElementById("dash-timeline");
+let _lastTimeline = [];
+let timelineExpanded = false;
+
+function timelineRowHtml(t) {
+  return `<div class="dtl-row ${t.status}"><span class="dtl-dot ${t.status}"></span><div class="dtl-info"><div class="dtl-label">${escapeHtml(t.label)}</div><div class="dtl-meta">${fmtDate(t.date)}</div></div><div class="dtl-amount">${fmtInr(t.amount)}</div></div>`;
+}
+
+function renderTimeline() {
+  const timeline = _lastTimeline;
+  if (!timeline.length) {
+    $dashTimeline.innerHTML = `<p class="dash-no-data">No payment history and no scheduled EMIs.</p>`;
+    $timelineToggleBtn.hidden = true;
+    return;
+  }
+  const firstUpcoming = timeline.findIndex((t) => t.status === "upcoming");
+  const nowIdx = firstUpcoming === -1 ? timeline.length : firstUpcoming;
+  const start = Math.max(0, nowIdx - TIMELINE_RECENT);
+  const end = Math.min(timeline.length, nowIdx + TIMELINE_UPCOMING);
+  const hiddenCount = timeline.length - (end - start);
+  const shown = timelineExpanded || hiddenCount === 0 ? timeline : timeline.slice(start, end);
+  $dashTimeline.innerHTML = shown.map(timelineRowHtml).join("");
+  $timelineToggleBtn.hidden = hiddenCount === 0;
+  $timelineToggleBtn.setAttribute("aria-expanded", String(timelineExpanded));
+  $timelineToggleBtn.textContent = timelineExpanded ? "Show less" : `Show all ${timeline.length} entries`;
+}
+
 $timelineToggleBtn.addEventListener("click", () => {
-  const expanded = $timelineToggleBtn.getAttribute("aria-expanded") === "true";
-  $timelineToggleBtn.setAttribute("aria-expanded", String(!expanded));
-  $dashTimeline.hidden = expanded;
+  timelineExpanded = !timelineExpanded;
+  renderTimeline();
 });
 document.getElementById("dash-chat-btn").addEventListener("click", openChatPanel);
 
