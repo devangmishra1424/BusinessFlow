@@ -15,6 +15,7 @@ const state = {
   selectedAccountIds: new Set(),
   sinceHours: 24,
   detailAccountId: null,
+  detailTab: "overview", // "overview" | "activity" | "payments" | "outreach" | "documents"
   refreshTimer: null,
 };
 
@@ -298,12 +299,14 @@ document.getElementById("since-hours").addEventListener("change", (e) => {
 /* ============================================================
    Avatar helpers
    ============================================================ */
-const AVATAR_GRADIENTS = [
-  ["#7bbde8", "#49769f"],
-  ["#6ea2b3", "#0a4174"],
-  ["#bdd8e9", "#4e8ea2"],
-  ["#4e8ea2", "#001d39"],
-  ["#7bbde8", "#4e8ea2"],
+// Flat tint + ink pairs (no gradients, per the design system), all AA for the
+// initials on their own tint; picked by a stable hash so an account keeps its colour.
+const AVATAR_TINTS = [
+  ["#e3eefb", "#0b4f8a"],
+  ["#dff3ee", "#0f6b55"],
+  ["#ece9fb", "#4b3fa8"],
+  ["#fdeee0", "#8a4c00"],
+  ["#e8edf5", "#26324a"],
 ];
 
 function hashStr(s) {
@@ -322,8 +325,8 @@ function initials(name) {
 }
 
 function avatarStyle(seed) {
-  const [a, b] = AVATAR_GRADIENTS[hashStr(seed) % AVATAR_GRADIENTS.length];
-  return `background: linear-gradient(150deg, ${a}, ${b});`;
+  const [bg, ink] = AVATAR_TINTS[hashStr(seed) % AVATAR_TINTS.length];
+  return `background: ${bg}; color: ${ink};`;
 }
 
 function fmtInr(n) {
@@ -810,6 +813,8 @@ function accountCardHtml(a) {
     ? a.flags.map((f) => `<span class="flag-chip ${f.label}" title="${escapeHtml(f.reason)}">${escapeHtml(FLAG_LABELS[f.label] || f.label)}</span>`).join("")
     : `<span class="flag-chip clean">Clean</span>`;
   const isSelected = state.selectedAccountIds.has(a.account_id);
+  // Late but not yet flagged overdue means still inside the grace period: amber, not red.
+  const dpdClass = a.days_past_due <= 0 ? "" : a.flags.some((f) => f.label === "overdue") ? "overdue" : "grace";
 
   return `
   <div class="account-card-wrap">
@@ -821,19 +826,21 @@ function accountCardHtml(a) {
         <div class="account-borrower">${escapeHtml(a.borrower_name)}</div>
         <div class="account-business">${escapeHtml(a.business_name)}</div>
       </div>
-      <span class="risk-dot ${a.risk_tier}" title="${a.risk_tier} risk"></span>
     </div>
-    <div class="account-meta-row">
-      <span class="account-loan-type">${escapeHtml(a.loan_type)}</span>
+    <div class="account-figures">
       <div class="account-emi">
-        <div class="amount">${fmtInr(a.emi_amount)}</div>
         <div class="label">EMI</div>
+        <div class="amount">${fmtInr(a.emi_amount)}</div>
+      </div>
+      <div class="account-dpd">
+        <div class="label">Status</div>
+        <div class="dpd ${dpdClass}"${dpdClass === "grace" ? ` title="Within the ${GRACE_PERIOD_DAYS}-day grace period"` : ""}>${a.days_past_due > 0 ? `${a.days_past_due}d past due` : "Current"}</div>
       </div>
     </div>
     <div class="account-flags">${flagsHtml}</div>
     <div class="account-footer">
-      <span>${a.account_id}</span>
-      <span class="dpd ${a.days_past_due > 0 ? "overdue" : ""}">${a.days_past_due > 0 ? `${a.days_past_due}d past due` : "current"}</span>
+      <span class="account-id">${a.account_id} · ${escapeHtml(a.loan_type)}</span>
+      <span class="risk-tag ${a.risk_tier}"><span class="risk-dot ${a.risk_tier}"></span>${a.risk_tier[0].toUpperCase()}${a.risk_tier.slice(1)} risk</span>
     </div>
   </button>
   </div>`;
@@ -938,14 +945,14 @@ function escalationCardHtml(e, { withAccountLink }) {
       ${e.resolution_reason ? `<div class="escalation-reason" style="margin-top:6px;color:var(--text-3)">Reason given: ${escapeHtml(e.resolution_reason)}</div>` : ""}
       <div class="reject-reason-row" id="reject-row-${e.escalation_id}">
         <input type="text" placeholder="Optional reason shown to the borrower" id="reject-input-${e.escalation_id}" />
-        <button class="btn btn-reject confirm-reject" data-id="${e.escalation_id}">Confirm reject</button>
+        <button class="btn btn-danger confirm-reject" data-id="${e.escalation_id}">Confirm reject</button>
       </div>
     </div>
     ${
       isOpen
         ? `<div class="escalation-actions">
-            <button class="btn btn-approve" data-action="approve" data-id="${e.escalation_id}">${approveLabel}</button>
-            ${canReject ? `<button class="btn btn-reject" data-action="reject" data-id="${e.escalation_id}">Reject</button>` : ""}
+            <button class="btn btn-success" data-action="approve" data-id="${e.escalation_id}">${approveLabel}</button>
+            ${canReject ? `<button class="btn btn-danger" data-action="reject" data-id="${e.escalation_id}">Reject</button>` : ""}
           </div>`
         : ""
     }
@@ -1010,7 +1017,7 @@ function ringChartSvg(fraction, color) {
   const offset = c * (1 - clamped);
   return `
   <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="transform:rotate(-90deg)">
-    <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="rgba(123,189,232,0.14)" stroke-width="${stroke}" />
+    <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--border)" stroke-width="${stroke}" />
     <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${color}" stroke-width="${stroke}"
       stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${offset}" />
   </svg>`;
@@ -1031,24 +1038,54 @@ function _loadDetailData(accountId) {
   return Promise.all([getAccount(accountId), getDocuments(accountId), getConversation(accountId)]);
 }
 
+const DETAIL_CLOSE_HTML = `<button type="button" class="detail-close" aria-label="Close">✕</button>`;
+
 async function openDetail(accountId) {
   state.detailAccountId = accountId;
+  state.detailTab = "overview"; // a freshly opened account always starts on its overview
   $detailPanel.hidden = false;
   $detailBackdrop.hidden = false;
   setTimeout(() => {
     $detailPanel.classList.add("open");
     $detailBackdrop.classList.add("open");
   }, 10);
-  $detailPanel.innerHTML = `<div class="detail-close">✕</div><div class="detail-body"><p class="no-data">Loading…</p></div>`;
+  $detailPanel.innerHTML = `${DETAIL_CLOSE_HTML}<div class="detail-body"><div class="detail-loading"><div class="spinner"></div><p class="no-data">Loading account…</p></div></div>`;
   wireDetailClose();
 
   try {
     const [account, documents, conversation] = await _loadDetailData(accountId);
     renderDetail(account, documents, conversation);
   } catch (e) {
-    $detailPanel.innerHTML = `<div class="detail-close">✕</div><div class="detail-body"><p class="no-data">Couldn't load this account: ${escapeHtml(e.message)}</p></div>`;
+    $detailPanel.innerHTML = `${DETAIL_CLOSE_HTML}<div class="detail-body"><p class="no-data">Couldn't load this account: ${escapeHtml(e.message)}</p></div>`;
     wireDetailClose();
   }
+}
+
+// The detail panel is split into tabs. Every action inside it re-renders the
+// whole panel (renderDetail) from fresh data, so the chosen tab lives in state
+// and is put back on each render -- recording a payment must not throw the
+// operator back to the overview.
+function applyDetailTab() {
+  const tab = state.detailTab || "overview";
+  $detailPanel.querySelectorAll("[data-detail-tab]").forEach((btn) => {
+    const active = btn.dataset.detailTab === tab;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", String(active));
+  });
+  $detailPanel.querySelectorAll("[data-detail-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.detailPanel !== tab;
+  });
+}
+
+function wireDetailTabs() {
+  $detailPanel.querySelectorAll("[data-detail-tab]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      state.detailTab = btn.dataset.detailTab;
+      applyDetailTab();
+      $detailPanel.querySelector(".detail-tabs")?.scrollIntoView({ block: "nearest" });
+    })
+  );
+  applyDetailTab();
 }
 
 function wireDetailClose() {
@@ -1293,14 +1330,14 @@ document.getElementById("na-review-confirm-btn").addEventListener("click", async
     // all. Falls back to the old manual-relay hint when it isn't
     // configured, rather than silently omitting either explanation.
     const inviteHtml = result.telegram_invite_link
-      ? `<a class="btn btn-approve na-invite-link" href="${escapeHtml(result.telegram_invite_link)}" target="_blank" rel="noopener">Open Telegram invite link</a>
+      ? `<a class="btn btn-primary na-invite-link" href="${escapeHtml(result.telegram_invite_link)}" target="_blank" rel="noopener">Open Telegram invite link</a>
          <p class="clarify-hint">Send this link to the borrower, or tap it now — it verifies them the instant it's opened.</p>`
       : `<p class="clarify-hint">This key won't be shown again — record it now if the borrower needs it to verify over chat/Telegram.</p>`;
     $newAccountSuccess.innerHTML = `
       <p class="na-success-title">✓ ${escapeHtml(result.account.account_id)} opened for ${escapeHtml(payload.borrower_name)}</p>
       <p class="na-success-key">Access key: <b>${escapeHtml(result.access_key)}</b></p>
       ${inviteHtml}
-      <button class="btn ${result.telegram_invite_link ? "" : "btn-approve"}" id="na-done-btn">Done</button>`;
+      <button class="btn ${result.telegram_invite_link ? "btn-secondary" : "btn-primary"}" id="na-done-btn">Done</button>`;
     document.getElementById("na-done-btn").addEventListener("click", () => {
       closeNewAccountModal();
       loadAll();
@@ -1364,7 +1401,7 @@ function documentRowHtml(d) {
       <span class="document-name">${escapeHtml(d.filename)}</span>
       <span class="document-meta">${fmtFileSize(d.size_bytes)} · uploaded ${fmtDate(d.uploaded_at)}</span>
     </div>
-    <button type="button" class="btn document-download-btn" data-filename="${escapeHtml(d.filename)}">Download</button>
+    <button type="button" class="btn btn-secondary document-download-btn" data-filename="${escapeHtml(d.filename)}">Download</button>
   </div>`;
 }
 
@@ -1587,13 +1624,13 @@ function renderDetail(a, documents, conversation = []) {
                 <div class="promise-meta">opened ${fmtDate(d.opened_at.slice(0, 10))} · ${d.status}${d.resolved_at ? ` ${fmtDate(d.resolved_at.slice(0, 10))}` : ""}</div>
                 ${d.resolution_note ? `<div class="promise-meta">Resolution: ${escapeHtml(d.resolution_note)}</div>` : ""}
               </div>
-              ${d.status === "open" ? `<button type="button" class="btn resolve-dispute-btn">Resolve</button>` : ""}
+              ${d.status === "open" ? `<button type="button" class="btn btn-secondary resolve-dispute-btn">Resolve</button>` : ""}
             </div>
             ${
               d.status === "open"
                 ? `<div class="reject-reason-row" id="resolve-dispute-row">
                     <input type="text" placeholder="Optional note on how this was resolved" id="resolve-dispute-note" />
-                    <button class="btn btn-approve confirm-resolve-dispute">Confirm resolve</button>
+                    <button class="btn btn-success confirm-resolve-dispute">Confirm resolve</button>
                   </div>`
                 : ""
             }
@@ -1624,25 +1661,33 @@ function renderDetail(a, documents, conversation = []) {
         .join("")
     : `<p class="no-data">No escalations for this account.</p>`;
 
+  // Open items an operator must act on -- shown as a count on the tab, so they
+  // are visible without opening it.
+  const openCaseItems =
+    a.escalations.filter((e) => e.status === "queued_for_human").length + a.disputes.filter((d) => d.status === "open").length;
+  const pendingClarifications = a.clarification_requests.filter((c) => !c.resolved).length;
+
   $detailPanel.innerHTML = `
-    <div class="detail-close">✕</div>
-    <div class="detail-body">
-      <div class="detail-header">
-        <div class="detail-avatar" style="${avatarStyle(a.account_id)}">${initials(a.borrower_name)}</div>
-        <div>
-          <h2>${escapeHtml(a.borrower_name)}</h2>
-          <div class="biz">${escapeHtml(a.business_name)} · ${a.account_id}</div>
+    <div class="detail-top">
+      <div class="detail-top-row">
+        <div class="detail-header">
+          <div class="detail-avatar" style="${avatarStyle(a.account_id)}">${initials(a.borrower_name)}</div>
+          <div class="detail-title">
+            <h2>${escapeHtml(a.borrower_name)}</h2>
+            <div class="biz">${escapeHtml(a.business_name)} · ${a.account_id}</div>
+          </div>
         </div>
+        ${DETAIL_CLOSE_HTML}
       </div>
       <div class="detail-badges">
-        <span class="badge risk-${a.risk_tier}">${a.risk_tier} risk</span>
+        <span class="badge risk-${a.risk_tier}"><span class="risk-dot ${a.risk_tier}"></span>${a.risk_tier} risk</span>
         <span class="badge">${escapeHtml(a.loan_type)}</span>
         <span class="badge">${LANGUAGE_LABELS[a.language_preference] || a.language_preference}</span>
         <a class="badge badge-link" href="tel:${escapeHtml(a.phone_number)}">${escapeHtml(a.phone_number)}</a>
         <button type="button" class="badge badge-edit-btn" id="edit-account-btn" title="Edit phone, language, or risk tier">✎ Edit</button>
       </div>
 
-      <form class="upload-form" id="edit-account-form" hidden>
+      <form class="upload-form edit-account-form" id="edit-account-form" hidden>
         <div class="upload-row">
           <input type="text" id="ea-phone" placeholder="Phone (E.164, e.g. +919812345001)" value="${escapeHtml(a.phone_number)}" />
           <select id="ea-language">
@@ -1657,106 +1702,235 @@ function renderDetail(a, documents, conversation = []) {
           </select>
         </div>
         <div class="clarify-actions-row">
-          <button type="submit" class="btn btn-approve">Save changes</button>
-          <button type="button" class="btn btn-reject" id="edit-account-cancel-btn">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save changes</button>
+          <button type="button" class="btn btn-secondary" id="edit-account-cancel-btn">Cancel</button>
         </div>
         <p class="mini-form-error" id="edit-account-error" hidden></p>
       </form>
 
-      <p class="account-verdict ${digest.severity}">${escapeHtml(digest.verdict)}</p>
+      <nav class="detail-tabs" role="tablist" aria-label="Account sections">
+        <button type="button" class="detail-tab" role="tab" data-detail-tab="overview">Overview</button>
+        <button type="button" class="detail-tab" role="tab" data-detail-tab="activity">Case activity${openCaseItems ? `<span class="tab-count attention" title="Open escalations and disputes">${openCaseItems}</span>` : ""}</button>
+        <button type="button" class="detail-tab" role="tab" data-detail-tab="payments">Payments</button>
+        <button type="button" class="detail-tab" role="tab" data-detail-tab="outreach">Outreach${pendingClarifications ? `<span class="tab-count" title="Clarification requests still pending">${pendingClarifications}</span>` : ""}</button>
+        <button type="button" class="detail-tab" role="tab" data-detail-tab="documents">Documents<span class="tab-count" id="documents-count">${documents.length}</span></button>
+      </nav>
+    </div>
 
-      <div class="stats-worries-row">
-        <div class="sw-block">
-          <p class="sw-title">Stats</p>
-          <ul class="sw-list">${digest.stats.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ul>
-        </div>
-        <div class="sw-block worries">
-          <p class="sw-title">Worries</p>
-          ${
-            digest.worries.length
-              ? `<ul class="sw-list">${digest.worries.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul>`
-              : `<p class="no-worries">None — clean account.</p>`
-          }
-        </div>
-      </div>
+    <div class="detail-body">
+      <section class="detail-tabpanel" data-detail-panel="overview" role="tabpanel">
+        <p class="account-verdict ${digest.severity}">${escapeHtml(digest.verdict)}</p>
 
-      <div class="hero-row">
-        <div class="hero-card">
-          <p class="hero-card-title">Loan progress</p>
-          <div class="ring-wrap">
-            <div class="ring-stack">
-              ${ringChartSvg(paidOffFraction, ringColor)}
-              <div class="ring-overlay">
-                <div class="ring-center-value">${a.months_remaining}</div>
-                <div class="ring-center-label">mo left</div>
+        <div class="stats-worries-row">
+          <div class="sw-block">
+            <p class="sw-title">Stats</p>
+            <ul class="sw-list">${digest.stats.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ul>
+          </div>
+          <div class="sw-block worries">
+            <p class="sw-title">Worries</p>
+            ${
+              digest.worries.length
+                ? `<ul class="sw-list">${digest.worries.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul>`
+                : `<p class="no-worries">None — clean account.</p>`
+            }
+          </div>
+        </div>
+
+        <div class="hero-row">
+          <div class="hero-card">
+            <p class="hero-card-title">Loan progress</p>
+            <div class="ring-wrap">
+              <div class="ring-stack">
+                ${ringChartSvg(paidOffFraction, ringColor)}
+                <div class="ring-overlay">
+                  <div class="ring-center-value">${a.months_remaining}</div>
+                  <div class="ring-center-label">mo left</div>
+                </div>
+              </div>
+              <div class="ring-legend">
+                <div><b>${Math.round(paidOffFraction * 100)}%</b> of the ${a.tenure_months}-month term elapsed</div>
+                <div>${monthsPaidDown} of ${a.tenure_months} months paid down</div>
               </div>
             </div>
-            <div class="ring-legend">
-              <div><b>${Math.round(paidOffFraction * 100)}%</b> of the ${a.tenure_months}-month term elapsed</div>
-              <div>${monthsPaidDown} of ${a.tenure_months} months paid down</div>
+          </div>
+          <div class="hero-card">
+            <p class="hero-card-title">Account snapshot</p>
+            <div class="stat-cluster">
+              <div class="stat-mini"><div class="label">Principal</div><div class="value">${fmtInr(a.principal_amount)}</div></div>
+              <div class="stat-mini"><div class="label">EMI</div><div class="value">${fmtInr(a.emi_amount)}</div></div>
+              <div class="stat-mini"><div class="label">Next due</div><div class="value">${fmtShortDate(a.emi_due_date)}</div></div>
+              <div class="stat-mini"><div class="label">Days past due</div><div class="value ${a.days_past_due > 0 ? "flagged" : ""}">${a.days_past_due}</div></div>
+              <div class="stat-mini"><div class="label">NACH mandate</div><div class="value ${a.nach_mandate_active ? "on" : "off"}">${a.nach_mandate_active ? "Active" : "Inactive"}</div></div>
+              <div class="stat-mini"><div class="label">Dispute</div><div class="value ${a.dispute_open ? "flagged" : "on"}">${a.dispute_open ? "Open" : "None"}</div></div>
             </div>
           </div>
         </div>
-        <div class="hero-card">
-          <p class="hero-card-title">Account snapshot</p>
-          <div class="stat-cluster">
-            <div class="stat-mini"><div class="label">Principal</div><div class="value">${fmtInr(a.principal_amount)}</div></div>
-            <div class="stat-mini"><div class="label">EMI</div><div class="value">${fmtInr(a.emi_amount)}</div></div>
-            <div class="stat-mini"><div class="label">Next due</div><div class="value">${fmtShortDate(a.emi_due_date)}</div></div>
-            <div class="stat-mini"><div class="label">Days past due</div><div class="value ${a.days_past_due > 0 ? "flagged" : ""}">${a.days_past_due}</div></div>
-            <div class="stat-mini"><div class="label">NACH mandate</div><div class="value ${a.nach_mandate_active ? "on" : "off"}">${a.nach_mandate_active ? "Active" : "Inactive"}</div></div>
-            <div class="stat-mini"><div class="label">Dispute</div><div class="value ${a.dispute_open ? "flagged" : "on"}">${a.dispute_open ? "Open" : "None"}</div></div>
+
+        <div class="section-block">
+          <p class="section-title">Flags <span class="count">${a.flags.length}</span></p>
+          <p class="section-subtitle">Rule-based, not a black-box score — each flag below states exactly why it fired.</p>
+          ${flagsHtml}
+        </div>
+      </section>
+
+      <section class="detail-tabpanel" data-detail-panel="activity" role="tabpanel" hidden>
+        <div class="detail-cols">
+          <div>
+            <div class="section-block">
+              <p class="section-title">Escalations <span class="count">${a.escalations.length}</span></p>
+              <p class="section-subtitle">Requests handed off to a human — a restructuring proposal, or anything the agent couldn't resolve on its own.</p>
+              ${escalationsHtml}
+            </div>
+
+            <div class="section-block">
+              <p class="section-title">Disputes <span class="count">${a.disputes.length}</span></p>
+              <p class="section-subtitle">The borrower's own stated reason for each dispute -- including one raised via "Contest" on their dashboard.</p>
+              <div class="row-list">${disputesHtml}</div>
+            </div>
+
+            <div class="section-block">
+              <p class="section-title">Promises to pay <span class="count">${a.promises.length}</span></p>
+              <p class="section-subtitle">Commitments the borrower made to pay by a specific date — kept, broken, or still pending.</p>
+              <div class="row-list">${promisesHtml}</div>
+              <form class="upload-form inline-form" id="log-promise-form">
+                <p class="inline-form-title">Log a new promise</p>
+                <div class="upload-row">
+                  <input type="number" id="lp-amount" placeholder="Promised amount (₹)" min="0.01" step="0.01" required />
+                  <input type="date" id="lp-date" required title="Date they promised to pay by" />
+                </div>
+                <button type="submit" class="btn btn-primary upload-btn" id="log-promise-btn">Log a promise to pay</button>
+                <p class="mini-form-error" id="log-promise-error" hidden></p>
+                <p class="upload-result" id="log-promise-result" hidden></p>
+              </form>
+            </div>
+          </div>
+
+          <div>
+            <div class="section-block">
+              <p class="section-title">Call log <span class="count">${a.call_log.length}</span></p>
+              <p class="section-subtitle">Every phone contact attempt on record, so a colleague opening this account later can see one already happened.</p>
+              <div class="row-list">${callLogHtml}</div>
+              <form class="upload-form inline-form" id="call-log-form">
+                <p class="inline-form-title">Log a call</p>
+                <div class="upload-row">
+                  <select id="cl-outcome">
+                    <option value="reached">Reached</option>
+                    <option value="no_answer">No answer</option>
+                    <option value="voicemail">Left voicemail</option>
+                    <option value="wrong_number">Wrong number</option>
+                  </select>
+                  <input type="text" id="cl-note" placeholder="Note (optional)" />
+                </div>
+                <button type="submit" class="btn btn-primary upload-btn" id="call-log-btn">Log this call</button>
+              </form>
+              <div class="call-log-nudge" id="call-log-nudge" hidden>
+                <p class="clarify-hint">Didn't reach them — escalate to a human instead of leaving it here?</p>
+                <div class="clarify-actions-row">
+                  <button type="button" class="btn btn-primary" id="call-log-escalate-btn">Escalate to a human</button>
+                  <button type="button" class="btn btn-secondary" id="call-log-dismiss-btn">No, that's fine</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="section-block">
+              <p class="section-title">Conversation <span class="count">${conversation.length}</span></p>
+              <p class="section-subtitle">What the AI agent actually said to this borrower, and what it did on their behalf — not just messages ops itself sent.</p>
+              <div class="convo-list">${
+                conversation.length
+                  ? conversation.map(conversationEntryHtml).join("")
+                  : `<p class="no-data">No AI conversation on record for this account yet.</p>`
+              }</div>
+            </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      <div class="detail-sectors">
-        <div class="detail-sector">
-          <p class="sector-heading">Flags &amp; outreach</p>
-
+      <section class="detail-tabpanel" data-detail-panel="payments" role="tabpanel" hidden>
+        <div class="detail-cols">
           <div class="section-block">
-            <p class="section-title">Flags <span class="count">${a.flags.length}</span></p>
-            <p class="section-subtitle">Rule-based, not a black-box score — each flag below states exactly why it fired.</p>
-            ${flagsHtml}
+            <p class="section-title">Payment history <span class="count">last ${payments.length}</span></p>
+            <p class="section-subtitle">₹ amount per payment, colored by whether it arrived on time.</p>
+            ${barsHtml}
+            <form class="upload-form inline-form" id="record-payment-form">
+              <p class="inline-form-title">Record a payment</p>
+              <div class="upload-row">
+                <input type="number" id="rp-amount" placeholder="Amount (₹)" min="0.01" step="0.01" required />
+                <input type="date" id="rp-date" title="Payment date (defaults to today)" />
+              </div>
+              <div class="mini-form-radio-row" id="rp-extra-question" hidden>
+                <span class="clarify-hint full-row">Less than what's due this cycle — apply it toward the next EMI?</span>
+                <label><input type="radio" name="rp-apply" value="true" /> Yes, credit it</label>
+                <label><input type="radio" name="rp-apply" value="false" /> No, just record it</label>
+              </div>
+              <button type="submit" class="btn btn-primary upload-btn" id="record-payment-btn">Record payment</button>
+              <p class="mini-form-error" id="record-payment-error" hidden></p>
+              <p class="upload-result" id="record-payment-result" hidden></p>
+            </form>
           </div>
 
           <div class="section-block">
-            <p class="section-title">Telegram onboarding</p>
-            <p class="section-subtitle">${
-              a.telegram_linked
-                ? "This borrower has verified over Telegram — automated reminders actually reach them."
-                : "Not linked yet — every automated reminder to this account is logged, but has nowhere to actually deliver to."
-            }</p>
-            <button type="button" class="btn ${a.telegram_linked ? "" : "btn-approve"}" id="telegram-invite-btn">
-              ${a.telegram_linked ? "Reset access key & get a new invite link" : "Get a Telegram invite link"}
-            </button>
-            <div id="telegram-invite-result"></div>
+            <p class="section-title">EMI timeline <span class="count">${timeline.length}</span></p>
+            <p class="section-subtitle">Every real past payment, plus every EMI still scheduled ahead — projected monthly from the next due date.</p>
+            <div class="timeline-list">${timelineHtml}</div>
           </div>
+        </div>
+      </section>
 
+      <section class="detail-tabpanel" data-detail-panel="outreach" role="tabpanel" hidden>
+        <div class="detail-cols">
           <div class="section-block">
             <p class="section-title">Send a clarification request</p>
             <form class="clarify-form" id="clarify-form">
               <label class="clarify-label" for="clarify-note">Your note (what's going on, in your own words)</label>
               <textarea id="clarify-note" rows="2" placeholder="e.g. Third missed promise this quarter, dispute still unresolved — need them to explain."></textarea>
               <div class="clarify-actions-row">
-                <button type="button" class="btn btn-reject" id="clarify-polish-btn">✨ Polish wording</button>
-                ${a.flags.length ? `<button type="button" class="btn btn-reject" id="clarify-summarize-btn">📋 Summarize all flags</button>` : ""}
+                <button type="button" class="btn btn-secondary" id="clarify-polish-btn">✨ Polish wording</button>
+                ${a.flags.length ? `<button type="button" class="btn btn-secondary" id="clarify-summarize-btn">📋 Summarize all flags</button>` : ""}
                 <span class="clarify-hint">Drafts a professional message below, grounded in this account's real flags — you still review it before sending.</span>
               </div>
               <label class="clarify-label" for="clarify-message">Message to send</label>
               <textarea id="clarify-message" rows="4" placeholder="Write directly, or use Polish wording above to draft one."></textarea>
               <div class="clarify-actions-row">
-                <button type="submit" class="btn btn-approve" id="clarify-send-btn">Send to borrower</button>
+                <button type="submit" class="btn btn-primary" id="clarify-send-btn">Send to borrower</button>
                 <span class="clarify-hint">Delivered over Telegram if linked; always logged either way.</span>
               </div>
               <p class="clarify-result" id="clarify-result" hidden></p>
             </form>
-            ${
-              hasUnresolvedClarifications
-                ? `<button type="button" class="btn btn-approve" id="mark-clarifications-resolved-btn" style="margin-bottom: 10px;">✓ Mark all as resolved</button>`
-                : ""
-            }
-            <div class="clarification-history">${clarificationHistoryHtml}</div>
+          </div>
+
+          <div>
+            <div class="section-block">
+              <p class="section-title">Telegram onboarding <span class="status-dot ${a.telegram_linked ? "on" : "off"}">${a.telegram_linked ? "Linked" : "Not linked"}</span></p>
+              <p class="section-subtitle">${
+                a.telegram_linked
+                  ? "This borrower has verified over Telegram — automated reminders actually reach them."
+                  : "Not linked yet — every automated reminder to this account is logged, but has nowhere to actually deliver to."
+              }</p>
+              <button type="button" class="btn ${a.telegram_linked ? "btn-secondary" : "btn-primary"}" id="telegram-invite-btn">
+                ${a.telegram_linked ? "Reset access key & get a new invite link" : "Get a Telegram invite link"}
+              </button>
+              <div id="telegram-invite-result"></div>
+            </div>
+
+            <div class="section-block">
+              <p class="section-title">Clarification history <span class="count">${a.clarification_requests.length}</span></p>
+              ${
+                hasUnresolvedClarifications
+                  ? `<button type="button" class="btn btn-secondary mark-resolved-btn" id="mark-clarifications-resolved-btn">✓ Mark all as resolved</button>`
+                  : ""
+              }
+              <div class="clarification-history">${clarificationHistoryHtml}</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="detail-tabpanel" data-detail-panel="documents" role="tabpanel" hidden>
+        <div class="detail-cols">
+          <div class="section-block">
+            <p class="section-title">Documents</p>
+            <p class="section-subtitle">Everything uploaded for this borrower — signed agreements, KYC, and more.</p>
+            <div id="documents-list"></div>
           </div>
 
           <div class="section-block">
@@ -1771,113 +1945,16 @@ function renderDetail(a, documents, conversation = []) {
                 </select>
                 <input type="file" id="upload-file" accept=".pdf,.docx,.md" required />
               </div>
-              <button type="submit" class="btn upload-btn">Upload &amp; ingest</button>
+              <button type="submit" class="btn btn-primary upload-btn">Upload &amp; ingest</button>
               <p class="upload-result" id="upload-result" hidden></p>
             </form>
           </div>
         </div>
-
-        <div class="detail-sector">
-          <p class="sector-heading">Case activity</p>
-
-          <div class="section-block">
-            <p class="section-title">Escalations <span class="count">${a.escalations.length}</span></p>
-            <p class="section-subtitle">Requests handed off to a human — a restructuring proposal, or anything the agent couldn't resolve on its own.</p>
-            ${escalationsHtml}
-          </div>
-
-          <div class="section-block">
-            <p class="section-title">Disputes <span class="count">${a.disputes.length}</span></p>
-            <p class="section-subtitle">The borrower's own stated reason for each dispute -- including one raised via "Contest" on their dashboard.</p>
-            ${disputesHtml}
-          </div>
-
-          <div class="section-block">
-            <p class="section-title">Conversation <span class="count">${conversation.length}</span></p>
-            <p class="section-subtitle">What the AI agent actually said to this borrower, and what it did on their behalf — not just messages ops itself sent.</p>
-            <div class="convo-list">${
-              conversation.length
-                ? conversation.map(conversationEntryHtml).join("")
-                : `<p class="no-data">No AI conversation on record for this account yet.</p>`
-            }</div>
-          </div>
-
-          <div class="section-block">
-            <p class="section-title">Payment history <span class="count">last ${payments.length}</span></p>
-            <p class="section-subtitle">₹ amount per payment, colored by whether it arrived on time.</p>
-            ${barsHtml}
-            <form class="upload-form" id="record-payment-form" style="margin-top: 12px;">
-              <div class="upload-row">
-                <input type="number" id="rp-amount" placeholder="Amount (₹)" min="0.01" step="0.01" required />
-                <input type="date" id="rp-date" title="Payment date (defaults to today)" />
-              </div>
-              <div class="mini-form-radio-row" id="rp-extra-question" hidden>
-                <span class="clarify-hint" style="flex: 0 0 100%;">Less than what's due this cycle — apply it toward the next EMI?</span>
-                <label><input type="radio" name="rp-apply" value="true" /> Yes, credit it</label>
-                <label><input type="radio" name="rp-apply" value="false" /> No, just record it</label>
-              </div>
-              <button type="submit" class="btn upload-btn" id="record-payment-btn">Record payment</button>
-              <p class="mini-form-error" id="record-payment-error" hidden></p>
-              <p class="upload-result" id="record-payment-result" hidden></p>
-            </form>
-          </div>
-
-          <div class="section-block">
-            <p class="section-title">Promises to pay <span class="count">${a.promises.length}</span></p>
-            <p class="section-subtitle">Commitments the borrower made to pay by a specific date — kept, broken, or still pending.</p>
-            ${promisesHtml}
-            <form class="upload-form" id="log-promise-form" style="margin-top: 12px;">
-              <div class="upload-row">
-                <input type="number" id="lp-amount" placeholder="Promised amount (₹)" min="0.01" step="0.01" required />
-                <input type="date" id="lp-date" required title="Date they promised to pay by" />
-              </div>
-              <button type="submit" class="btn upload-btn" id="log-promise-btn">Log a promise to pay</button>
-              <p class="mini-form-error" id="log-promise-error" hidden></p>
-              <p class="upload-result" id="log-promise-result" hidden></p>
-            </form>
-          </div>
-
-          <div class="section-block">
-            <p class="section-title">Call log <span class="count">${a.call_log.length}</span></p>
-            <p class="section-subtitle">Every phone contact attempt on record, so a colleague opening this account later can see one already happened.</p>
-            ${callLogHtml}
-            <form class="upload-form" id="call-log-form" style="margin-top: 12px;">
-              <div class="upload-row">
-                <select id="cl-outcome">
-                  <option value="reached">Reached</option>
-                  <option value="no_answer">No answer</option>
-                  <option value="voicemail">Left voicemail</option>
-                  <option value="wrong_number">Wrong number</option>
-                </select>
-                <input type="text" id="cl-note" placeholder="Note (optional)" />
-              </div>
-              <button type="submit" class="btn upload-btn" id="call-log-btn">Log this call</button>
-            </form>
-            <div class="call-log-nudge" id="call-log-nudge" hidden>
-              <p class="clarify-hint">Didn't reach them — escalate to a human instead of leaving it here?</p>
-              <div class="clarify-actions-row">
-                <button type="button" class="btn btn-approve" id="call-log-escalate-btn">Escalate to a human</button>
-                <button type="button" class="btn btn-reject" id="call-log-dismiss-btn">No, that's fine</button>
-              </div>
-            </div>
-          </div>
-
-          <div class="section-block">
-            <p class="section-title">EMI timeline <span class="count">${timeline.length}</span></p>
-            <p class="section-subtitle">Every real past payment, plus every EMI still scheduled ahead — projected monthly from the next due date.</p>
-            <div class="timeline-list">${timelineHtml}</div>
-          </div>
-
-          <div class="section-block">
-            <p class="section-title">Documents <span class="count" id="documents-count">${documents.length}</span></p>
-            <p class="section-subtitle">Everything uploaded for this borrower — signed agreements, KYC, and more.</p>
-            <div id="documents-list"></div>
-          </div>
-        </div>
-      </div>
+      </section>
     </div>`;
 
   wireDetailClose();
+  wireDetailTabs();
   renderDocumentsList(documents);
   wireEscalationActions($detailPanel, async () => {
     const [fresh, freshDocuments, freshConversation] = await _loadDetailData(a.account_id);
@@ -2201,7 +2278,7 @@ function renderDetail(a, documents, conversation = []) {
     try {
       const result = await resetAccessKey(a.account_id);
       resultEl.innerHTML = result.telegram_invite_link
-        ? `<a class="btn btn-approve na-invite-link" href="${escapeHtml(result.telegram_invite_link)}" target="_blank" rel="noopener">Open Telegram invite link</a>
+        ? `<a class="btn btn-primary na-invite-link" href="${escapeHtml(result.telegram_invite_link)}" target="_blank" rel="noopener">Open Telegram invite link</a>
            <p class="clarify-hint">New access key: <b>${escapeHtml(result.access_key)}</b> — the old one no longer works.</p>`
         : `<p class="clarify-hint">New access key: <b>${escapeHtml(result.access_key)}</b> — TELEGRAM_BOT_USERNAME isn't configured, so relay this key manually.</p>`;
       toast("New access key generated.");

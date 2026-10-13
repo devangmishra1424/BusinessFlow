@@ -4,23 +4,25 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>BusinessFlow · Ops</title>
+<meta name="theme-color" content="#005da8" />
+<link rel="icon" type="image/svg+xml" href="/static/brand-mark.svg" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/styles.css?v=18" />
+<link rel="stylesheet" href="/static/styles.css?v=19" />
 </head>
 <body>
 
 <div id="unlock-screen" class="unlock-screen">
-  <div class="unlock-glow"></div>
   <div class="unlock-card">
     <div class="brand">
-      <div class="brand-mark">BF</div>
-      <div class="brand-name">BusinessFlow<span>Ops</span></div>
+      <img class="brand-mark" src="/static/brand-mark.svg" alt="" />
+      <div class="brand-name">Business<b class="brand-accent">Flow</b><span>Operations</span></div>
     </div>
-    <p class="unlock-sub">Enter your operator key to continue</p>
+    <h1 class="unlock-title">Sign in to the ops dashboard</h1>
+    <p class="unlock-sub">Enter your operator key to continue.</p>
     <form id="unlock-form" autocomplete="off">
-      <input id="unlock-input" type="password" placeholder="Ops API key" autocomplete="off" />
+      <input id="unlock-input" type="password" placeholder="Ops API key" autocomplete="off" aria-label="Ops API key" />
       <button type="submit">Unlock<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     </form>
     <p id="unlock-error" class="unlock-error" hidden></p>
@@ -31,30 +33,33 @@
 <div id="shell" class="shell" hidden>
   <aside class="sidebar">
     <div class="brand small">
-      <div class="brand-mark">BF</div>
-      <div class="brand-name">BusinessFlow<span>Ops</span></div>
+      <img class="brand-mark" src="/static/brand-mark.svg" alt="" />
+      <div class="brand-name">Business<b class="brand-accent">Flow</b><span>Operations</span></div>
     </div>
+    <p class="sidebar-label">Workspace</p>
     <nav class="tabs" id="tabs">
       <button class="tab active" data-view="overview">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="8" height="8" rx="2" stroke="currentColor" stroke-width="2"/><rect x="13" y="3" width="8" height="5" rx="2" stroke="currentColor" stroke-width="2"/><rect x="13" y="12" width="8" height="9" rx="2" stroke="currentColor" stroke-width="2"/><rect x="3" y="15" width="8" height="6" rx="2" stroke="currentColor" stroke-width="2"/></svg>
         <span class="tab-label">Portfolio</span>
       </button>
       <button class="tab" data-view="escalations">
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 9v4m0 4h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M3 12h5l2 3h4l2-3h5" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M5.5 5h13l2.5 7v7a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-7l2.5-7Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
         <span class="tab-label">Escalations</span><span class="tab-badge" id="escalation-count-badge" hidden>0</span>
       </button>
     </nav>
     <div class="sidebar-footer">
-      <div class="since-select">
-        <select id="since-hours">
-          <option value="24">24h</option>
-          <option value="72">3d</option>
-          <option value="168">7d</option>
-          <option value="720">30d</option>
+      <label class="since-select">
+        <span class="since-label">Activity window</span>
+        <select id="since-hours" title="Window for the escalation-rate figure">
+          <option value="24">Last 24 hours</option>
+          <option value="72">Last 3 days</option>
+          <option value="168">Last 7 days</option>
+          <option value="720">Last 30 days</option>
         </select>
-      </div>
-      <button id="lock-btn" class="icon-btn" title="Lock">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" stroke-width="2"/><path d="M8 11V7a4 4 0 1 1 8 0v4" stroke="currentColor" stroke-width="2"/></svg>
+      </label>
+      <button id="lock-btn" class="lock-btn" title="Lock">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" stroke-width="2"/><path d="M8 11V7a4 4 0 1 1 8 0v4" stroke="currentColor" stroke-width="2"/></svg>
+        <span class="tab-label">Lock</span>
       </button>
     </div>
   </aside>
@@ -62,31 +67,39 @@
   <div class="main-area">
 
   <main id="view-overview" class="view">
-    <p class="portfolio-summary" id="portfolio-summary"></p>
+    <header class="page-head">
+      <div class="page-head-text">
+        <h1>Portfolio</h1>
+        <p class="portfolio-summary" id="portfolio-summary"></p>
+      </div>
+      <div class="page-actions">
+        <button class="btn btn-secondary" id="send-reminders-btn">Send reminders now</button>
+        <button class="btn btn-primary" id="new-account-btn">+ New account</button>
+      </div>
+    </header>
+
     <section class="kpi-row" id="kpi-row"></section>
 
     <section class="toolbar">
       <div class="filter-pills" id="filter-pills"></div>
       <div class="toolbar-right-group">
+        <div class="search-wrap">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2.2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+          <input id="search-input" class="search-input" placeholder="Search name, business or ID" aria-label="Search borrower, business, or account ID" />
+        </div>
         <select id="sort-select" class="sort-select" title="Sort the account list">
           <option value="urgency">Most overdue first</option>
           <option value="risk">Highest risk first</option>
           <option value="id">Account ID</option>
         </select>
-        <div class="search-wrap">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2.2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
-          <input id="search-input" class="search-input" placeholder="Search borrower, business, or account ID" />
-        </div>
-        <button class="btn" id="send-reminders-btn">Send reminders now</button>
-        <button class="btn btn-approve" id="new-account-btn">+ New account</button>
       </div>
     </section>
 
     <div class="selection-bar" id="selection-bar" hidden>
       <span><b id="selection-count">0</b> selected</span>
       <div class="selection-bar-actions">
-        <button type="button" class="btn" id="selection-clear-btn">Clear</button>
-        <button type="button" class="btn btn-approve" id="selection-clarify-btn">Send clarification…</button>
+        <button type="button" class="btn btn-ghost-light" id="selection-clear-btn">Clear</button>
+        <button type="button" class="btn btn-on-dark" id="selection-clarify-btn">Send clarification…</button>
       </div>
     </div>
 
@@ -95,13 +108,19 @@
   </main>
 
   <main id="view-escalations" class="view" hidden>
-    <div class="view-heading">
-      <h1>Escalation queue</h1>
-      <p>Everything still waiting on a human — most urgent first, then oldest.</p>
-    </div>
+    <header class="page-head">
+      <div class="page-head-text">
+        <h1>Escalation queue</h1>
+        <p>Everything still waiting on a human — most urgent first, then oldest.</p>
+      </div>
+    </header>
     <div class="sla-buckets" id="sla-buckets"></div>
     <section class="escalation-list" id="escalation-list"></section>
-    <p class="empty-state" id="escalation-empty" hidden>The queue is empty — nothing waiting on a human right now.</p>
+    <div class="empty-state empty-state-card" id="escalation-empty" hidden>
+      <span class="empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="m5 12.5 4.5 4.5L19 7.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+      <p class="empty-title">All clear</p>
+      <p>The queue is empty — nothing waiting on a human right now.</p>
+    </div>
   </main>
 
   </div>
@@ -112,11 +131,12 @@
 
 <div id="new-account-backdrop" class="detail-backdrop" hidden></div>
 <div id="new-account-modal" class="new-account-modal" hidden>
-  <div class="detail-close" id="new-account-close">✕</div>
+  <button type="button" class="detail-close" id="new-account-close" aria-label="Close">✕</button>
   <div class="detail-body">
     <h2 class="modal-title">Open a new account</h2>
     <p class="modal-subtitle">Every field here writes a real row to Postgres — this account enters the portfolio exactly like any other, with no payment history or flags yet.</p>
     <form id="new-account-form" class="new-account-form">
+      <p class="form-section-title">Borrower</p>
       <div class="na-grid">
         <label class="clarify-label">Borrower name<input required id="na-borrower-name" type="text" /></label>
         <label class="clarify-label">Business name<input required id="na-business-name" type="text" /></label>
@@ -140,7 +160,7 @@
       </div>
 
       <div class="na-financial">
-        <label class="clarify-label">Financial details</label>
+        <p class="form-section-title">Financial details</p>
         <div class="na-mode-row">
           <button type="button" class="pill" id="na-mode-manual-btn">Enter manually</button>
           <button type="button" class="pill" id="na-mode-calc-btn">Calculate EMI</button>
@@ -156,8 +176,8 @@
             <label class="clarify-label">First EMI due date<input id="na-m-due-date" type="date" /></label>
           </div>
           <div class="clarify-actions-row">
-            <button type="button" class="btn btn-approve" id="na-manual-use-btn">Use these details</button>
-            <span class="clarify-hint" id="na-manual-error" style="color:var(--danger)"></span>
+            <button type="button" class="btn btn-primary" id="na-manual-use-btn">Use these details</button>
+            <span class="clarify-hint error-text" id="na-manual-error"></span>
           </div>
         </div>
 
@@ -171,19 +191,19 @@
             <label class="clarify-label">First EMI due date<input id="na-c-due-date" type="date" /></label>
           </div>
           <div class="clarify-actions-row">
-            <button type="button" class="btn btn-reject" id="na-calc-run-btn">Calculate</button>
+            <button type="button" class="btn btn-secondary" id="na-calc-run-btn">Calculate</button>
             <span class="na-calc-result" id="na-calc-result"></span>
           </div>
           <div class="clarify-actions-row" id="na-calc-use-row" hidden>
-            <button type="button" class="btn btn-approve" id="na-calc-use-btn">Use this EMI</button>
-            <span class="clarify-hint" id="na-calc-error" style="color:var(--danger)"></span>
+            <button type="button" class="btn btn-primary" id="na-calc-use-btn">Use this EMI</button>
+            <span class="clarify-hint error-text" id="na-calc-error"></span>
           </div>
         </div>
       </div>
 
-      <div class="clarify-actions-row">
-        <button type="submit" class="btn btn-approve" id="na-submit-btn">Review account</button>
-        <span class="clarify-hint" id="na-error" style="color:var(--danger)"></span>
+      <div class="clarify-actions-row modal-footer">
+        <button type="submit" class="btn btn-primary" id="na-submit-btn">Review account</button>
+        <span class="clarify-hint error-text" id="na-error"></span>
       </div>
     </form>
 
@@ -191,9 +211,9 @@
       <p class="na-popover-title">Review before creating this account</p>
       <div class="na-review-grid" id="na-review-grid"></div>
       <div class="clarify-actions-row">
-        <button type="button" class="btn btn-reject" id="na-review-edit-btn">Edit</button>
-        <button type="button" class="btn btn-approve" id="na-review-confirm-btn">Confirm — create account</button>
-        <span class="clarify-hint" id="na-review-error" style="color:var(--danger)"></span>
+        <button type="button" class="btn btn-secondary" id="na-review-edit-btn">Edit</button>
+        <button type="button" class="btn btn-primary" id="na-review-confirm-btn">Confirm — create account</button>
+        <span class="clarify-hint error-text" id="na-review-error"></span>
       </div>
     </div>
 
@@ -203,7 +223,7 @@
 
 <div id="bulk-clarify-backdrop" class="detail-backdrop" hidden></div>
 <div id="bulk-clarify-modal" class="new-account-modal" hidden>
-  <div class="detail-close" id="bulk-clarify-close">✕</div>
+  <button type="button" class="detail-close" id="bulk-clarify-close" aria-label="Close">✕</button>
   <div class="detail-body">
     <h2 class="modal-title">Send a clarification to <span id="bulk-clarify-count">0</span> accounts</h2>
     <p class="modal-subtitle">One message, sent as-is to every account currently selected — delivered over Telegram where linked, always logged either way. Not AI-drafted (that's grounded in one account's own flags at a time); write it yourself for a mixed group.</p>
@@ -211,8 +231,8 @@
     <textarea id="bulk-clarify-message" class="bulk-clarify-textarea" rows="5" placeholder="e.g. This is a reminder that your EMI payment is past due -- please respond or make a payment as soon as possible."></textarea>
     <p class="mini-form-error" id="bulk-clarify-error" hidden></p>
     <div class="clarify-actions-row">
-      <button type="button" class="btn btn-approve" id="bulk-clarify-send-btn">Send to all selected</button>
-      <button type="button" class="btn btn-reject" id="bulk-clarify-cancel-btn">Cancel</button>
+      <button type="button" class="btn btn-primary" id="bulk-clarify-send-btn">Send to all selected</button>
+      <button type="button" class="btn btn-secondary" id="bulk-clarify-cancel-btn">Cancel</button>
     </div>
     <p class="upload-result" id="bulk-clarify-result" hidden></p>
   </div>
@@ -220,6 +240,6 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="/static/app.js?v=18"></script>
+<script src="/static/app.js?v=19"></script>
 </body>
 </html>
