@@ -52,6 +52,10 @@ _EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\b")
 _PHONE = re.compile(r"(?<![\w.])(\+91[\s-]?)?([6-9]\d{4})[\s-]?(\d{5})(?![\w])")
 _ACCOUNT_ID = re.compile(r"\b([A-Z]{2,5})-(\d{3,})\b")
 _PERCENT = re.compile(r"(\d+(?:\.\d+)?)\s?%")
+# A web address, without the punctuation that ends the sentence around it. Found live: the voice read a payment link
+# out character by character. A listener can't use a link they hear; the link is in the chat, so the voice says that.
+_URL = re.compile(r"https?://[^\s<>\"']*[^\s<>\"'.,;:!?)\]]")
+_URL_SPOKEN = {"en": "it's in the chat", "hi": "यह चैट में है"}
 
 # Letter names for spelling, and the symbols that occur in emails. Hindi
 # TTS is monolingual (see module docstring), so Latin letters must be
@@ -250,7 +254,7 @@ def has_unverbalized_pattern(text: str) -> bool:
     module's own docstring describes (a number silently reaching TTS
     unconverted) hasn't come back, without duplicating the regex patterns
     that already live here."""
-    return any(p.search(text) for p in (_ISO_DATE, _RUPEE_AMOUNT, _EMAIL, _PHONE, _ACCOUNT_ID, _PERCENT))
+    return any(p.search(text) for p in (_ISO_DATE, _RUPEE_AMOUNT, _EMAIL, _PHONE, _ACCOUNT_ID, _PERCENT, _URL))
 
 
 def verbalize(text: str, language: str = "en") -> str:
@@ -270,6 +274,8 @@ def verbalize(text: str, language: str = "en") -> str:
     First of all, the reply's markdown is removed (markup.strip_markdown): every voice path comes through
     here, and a voice reads "**Propose a smaller payment now**" as "asterisk asterisk ..." (found live)."""
     text = strip_markdown(text)
+    # Links before everything else: a URL holds digits and letters the patterns below would otherwise spell out.
+    text = _URL.sub(_URL_SPOKEN.get(language, _URL_SPOKEN["en"]), text)
     text = _ISO_DATE.sub(lambda m: _verbalize_date(m, language), text)
     text = _RUPEE_AMOUNT.sub(lambda m: _verbalize_rupees(m, language), text)
     text = _EMAIL.sub(lambda m: _verbalize_email(m, language), text)
