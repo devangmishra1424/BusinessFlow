@@ -298,3 +298,24 @@ def test_hindi_upi_is_spoken_in_devanagari():
 
 def test_english_numbers_are_still_left_alone():
     assert verbalize("pay on the 15th, 3 times", "en") == "pay on the 15th, 3 times"
+
+
+# --- links (found live: the voice read a payment link out character by character) ---------------------------
+
+def test_a_payment_link_is_not_read_out_the_voice_says_it_is_in_the_chat():
+    reply = "Here's your payment link: https://businessflowai.duckdns.org/pay/IeycMMQWRVE8QWJGQpAJVuDrjfU6Ho3w. Just click it."
+    spoken = verbalize(reply)
+    assert "http" not in spoken and "duckdns" not in spoken
+    assert spoken == "Here's your payment link: it's in the chat. Just click it."
+
+
+def test_in_hindi_the_link_is_replaced_with_hindi_words():
+    spoken = verbalize("आपका भुगतान लिंक: https://x.example/pay/AB12_cd. कृपया भुगतान करें।", "hi")
+    assert "http" not in spoken
+    assert "यह चैट में है" in spoken
+
+
+def test_a_link_inside_brackets_keeps_the_bracket_and_a_spoken_link_counts_as_unverbalized():
+    assert verbalize("Open (https://pay.example/x?a=1&b=2) now") == "Open (it's in the chat) now"
+    assert has_unverbalized_pattern("pay at https://pay.example/x")
+    assert not has_unverbalized_pattern(verbalize("pay at https://pay.example/x"))
