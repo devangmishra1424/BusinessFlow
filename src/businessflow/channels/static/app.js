@@ -403,7 +403,10 @@ function addAssistantMessage(text, toolCalls = [], isError = false) {
     ? `<div class="tool-chips">${toolCalls.map((t) => `<span class="tool-chip">✓ ${escapeHtml(TOOL_LABELS[t.tool] || t.tool)}</span>`).join("")}</div>`
     : "";
   const speakHtml = isError ? "" : `<button type="button" class="speak-btn" title="Listen to this reply" aria-label="Listen to this reply">${SPEAKER_ICON}</button>`;
-  row.innerHTML = `<div class="msg-bubble-row"><div class="msg-bubble">${escapeHtml(text)}</div>${speakHtml}</div>${chipsHtml}`;
+  // The agent writes light markdown (**bold**, lists); richtext.js shows it as formatting, escaping everything else. If that
+  // script failed to load, the reply is still shown, as plain escaped text.
+  const bodyHtml = typeof RichText === "undefined" ? escapeHtml(text) : RichText.formatReply(text);
+  row.innerHTML = `<div class="msg-bubble-row"><div class="msg-bubble">${bodyHtml}</div>${speakHtml}</div>${chipsHtml}`;
   let speakBtn = null;
   if (!isError) {
     speakBtn = row.querySelector(".speak-btn");
@@ -829,7 +832,7 @@ async function onToneClick() {
   toneChecking = false;
   const voice = NaturalVoice.pickNatural(loadedVoices, state.language);
   if (!voice) {
-    toneNote = `Sorry, not available: this browser has no natural-sounding ${LANGUAGE_NAME[state.language]} voice. Microsoft Edge usually has them.`;
+    toneNote = `Sorry, not available: this browser has no natural-sounding ${LANGUAGE_NAME[state.language]} voice. Google Chrome and Microsoft Edge usually have them.`;
     renderToneBar();
     return;
   }

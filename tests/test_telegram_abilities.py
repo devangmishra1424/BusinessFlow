@@ -21,10 +21,12 @@ CHAT = 987001
 class FakeMessage:
     def __init__(self):
         self.sent = []  # (text, reply_markup)
+        self.parse_modes = []  # one per sent message: "HTML" for an agent reply, None for plain text
         self.voices = 0
 
-    async def reply_text(self, text, reply_markup=None):
+    async def reply_text(self, text, reply_markup=None, parse_mode=None):
         self.sent.append((text, reply_markup))
+        self.parse_modes.append(parse_mode)
 
     async def reply_voice(self, voice):
         self.voices += 1
@@ -235,3 +237,41 @@ def test_an_ordinary_message_in_an_unverified_chat_gets_no_buttons_attached(monk
     asyncio.run(telegram_bot.on_text_message(update, None))
 
     assert update.message.sent == [("Late fees apply after the due date.", None)]
+
+
+# ---- the agent's markdown on Telegram (businessflow/markup.py) -------------------------------------------------------
+
+def test_an_agent_reply_is_sent_with_its_markdown_as_telegram_formatting(monkeypatch):
+    async def reply(context, chat_id, text):
+        return "1. **Extend the tenure** by up to 3 months"
+
+    monkeypatch.setattr(telegram_bot, "_agent_reply", reply)
+    update = SimpleNamespace(effective_chat=SimpleNamespace(id=CHAT), message=FakeMessage())
+    update.message.text = "what are my options"
+
+    asyncio.run(telegram_bot.on_text_message(update, None))
+
+    assert update.message.sent == [("1. <b>Extend the tenure</b> by up to 3 months", None)]
+    assert update.message.parse_modes == ["HTML"]
+
+
+def test_if_telegram_refuses_the_formatting_the_reply_still_arrives_as_plain_text(monkeypatch):
+    from telegram.error import BadRequest
+
+    class RefusesHtml(FakeMessage):
+        async def reply_text(self, text, reply_markup=None, parse_mode=None):
+            if parse_mode:
+                raise BadRequest("Can't parse entities")
+            await super().reply_text(text, reply_markup=reply_markup)
+
+    async def reply(context, chat_id, text):
+        return "**Pay today** to avoid the late fee"
+
+    monkeypatch.setattr(telegram_bot, "_agent_reply", reply)
+    update = SimpleNamespace(effective_chat=SimpleNamespace(id=CHAT), message=RefusesHtml())
+    update.message.text = "should I pay"
+
+    asyncio.run(telegram_bot.on_text_message(update, None))
+
+    assert update.message.sent == [("Pay today to avoid the late fee", None)]
+    assert update.message.parse_modes == [None]

@@ -55,8 +55,8 @@ import torch
 import torchaudio
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.constants import ChatAction
-from telegram.error import TelegramError
+from telegram.constants import ChatAction, ParseMode
+from telegram.error import BadRequest, TelegramError
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from businessflow.accounts import store
@@ -78,6 +78,7 @@ from businessflow.channels.abilities import abilities_for, find_ability
 from businessflow.channels.abilities import intro as abilities_intro
 from businessflow.channels.credentials import looks_like_credentials, parse_credentials, parse_telegram_start_payload
 from businessflow.channels.reminder_actions import run_action as run_reminder_action
+from businessflow.markup import markdown_to_telegram_html, strip_markdown
 from businessflow.tools.account_tools import flag_dispute, get_payment_history, get_payment_status
 from businessflow.tools.escalation_tools import escalate_to_human, request_closure_certificate
 from businessflow.tools.payment_tools import generate_payment_link
@@ -383,7 +384,7 @@ async def on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         reply = await _handle_start_payload(chat_id, context.args[0])
         if reply is not None:
             # The buttons reflect what actually happened: the full list after a verified deep link, the general one after a bad key.
-            await update.message.reply_text(reply, reply_markup=await _abilities_markup(chat_id))
+            await _send_agent_reply(update.message, reply, reply_markup=await _abilities_markup(chat_id))
             return
 
     await update.message.reply_text(
@@ -697,7 +698,7 @@ async def _run_ability_tap(query, context: ContextTypes.DEFAULT_TYPE, chat_id: i
     # Shown first, because a tap leaves no message of the borrower's own in the chat to answer.
     await query.message.reply_text(_ABILITY_ECHO[language if language in _ABILITY_ECHO else "en"].format(ability["prompt"]))
     reply = await _agent_reply(context, chat_id, ability["prompt"])
-    await query.message.reply_text(reply)
+    await _send_agent_reply(query.message, reply)
     if _voice_preference.get(chat_id):
         await _send_spoken_reply(query.message, chat_id, reply)
 
@@ -820,6 +821,17 @@ async def _keep_typing(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None
         await asyncio.sleep(4)
 
 
+async def _send_agent_reply(message, reply: str, reply_markup=None) -> None:
+    """An agent reply, with its markdown shown as Telegram formatting (bold, italics, bullets) instead of raw asterisks.
+    Telegram refuses HTML it cannot parse with a BadRequest; the same reply then goes as plain text with the markup
+    removed, so a formatting problem never loses the answer."""
+    try:
+        await message.reply_text(markdown_to_telegram_html(reply), parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+    except BadRequest as err:
+        logger.warning("telegram: formatted reply refused (%s); sending it as plain text", err)
+        await message.reply_text(strip_markdown(reply), reply_markup=reply_markup)
+
+
 async def _agent_reply(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str) -> str:
     """One text turn: the reply to `text` as if the borrower had typed it, with the typing indicator showing meanwhile.
     Typed messages and the "what I can help with" buttons both come through here."""
@@ -849,7 +861,7 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Just verified by typing the credentials: show what can be done now (the in-memory session is checked on purpose, so
     # this costs no database lookup on every message).
     markup = await _abilities_markup(chat_id) if not was_verified and _has_verified_session(chat_id) else None
-    await update.message.reply_text(reply, reply_markup=markup)
+    await _send_agent_reply(update.message, reply, reply_markup=markup)
     if _voice_preference.get(chat_id):
         await _send_spoken_reply(update.message, chat_id, reply)
 
@@ -893,7 +905,7 @@ async def on_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # already-existing best-effort handling on the text-input path.
     # Voice in still gets voice out (matches the modality), but the text
     # answer is no longer voice-only.
-    await update.message.reply_text(reply_text)
+    await _send_agent_reply(update.message, reply_text)
     await _send_spoken_reply(update.message, chat_id, reply_text)
 
 

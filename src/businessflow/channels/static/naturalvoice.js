@@ -7,9 +7,12 @@
    cannot get stuck. It touches no page elements and takes the browser's objects as arguments, so node can test it
    (tests/js/naturalvoice.test.cjs) with fakes.
 
-   A "natural" voice is one whose NAME says so: Microsoft Edge's "... Online (Natural)" voices, Windows "Natural" voices,
-   macOS "Premium" and "Enhanced" voices. Chrome's own "Google ..." voices and the older built-in Windows voices don't say
-   so and are deliberately not counted: the option promises a natural voice, so it only says yes when the name does.
+   A "natural" voice is one whose NAME says so (Microsoft Edge's "... Online (Natural)" voices, Windows "Natural" voices,
+   macOS "Premium" and "Enhanced" voices), or one of Google Chrome's online "Google ..." voices ("Google US English",
+   "Google हिन्दी"). Chrome's are streamed from Google's servers and sound far more natural than the robotic built-in
+   ones, but their names don't say so; they used to be left out, so the option never worked in Chrome (found live). Only
+   the ONLINE Google voices count (localService false): the older built-in voices, like Windows' "Microsoft David", still
+   don't. When a browser has both kinds, a voice whose name says natural is preferred.
 
    Not a promise about how it sounds -- only about what the browser says it is. Online voices (Edge's Natural ones) send
    the text to the browser's provider to be spoken; isOnline() lets the page say so.
@@ -26,8 +29,12 @@ const NaturalVoice = (() => {
 
   const langOf = (voice) => String(voice.lang || "").replace("_", "-").toLowerCase();
 
+  const namedNatural = (voice) => NATURAL_NAME.test((voice && voice.name) || "");
+  // Chrome's online voices: "Google US English", "Google UK English Female", "Google हिन्दी"...
+  const chromeOnline = (voice) => Boolean(voice) && voice.localService === false && /^Google\b/.test(voice.name || "");
+
   function isNatural(voice) {
-    return NATURAL_NAME.test((voice && voice.name) || "");
+    return namedNatural(voice) || chromeOnline(voice);
   }
 
   /** Online voices stream from the browser's provider; the page tells the borrower their reply text is sent there. */
@@ -38,12 +45,16 @@ const NaturalVoice = (() => {
   /** The best natural voice for a conversation language ("en" or "hi"); null when this browser has none. */
   function pickNatural(voices, language) {
     const ofLanguage = (voices || []).filter((v) => isNatural(v) && langOf(v).startsWith(language));
-    if (ofLanguage.length === 0) return null;
-    for (const wanted of LANG_ORDER[language] || []) {
-      const hit = ofLanguage.find((v) => langOf(v) === wanted);
-      if (hit) return hit;
+    // Voices whose name says natural first, Chrome's Google voices after; within each, the preferred accent first.
+    for (const group of [ofLanguage.filter(namedNatural), ofLanguage.filter((v) => !namedNatural(v))]) {
+      if (group.length === 0) continue;
+      for (const wanted of LANG_ORDER[language] || []) {
+        const hit = group.find((v) => langOf(v) === wanted);
+        if (hit) return hit;
+      }
+      return group[0];
     }
-    return ofLanguage[0];
+    return null;
   }
 
   /** Pieces for the synthesiser: a sentence or two each, never splitting "1,200.50" or "3.5". */
