@@ -22,11 +22,15 @@ class Flag:
     reason: str
 
 
-def compute_flags(account: Account, as_of=None) -> list[Flag]:
+def compute_flags(account: Account, as_of=None, open_dispute_reasons: dict[str, str] | None = None) -> list[Flag]:
     """as_of defaults to the system's demo-date anchor (store.current_date())
     -- the same anchor every days-past-due calculation elsewhere in this
     project already uses, so a flag here can never disagree with what a
-    tool call would say about the same account."""
+    tool call would say about the same account.
+
+    open_dispute_reasons: {account_id: reason} already fetched for many accounts at once
+    (store.latest_open_dispute_reasons), so a portfolio of N accounts doesn't ask the
+    database once per disputed account. Without it, the reason is looked up here."""
     if as_of is None:
         as_of = store.current_date()
 
@@ -40,7 +44,11 @@ def compute_flags(account: Account, as_of=None) -> list[Flag]:
         ))
 
     if account.dispute_open:
-        real_reason = store.get_latest_open_dispute_reason(account.account_id)
+        real_reason = (
+            open_dispute_reasons.get(account.account_id)
+            if open_dispute_reasons is not None
+            else store.get_latest_open_dispute_reason(account.account_id)
+        )
         flags.append(Flag("disputed", real_reason or "has an open, unresolved dispute"))
 
     broken = account.broken_promise_count()

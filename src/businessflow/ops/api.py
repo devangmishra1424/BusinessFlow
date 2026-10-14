@@ -35,7 +35,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
 from businessflow.accounts import store
-from businessflow.accounts.db import check_database
+from businessflow.accounts.db import check_database, get_connection
 from businessflow.accounts.escalation_kinds import CALLBACK, CLOSURE, RESTRUCTURING, SYSTEM, classify_escalation
 from businessflow.accounts.models import Account
 from businessflow.channels.credentials import build_telegram_start_payload
@@ -513,7 +513,11 @@ def list_accounts(flag: str | None = None):
     """The portfolio overview. Pass ?flag=overdue|disputed|broken_promises
     to see only accounts carrying that flag -- the queue an ops person
     would actually work from, not the full unfiltered list every time."""
-    summaries = [_summarize(a, compute_flags(a)) for a in store.list_accounts()]
+    # Three queries for the accounts and one for the dispute reasons, however many accounts there are (store.list_accounts
+    # explains why per-account reads were too slow: 12 s for 10 accounts).
+    accounts = store.list_accounts()
+    reasons = store.latest_open_dispute_reasons([a.account_id for a in accounts if a.dispute_open])
+    summaries = [_summarize(a, compute_flags(a, open_dispute_reasons=reasons)) for a in accounts]
     if flag is not None:
         summaries = [s for s in summaries if any(f.label == flag for f in s.flags)]
     return summaries
@@ -572,12 +576,18 @@ def reset_account_access_key(account_id: str):
 
 @app.get("/accounts/{account_id}", response_model=AccountDetailOut, dependencies=[Depends(require_api_key)])
 def get_account(account_id: str):
-    account = store.get_account(account_id)
-    if account is None:
-        raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
-
-    summary = _summarize(account, compute_flags(account))
-    escalations = store.get_escalations_for_account(account_id)
+    # Every read for this page on one connection: about 8 reads, each of which used to check out (and ping) its own
+    # pooled connection, took 5 s on the live server (see store.py, the note above _payment_record).
+    with get_connection().transaction() as conn:
+        account = store.get_account(account_id, ex=conn)
+        if account is None:
+            raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
+        reasons = {account_id: store.get_latest_open_dispute_reason(account_id, ex=conn)} if account.dispute_open else {}
+        summary = _summarize(account, compute_flags(account, open_dispute_reasons=reasons))
+        escalations = store.get_escalations_for_account(account_id, ex=conn)
+        disputes = store.get_disputes_for_account(account_id, ex=conn)
+        clarification_requests = store.get_clarification_requests(account_id, ex=conn)
+        call_log = store.get_call_log(account_id, ex=conn)
     return AccountDetailOut(
         **summary.model_dump(),
         phone_number=account.phone_number,
@@ -603,11 +613,9 @@ def get_account(account_id: str):
             )
             for e in escalations
         ],
-        disputes=[DisputeOut(**d) for d in store.get_disputes_for_account(account_id)],
-        clarification_requests=[
-            ClarificationRequestOut(**c) for c in store.get_clarification_requests(account_id)
-        ],
-        call_log=[CallLogEntryOut(**c) for c in store.get_call_log(account_id)],
+        disputes=[DisputeOut(**d) for d in disputes],
+        clarification_requests=[ClarificationRequestOut(**c) for c in clarification_requests],
+        call_log=[CallLogEntryOut(**c) for c in call_log],
     )
 
 
@@ -639,7 +647,7 @@ def get_account_conversation(account_id: str):
     was the one real gap between "monitor" and "watch numbers change" --
     staff could see payment history and flags but never the conversation
     that produced them."""
-    if store.get_account(account_id) is None:
+    if not store.account_exists(account_id):
         raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
     entries = store.get_conversation_transcript(account_id)
     return [
@@ -826,8 +834,7 @@ def list_account_documents(account_id: str):
     upload_account_document -- the read half of that endpoint's write,
     newest first so the most recently handled document is what an
     operator sees first."""
-    account = store.get_account(account_id)
-    if account is None:
+    if not store.account_exists(account_id):
         raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
 
     account_dir = _DOCUMENTS_DIR / account_id

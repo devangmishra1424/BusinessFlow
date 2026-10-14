@@ -28,32 +28,40 @@ from businessflow.accounts.policy import PAYMENT_TOKEN_TTL_HOURS, PROMISE_TOLERA
 logger = logging.getLogger(__name__)
 
 
-def _load_payment_history(account_id: str) -> list[PaymentRecord]:
-    rows = get_connection().execute(
+# Every read below takes an optional `ex`: an open connection (from get_connection().transaction()) to run on instead
+# of checking out a pooled one. Found live: the database is far from the server (the VM talks to Sydney), and each
+# pooled checkout pings the connection before the query, so every separate read costs several round trips. The ops
+# portfolio of 10 accounts took 12 s and one account's page 5 s, purely from those round trips. Reads that belong to
+# one screen now share one connection.
+
+def _payment_record(r: dict) -> PaymentRecord:
+    return PaymentRecord(date=r["payment_date"], amount=float(r["amount"]), on_time=r["on_time"], kind=r["kind"])
+
+
+def _promise(r: dict) -> PromiseToPay:
+    return PromiseToPay(made_on=r["made_on"], promised_date=r["promised_date"], promised_amount=float(r["promised_amount"]), kept=r["kept"])
+
+
+def _load_payment_history(account_id: str, ex=None) -> list[PaymentRecord]:
+    rows = (ex or get_connection()).execute(
         "select payment_date, amount, on_time, kind from payment_history where account_id = %s order by payment_date",
         (account_id,),
     ).fetchall()
-    return [
-        PaymentRecord(date=r["payment_date"], amount=float(r["amount"]), on_time=r["on_time"], kind=r["kind"])
-        for r in rows
-    ]
+    return [_payment_record(r) for r in rows]
 
 
-def _load_promises(account_id: str) -> list[PromiseToPay]:
-    rows = get_connection().execute(
+def _load_promises(account_id: str, ex=None) -> list[PromiseToPay]:
+    rows = (ex or get_connection()).execute(
         "select made_on, promised_date, promised_amount, kept from promises where account_id = %s order by promised_date",
         (account_id,),
     ).fetchall()
-    return [
-        PromiseToPay(made_on=r["made_on"], promised_date=r["promised_date"], promised_amount=float(r["promised_amount"]), kept=r["kept"])
-        for r in rows
-    ]
+    return [_promise(r) for r in rows]
 
 
-def _row_to_account(row: dict, with_history: bool = True) -> Account:
+def _row_to_account(row: dict, with_history: bool = True, ex=None) -> Account:
     """with_history=False skips the payment-history and promise lookups: they take
     their own pooled connections, which a caller holding a transaction must not do
-    (see _lock_account)."""
+    (see _lock_account) -- unless that caller passes its connection as `ex`."""
     return Account(
         account_id=row["account_id"],
         borrower_name=row["borrower_name"],
@@ -72,14 +80,20 @@ def _row_to_account(row: dict, with_history: bool = True) -> Account:
         pending_emi_credit=float(row["pending_emi_credit"]),
         interest_rate_pct=float(row["interest_rate_pct"]) if row["interest_rate_pct"] is not None else None,
         telegram_chat_id=row["telegram_chat_id"],
-        payment_history=_load_payment_history(row["account_id"]) if with_history else [],
-        promises=_load_promises(row["account_id"]) if with_history else [],
+        payment_history=_load_payment_history(row["account_id"], ex) if with_history else [],
+        promises=_load_promises(row["account_id"], ex) if with_history else [],
     )
 
 
-def get_account(account_id: str) -> Account | None:
-    row = get_connection().execute("select * from accounts where account_id = %s", (account_id,)).fetchone()
-    return _row_to_account(row) if row else None
+def get_account(account_id: str, ex=None) -> Account | None:
+    row = (ex or get_connection()).execute("select * from accounts where account_id = %s", (account_id,)).fetchone()
+    return _row_to_account(row, ex=ex) if row else None
+
+
+def account_exists(account_id: str) -> bool:
+    """One small query, for an endpoint that only needs to 404 on an unknown id (loading the whole account for that
+    costs two more round trips)."""
+    return get_connection().execute("select 1 from accounts where account_id = %s", (account_id,)).fetchone() is not None
 
 
 def get_account_or_raise(account_id: str) -> Account:
@@ -90,8 +104,35 @@ def get_account_or_raise(account_id: str) -> Account:
 
 
 def list_accounts() -> list[Account]:
-    rows = get_connection().execute("select * from accounts order by account_id").fetchall()
-    return [_row_to_account(r) for r in rows]
+    """Every account with its payment history and promises, in three queries on one connection (not two more per
+    account: see the note above _payment_record). The three reads share one transaction, so they see one consistent
+    state of the books."""
+    with get_connection().transaction() as conn:
+        rows = conn.execute("select * from accounts order by account_id").fetchall()
+        ids = [r["account_id"] for r in rows]
+        history_rows = conn.execute(
+            "select account_id, payment_date, amount, on_time, kind from payment_history "
+            "where account_id = any(%s) order by account_id, payment_date",
+            (ids,),
+        ).fetchall()
+        promise_rows = conn.execute(
+            "select account_id, made_on, promised_date, promised_amount, kept from promises "
+            "where account_id = any(%s) order by account_id, promised_date",
+            (ids,),
+        ).fetchall()
+    history: dict[str, list[PaymentRecord]] = {i: [] for i in ids}
+    for r in history_rows:
+        history[r["account_id"]].append(_payment_record(r))
+    promises: dict[str, list[PromiseToPay]] = {i: [] for i in ids}
+    for r in promise_rows:
+        promises[r["account_id"]].append(_promise(r))
+    accounts = []
+    for r in rows:
+        account = _row_to_account(r, with_history=False)
+        account.payment_history = history[r["account_id"]]
+        account.promises = promises[r["account_id"]]
+        accounts.append(account)
+    return accounts
 
 
 def get_account_by_phone(phone_number: str) -> Account | None:
@@ -278,13 +319,13 @@ def open_dispute(account_id: str, reason: str) -> bool:
     return True
 
 
-def get_disputes_for_account(account_id: str) -> list[dict]:
+def get_disputes_for_account(account_id: str, ex=None) -> list[dict]:
     """Every dispute ever opened on this account, newest first -- the
     real reason text a borrower (or a warning's "Contest" action) gave,
     which flags.py's own "disputed" flag never carries (it's a fixed
     generic string, not this). Ops has had no way to see WHY an account
     is disputed without a direct database query until this existed."""
-    rows = get_connection().execute(
+    rows = (ex or get_connection()).execute(
         "select reason, status, opened_at, resolved_at, resolution_note from disputes "
         "where account_id = %s order by opened_at desc",
         (account_id,),
@@ -292,16 +333,29 @@ def get_disputes_for_account(account_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def get_latest_open_dispute_reason(account_id: str) -> str | None:
+def get_latest_open_dispute_reason(account_id: str, ex=None) -> str | None:
     """The single most recent still-open dispute's real reason -- what
     flags.py's compute_flags uses instead of a generic "has an open,
     unresolved dispute" string, so an ops operator glancing at the flags
     list sees the actual claim, not just that one exists."""
-    row = get_connection().execute(
+    row = (ex or get_connection()).execute(
         "select reason from disputes where account_id = %s and status = 'open' order by opened_at desc limit 1",
         (account_id,),
     ).fetchone()
     return row["reason"] if row else None
+
+
+def latest_open_dispute_reasons(account_ids: list[str]) -> dict[str, str]:
+    """get_latest_open_dispute_reason for many accounts in one query: {account_id: reason}, only for accounts with an
+    open dispute. For the portfolio list, which would otherwise ask once per disputed account."""
+    if not account_ids:
+        return {}
+    rows = get_connection().execute(
+        "select distinct on (account_id) account_id, reason from disputes "
+        "where account_id = any(%s) and status = 'open' order by account_id, opened_at desc",
+        (list(account_ids),),
+    ).fetchall()
+    return {r["account_id"]: r["reason"] for r in rows}
 
 
 class NoOpenDisputeError(ValueError):
@@ -364,10 +418,10 @@ def log_call(account_id: str, outcome: str, note: str | None) -> None:
     log_event(account_id, "manual_call_logged", {"outcome": outcome, "note": note})
 
 
-def get_call_log(account_id: str) -> list[dict]:
+def get_call_log(account_id: str, ex=None) -> list[dict]:
     """Every logged call attempt for this account, most recent first --
     the read half of log_call, same pattern as get_clarification_requests."""
-    rows = get_connection().execute(
+    rows = (ex or get_connection()).execute(
         "select details, created_at from events where account_id = %s and event_type = %s order by created_at desc",
         (account_id, "manual_call_logged"),
     ).fetchall()
@@ -874,8 +928,8 @@ def redeem_payment_token(
 _ESCALATION_COLUMNS = "escalation_id, account_id, reason, status, created_at, resolved_at, proposed_changes, resolution_reason"
 
 
-def get_escalations_for_account(account_id: str) -> list[Escalation]:
-    rows = get_connection().execute(
+def get_escalations_for_account(account_id: str, ex=None) -> list[Escalation]:
+    rows = (ex or get_connection()).execute(
         f"select {_ESCALATION_COLUMNS} from escalations where account_id = %s order by created_at desc",
         (account_id,),
     ).fetchall()
@@ -919,7 +973,7 @@ def has_recent_event_with_detail(account_id: str, event_type: str, since: dateti
     return row is not None
 
 
-def get_clarification_requests(account_id: str) -> list[dict]:
+def get_clarification_requests(account_id: str, ex=None) -> list[dict]:
     """Every clarification-request message ever sent to this account,
     most recent first -- the ops dashboard's communication-history
     thread for that borrower (see outbound/send.py's
@@ -928,7 +982,7 @@ def get_clarification_requests(account_id: str) -> list[dict]:
     recent mark_clarifications_resolved() checkpoint (see that function's
     own docstring for why this is a watermark, not per-message state) --
     False, including when nothing has ever been marked resolved at all."""
-    conn = get_connection()
+    conn = ex or get_connection()
     rows = conn.execute(
         "select details, created_at from events where account_id = %s and event_type = %s order by created_at desc",
         (account_id, "clarification_request_sent"),
