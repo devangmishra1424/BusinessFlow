@@ -107,15 +107,41 @@ const sentence = (n) => `This is sentence number ${n} and it has enough words to
 const LONG = [1, 2, 3, 4].map(sentence).join(" ");
 
 // ---- finding a natural voice -----------------------------------------------------------------------------------------
-test("a voice is natural only when its name says so", () => {
+test("a voice is natural when its name says so", () => {
   for (const name of ["Microsoft Neerja Online (Natural) - English (India)", "Samantha (Enhanced)", "Zoe (Premium)", "Some Neural Voice", "Microsoft Swara Online (Natural) - Hindi (India)"]) {
     assert.equal(isNatural(voice(name, "en-US")), true, name);
   }
+  // built-in voices, and Google-named voices that are not reported as online
   for (const name of ["Microsoft Heera - English (India)", "Microsoft David - English (United States)", "Google US English", "Google UK English Female", "Microsoft Kalpana - Hindi (India)"]) {
     assert.equal(isNatural(voice(name, "en-US")), false, name);
   }
   assert.equal(isNatural({ lang: "en-US" }), false);
   assert.equal(isNatural(null), false);
+});
+
+// Regression: "Naturalise tone" said "not available" in Google Chrome, whose good voices are online "Google ..." ones.
+const GOOGLE_US = voice("Google US English", "en-US", { localService: false });
+const GOOGLE_UK = voice("Google UK English Female", "en-GB", { localService: false });
+const GOOGLE_HI = voice("Google हिन्दी", "hi-IN", { localService: false });
+const DAVID = voice("Microsoft David - English (United States)", "en-US", { localService: true });
+
+test("Chrome's online Google voices count as natural; a local voice with the same kind of name does not", () => {
+  assert.equal(isNatural(GOOGLE_US), true);
+  assert.equal(isNatural(GOOGLE_HI), true);
+  assert.equal(isNatural(voice("Google US English", "en-US", { localService: true })), false);
+  assert.equal(isNatural(DAVID), false);
+  assert.equal(isOnline(GOOGLE_US), true); // so the page says the reply text goes to the browser's provider
+});
+
+test("in Chrome: a Google voice is picked for English and for Hindi instead of 'not available'", () => {
+  const chrome = [DAVID, HEERA, GOOGLE_US, GOOGLE_UK, GOOGLE_HI];
+  assert.equal(pickNatural(chrome, "en"), GOOGLE_UK); // British before American, as for named-natural voices
+  assert.equal(pickNatural(chrome, "hi"), GOOGLE_HI);
+});
+
+test("a voice whose name says natural is still preferred over a Google one", () => {
+  assert.equal(pickNatural([GOOGLE_UK, ARIA, GOOGLE_US], "en"), ARIA);
+  assert.equal(pickNatural([GOOGLE_HI, SWARA], "hi"), SWARA);
 });
 
 test("online voices are recognised, so the page can say the reply text is sent to the provider", () => {

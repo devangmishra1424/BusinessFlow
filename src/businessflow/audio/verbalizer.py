@@ -30,6 +30,8 @@ import re
 
 from num2words import num2words
 
+from businessflow.markup import strip_markdown
+
 _MONTH_NAMES_EN = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
@@ -263,7 +265,11 @@ def verbalize(text: str, language: str = "en") -> str:
     Order matters: dates and rupee amounts first (they contain digit runs the
     phone/ID patterns must not see), then emails (which may contain either).
     For Hindi, any plain number left after those (a day of the month, a count) is then spelled in Hindi
-    words too. The output contains none of the patterns, so verbalize() is idempotent."""
+    words too. The output contains none of the patterns, so verbalize() is idempotent.
+
+    First of all, the reply's markdown is removed (markup.strip_markdown): every voice path comes through
+    here, and a voice reads "**Propose a smaller payment now**" as "asterisk asterisk ..." (found live)."""
+    text = strip_markdown(text)
     text = _ISO_DATE.sub(lambda m: _verbalize_date(m, language), text)
     text = _RUPEE_AMOUNT.sub(lambda m: _verbalize_rupees(m, language), text)
     text = _EMAIL.sub(lambda m: _verbalize_email(m, language), text)
