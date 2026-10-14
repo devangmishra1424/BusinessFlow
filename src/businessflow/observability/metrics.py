@@ -36,12 +36,14 @@ def escalation_rate(since: datetime | None = None) -> float:
     if since is None:
         since = datetime.now(timezone.utc) - timedelta(hours=24)
 
-    rows = get_connection().execute(
-        "select event_type, details from events where created_at >= %s and event_type = 'tool_called'",
+    # Counted in the database: one row back, however many tool calls the window holds. It used to fetch every
+    # tool_called event with its details to count them in Python, which grew with the window (30 days) and made the
+    # ops dashboard's escalation-rate card its slowest request.
+    row = get_connection().execute(
+        "select count(*) as calls, count(*) filter (where details->>'tool' = 'escalate_to_human') as escalations "
+        "from events where created_at >= %s and event_type = 'tool_called'",
         (since,),
-    ).fetchall()
-    if not rows:
+    ).fetchone()
+    if not row["calls"]:
         return 0.0
-
-    escalations = sum(1 for r in rows if r["details"].get("tool") == "escalate_to_human")
-    return escalations / len(rows)
+    return row["escalations"] / row["calls"]

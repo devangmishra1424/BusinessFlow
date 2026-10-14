@@ -76,12 +76,15 @@ class ApiError extends Error {
 }
 
 async function api(path, opts = {}) {
+  const keyUsed = state.apiKey;
   const res = await fetch(path, {
     ...opts,
-    headers: { "X-API-Key": state.apiKey, ...(opts.headers || {}) },
+    headers: { "X-API-Key": keyUsed, ...(opts.headers || {}) },
   });
   if (res.status === 401) {
-    lock("That key was rejected by the server.");
+    // Lock only for the key that is in use now. During sign-in, signIn() shows its own message; and a request still in
+    // flight from a sign-in that already failed (its key is gone) must not lock again over that message.
+    if (!signingIn && keyUsed && keyUsed === state.apiKey) lock("That key was rejected by the server.");
     throw new ApiError(401, "unauthorized");
   }
   if (!res.ok) {
@@ -240,34 +243,65 @@ function lock(message) {
   $unlockInput.focus();
 }
 
-async function tryUnlock(key) {
+/* Signing in IS the first dashboard load: the key is proven by that load succeeding, not by a separate request first.
+   Found live: arriving with a key (from the borrower page's "Ops team" box, or one saved earlier) showed this sign-in
+   form for ~12 s while /accounts was fetched once just to check the key, then fetched again for the dashboard: about
+   26 s before any account appeared. Now a known key opens the dashboard at once, with placeholders, and loads once. */
+let signingIn = false;
+const $unlockSubmit = $unlockForm.querySelector("button[type=submit]");
+
+function showUnlock(message) {
+  stopAutoRefresh();
+  $shell.hidden = true;
+  $unlockScreen.hidden = false;
+  $unlockError.textContent = message || "";
+  $unlockError.hidden = !message;
+  $unlockInput.focus();
+}
+
+function showDashboardPlaceholders() {
+  $unlockScreen.hidden = true;
+  $shell.hidden = false;
+  document.getElementById("portfolio-summary").textContent = "Loading the portfolio…";
+  document.getElementById("kpi-row").innerHTML = '<div class="kpi-card skeleton" aria-hidden="true"></div>'.repeat(5);
+  document.getElementById("account-grid").innerHTML = '<div class="account-card skeleton" aria-hidden="true"></div>'.repeat(4);
+}
+
+async function signIn(key, { fromForm = false } = {}) {
   state.apiKey = key;
+  signingIn = true;
+  if (fromForm) {
+    $unlockSubmit.disabled = true;
+    $unlockSubmit.firstChild.textContent = "Signing in…";
+  } else {
+    showDashboardPlaceholders();
+  }
   try {
-    await api("/accounts");
+    await loadAll();
   } catch (e) {
-    if (e instanceof ApiError && e.status === 401) {
-      $unlockError.textContent = "That key was rejected — check it and try again.";
-      $unlockError.hidden = false;
-      state.apiKey = "";
-      return false;
-    }
-    $unlockError.textContent = "Couldn't reach the ops API. Is it running?";
-    $unlockError.hidden = false;
     state.apiKey = "";
+    loadGeneration += 1; // whatever this attempt still has in flight (the escalation rate) is discarded on arrival
+    const rejected = e instanceof ApiError && e.status === 401;
+    if (rejected) localStorage.removeItem("bf_ops_key");
+    showUnlock(rejected ? "That key was rejected — check it and try again." : "Couldn't reach the ops API. Check your connection and try again.");
     return false;
+  } finally {
+    signingIn = false;
+    $unlockSubmit.disabled = false;
+    $unlockSubmit.firstChild.textContent = "Unlock";
   }
   localStorage.setItem("bf_ops_key", key);
   $unlockError.hidden = true;
   $unlockScreen.hidden = true;
   $shell.hidden = false;
-  boot();
+  startAutoRefresh();
   return true;
 }
 
 $unlockForm.addEventListener("submit", (e) => {
   e.preventDefault();
   const key = $unlockInput.value.trim();
-  if (key) tryUnlock(key);
+  if (key) signIn(key, { fromForm: true });
 });
 
 document.getElementById("lock-btn").addEventListener("click", () => lock());
@@ -291,9 +325,17 @@ function setView(view) {
 /* ============================================================
    Since-hours selector
    ============================================================ */
-document.getElementById("since-hours").addEventListener("change", (e) => {
+// The time window only changes the escalation rate, so the selector sits on that card, next to the number it
+// changes. Found live: as a global "Activity window" control in the sidebar, changing it seemed to do nothing.
+document.getElementById("kpi-row").addEventListener("change", async (e) => {
+  if (!e.target.matches("#since-hours")) return;
   state.sinceHours = Number(e.target.value);
-  loadAll().catch((err) => toast(err.message, true));
+  try {
+    state.metrics = await getMetrics(state.sinceHours);
+    renderKpis();
+  } catch (err) {
+    toast(err.message, true);
+  }
 });
 
 /* ============================================================
@@ -438,6 +480,7 @@ function renderKpis() {
   const openEscalations = state.escalations.filter((e) => e.status === "queued_for_human").length;
   renderPortfolioSummary(accounts, openEscalations);
   const rate = state.metrics ? Math.round(state.metrics.escalation_rate * 100) : null;
+  const toolCalls = state.metrics ? state.metrics.event_counts.tool_called || 0 : 0; // the rate's denominator
 
   const riskCounts = { low: 0, medium: 0, high: 0 };
   accounts.forEach((a) => {
@@ -472,9 +515,16 @@ function renderKpis() {
     {
       icon: iconPulse(),
       cls: "",
-      label: `Escalation rate · ${SINCE_HOURS_LABELS[state.sinceHours] || `${state.sinceHours}h`}`,
+      label: "Escalation rate",
+      labelHtml: `Escalation rate <select id="since-hours" class="kpi-window" aria-label="Time window for the escalation rate">${Object.entries(SINCE_HOURS_LABELS)
+        .map(([hours, short]) => `<option value="${hours}" ${Number(hours) === state.sinceHours ? "selected" : ""}>${short}</option>`)
+        .join("")}</select>`,
       value: rate === null ? "–" : `${rate}%`,
-      sub: state.metrics ? `${Object.values(state.metrics.event_counts).reduce((a, b) => a + b, 0)} events logged` : "loading…",
+      sub: !state.metrics
+        ? state.metricsFailed ? "couldn't load; retrying on the next refresh" : "loading…"
+        : toolCalls
+          ? `of ${toolCalls} agent tool call${toolCalls === 1 ? "" : "s"} handed to a person`
+          : "no agent activity in this window",
       action: null,
     },
     {
@@ -503,7 +553,7 @@ function renderKpis() {
       (c) => `
     <div class="kpi-card ${c.cls === "danger" || c.cls === "warn" ? c.cls : ""} ${c.action ? "clickable" : ""}" ${c.action ? `data-kpi-action="${c.action}" role="button" tabindex="0"` : ""}>
       <div class="kpi-top">
-        <span class="kpi-label">${escapeHtml(c.label)}</span>
+        <span class="kpi-label">${c.labelHtml ?? escapeHtml(c.label)}</span>
         <span class="kpi-icon ${c.cls}">${c.icon}</span>
       </div>
       <div class="kpi-value">${c.valueHtml ?? c.value}</div>
@@ -1049,7 +1099,16 @@ async function openDetail(accountId) {
     $detailPanel.classList.add("open");
     $detailBackdrop.classList.add("open");
   }, 10);
-  $detailPanel.innerHTML = `${DETAIL_CLOSE_HTML}<div class="detail-body"><div class="detail-loading"><div class="spinner"></div><p class="no-data">Loading account…</p></div></div>`;
+  // The name, business and avatar are already known from the portfolio list, so they show at once; only the rest
+  // waits for the account's own data (a few round trips to the database).
+  const known = state.accounts.find((a) => a.account_id === accountId);
+  const header = known
+    ? `<div class="detail-top"><div class="detail-top-row"><div class="detail-header">
+         <div class="detail-avatar" style="${avatarStyle(known.account_id)}">${initials(known.borrower_name)}</div>
+         <div class="detail-title"><h2>${escapeHtml(known.borrower_name)}</h2><div class="biz">${escapeHtml(known.business_name)} · ${known.account_id}</div></div>
+       </div>${DETAIL_CLOSE_HTML}</div><div class="detail-tabs-placeholder"></div></div>`
+    : DETAIL_CLOSE_HTML;
+  $detailPanel.innerHTML = `${header}<div class="detail-body"><div class="detail-loading"><div class="spinner"></div><p class="no-data">Loading the account…</p></div></div>`;
   wireDetailClose();
 
   try {
@@ -2297,19 +2356,30 @@ function renderDetail(a, documents, conversation = []) {
 
 async function loadAll() {
   const myGeneration = ++loadGeneration;
-  const [accounts, escalations, metrics] = await Promise.all([
-    getAccounts(),
-    getEscalations(),
-    getMetrics(state.sinceHours),
-  ]);
+  // The escalation-rate figure is fetched alongside but never holds up the portfolio: accounts and escalations render
+  // as soon as they arrive, and the rate's card fills in when its own request returns.
+  const metricsRequest = getMetrics(state.sinceHours);
+  const [accounts, escalations] = await Promise.all([getAccounts(), getEscalations()]);
   if (myGeneration !== loadGeneration) return; // superseded by a newer load -- discard
   state.accounts = accounts;
   state.escalations = escalations;
-  state.metrics = metrics;
   renderKpis();
   renderFilterPills();
   renderAccountGrid();
   renderEscalationList();
+  metricsRequest
+    .then((metrics) => {
+      if (myGeneration !== loadGeneration) return;
+      state.metrics = metrics;
+      state.metricsFailed = false;
+      renderKpis();
+    })
+    .catch((err) => {
+      if (myGeneration !== loadGeneration) return;
+      console.warn("ops: the escalation rate could not be loaded; the next refresh retries it", err);
+      state.metricsFailed = true; // the card says so, rather than "loading…" forever
+      renderKpis();
+    });
 }
 
 function stopAutoRefresh() {
@@ -2317,8 +2387,7 @@ function stopAutoRefresh() {
   state.refreshTimer = null;
 }
 
-function boot() {
-  loadAll().catch((e) => toast(e.message, true));
+function startAutoRefresh() {
   stopAutoRefresh();
   state.refreshTimer = setInterval(() => {
     if (state.detailAccountId) return; // don't yank the panel out from under an operator mid-review
@@ -2340,14 +2409,6 @@ function boot() {
   if (hashMatch) history.replaceState(null, "", location.pathname + location.search);
 
   const keyToTry = incomingKey || state.apiKey;
-  if (keyToTry) {
-    tryUnlock(keyToTry).then((ok) => {
-      if (!ok) {
-        $unlockScreen.hidden = false;
-        $unlockError.hidden = true;
-      }
-    });
-  } else {
-    $unlockInput.focus();
-  }
+  if (keyToTry) signIn(keyToTry);
+  else showUnlock();
 })();

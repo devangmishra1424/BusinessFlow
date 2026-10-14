@@ -150,6 +150,7 @@ a.btn { text-decoration: none; text-align: center; }
   transition: background 0.15s var(--ease);
 }
 #unlock-form button:hover { background: var(--accent-hover); }
+#unlock-form button:disabled { opacity: 0.7; cursor: progress; }
 .unlock-error { color: var(--danger); font-size: 13px; margin: 14px 0 0; }
 .unlock-hint { margin: 18px 0 0; padding-top: 16px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-3); line-height: 1.5; }
 .unlock-hint code { background: var(--accent-tint); padding: 1px 6px; border-radius: 5px; color: var(--accent-strong); font-size: 11.5px; }
@@ -186,14 +187,6 @@ a.btn { text-decoration: none; text-align: center; }
 }
 
 .sidebar-footer { margin-top: auto; display: flex; flex-direction: column; gap: 10px; padding-top: 14px; border-top: 1px solid var(--border); }
-.since-select { display: flex; flex-direction: column; gap: 5px; padding: 0 2px; }
-.since-label { font-size: 12px; font-weight: 600; color: var(--text-3); }
-.since-select select {
-  width: 100%; background: var(--surface); border: 1px solid var(--border-strong); color: var(--text-1); font-size: 13px; font-weight: 500;
-  padding: 8px 32px 8px 10px; border-radius: var(--radius-md); cursor: pointer; appearance: none; -webkit-appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none'%3E%3Cpath d='m6 9 6 6 6-6' stroke='%235f6b82' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat; background-position: right 10px center;
-}
 .lock-btn {
   display: flex; align-items: center; gap: 10px; border: none; background: transparent; cursor: pointer;
   color: var(--text-2); font-size: 13.5px; font-weight: 600; padding: 9px 10px; border-radius: var(--radius-md); transition: all 0.15s var(--ease);
@@ -229,6 +222,21 @@ a.btn { text-decoration: none; text-align: center; }
 .kpi-icon.danger { background: var(--danger-solid-dim); color: var(--danger); }
 .kpi-icon.ok { background: var(--success-solid-dim); color: var(--success); }
 .kpi-label { font-size: 13px; color: var(--text-2); font-weight: 600; }
+/* The escalation rate's time window, on the card it changes */
+.kpi-window {
+  margin-left: 4px; font: inherit; font-size: 12px; font-weight: 600; color: var(--accent-strong); background: var(--accent-tint);
+  border: 1px solid transparent; border-radius: var(--radius-pill); padding: 1px 6px; cursor: pointer;
+}
+.kpi-window:hover, .kpi-window:focus-visible { border-color: var(--accent); outline: none; }
+/* Placeholders while the first load is in flight (sign-in opens straight into the dashboard) */
+.kpi-card.skeleton { min-height: 104px; }
+.account-card.skeleton { min-height: 170px; cursor: default; }
+.kpi-card.skeleton, .account-card.skeleton {
+  background: linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 50%, var(--surface) 70%) 0 0 / 200% 100%;
+  animation: shimmer 1.3s ease-in-out infinite;
+}
+@keyframes shimmer { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .kpi-card.skeleton, .account-card.skeleton { animation: none; } }
 .kpi-value { font-family: var(--font-tight); font-size: 30px; font-weight: 700; letter-spacing: -0.02em; color: var(--text-0); line-height: 1; }
 .kpi-card.danger .kpi-value { color: var(--danger); }
 .kpi-sub { margin-top: 8px; font-size: 12.5px; color: var(--text-3); }
@@ -452,7 +460,7 @@ a.btn { text-decoration: none; text-align: center; }
 .badge-edit-btn { cursor: pointer; font-family: inherit; }
 .edit-account-form { margin: 12px 0 4px; }
 
-.detail-tabs { display: flex; gap: 2px; margin-top: 14px; overflow-x: auto; scrollbar-width: none; }
+.detail-tabs { display: flex; gap: 2px; margin-top: 14px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .detail-tabs::-webkit-scrollbar { display: none; }
 .detail-tab {
   display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
@@ -469,7 +477,11 @@ a.btn { text-decoration: none; text-align: center; }
 }
 .tab-count.attention { background: var(--danger); color: #ffffff; }
 
-.detail-body { flex: 1; overflow-y: auto; padding: 24px 28px 40px; background: var(--bg-0); }
+.detail-body { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 24px 28px 40px; background: var(--bg-0); }
+/* While a profile or a modal is open the page behind it does not scroll. Found live: scrolling past the top or bottom
+   of a profile carried on into the portfolio behind it (scroll chaining). */
+html:has(.detail-panel.open), html:has(.new-account-modal.open) { overflow: hidden; }
+.detail-tabs-placeholder { height: 46px; }
 .detail-tabpanel { animation: rise 0.2s var(--ease); }
 .detail-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
 
@@ -664,7 +676,7 @@ a.btn { text-decoration: none; text-align: center; }
 .new-account-modal {
   position: fixed; top: 50%; left: 50%; z-index: 41;
   width: min(660px, 94vw); max-height: 90vh; background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius-xl); overflow-y: auto;
+  border-radius: var(--radius-xl); overflow-y: auto; overscroll-behavior: contain;
   transform: translate(-50%, -48%) scale(0.98); opacity: 0;
   transition: transform 0.28s var(--ease), opacity 0.22s var(--ease);
   box-shadow: var(--shadow-lift); pointer-events: none;
@@ -752,7 +764,6 @@ a.btn { text-decoration: none; text-align: center; }
   .tabs { flex-direction: row; }
   .tab-label { display: none; }
   .sidebar-footer { margin-top: 0; margin-left: auto; padding-top: 0; border-top: none; flex-direction: row; }
-  .since-select { display: none; }
 }
 @media (max-width: 560px) {
   .kpi-row { grid-template-columns: 1fr 1fr; gap: 10px; }
