@@ -9,8 +9,36 @@ is no more in-Python "next run time" logic to test, unlike
 run_outbound_scheduler.py's own resident loop.
 """
 
+import pytest
+
 import scripts.run_eval_monitor as monitor
 from scripts.run_eval_monitor import run_all_suites
+
+
+class _FakeConnection:
+    def execute(self, query, params=None):
+        return None
+
+
+@pytest.fixture(autouse=True)
+def _on_the_eval_copy(monkeypatch):
+    """main() refuses to run anywhere but the evals' own copy of the tables; these tests are about what it does once
+    it does run, so they stand in for a ready copy (no database needed)."""
+    monkeypatch.setattr(monitor, "database_schema", lambda: "eval")
+    monkeypatch.setattr(monitor, "get_connection", lambda: _FakeConnection())
+
+
+def test_main_refuses_to_run_on_the_live_tables_and_says_so(monkeypatch):
+    # Found live: run on the live tables at 21:00 UTC, every suite's reseed wiped what people had done on the demo.
+    monkeypatch.setattr(monitor, "database_schema", lambda: None)
+    ran, alerts = [], []
+    monkeypatch.setattr(monitor, "_SUITES", [("suite", lambda: ran.append(1) or {})])
+    monkeypatch.setattr(monitor, "send_ops_alert", lambda message: alerts.append(message) or True)
+
+    with pytest.raises(SystemExit):
+        monitor.main()
+
+    assert ran == [] and len(alerts) == 1 and "did NOT run" in alerts[0]
 
 
 def test_run_all_suites_collects_regressions_only_from_suites_that_have_any(monkeypatch):

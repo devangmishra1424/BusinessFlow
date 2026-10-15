@@ -14,15 +14,65 @@ before returning -- rather than holding one connection open forever.
 """
 
 import os
+import re
 from contextlib import contextmanager
 from functools import lru_cache
 
 import psycopg
 from dotenv import load_dotenv
-from psycopg.rows import dict_row
+from psycopg import sql
+from psycopg.rows import dict_row, tuple_row
 from psycopg_pool import ConnectionPool
 
 load_dotenv()
+
+# DATABASE_SCHEMA: run against a copy of the tables in another Postgres schema instead of `public` -- the nightly
+# evals' own copy ("eval", see scripts/setup_eval_schema.py), so their reseeds and test writes never touch the live
+# demo accounts. Found live: every eval suite resets BF-1001..BF-1010 before it runs, and run against public at 21:00
+# UTC each night it wiped a payment, chats and requests a person had made on the demo the day before. Unset (or
+# "public") is the live app, as always.
+_SCHEMA_NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+
+
+def database_schema() -> str | None:
+    """The schema named by DATABASE_SCHEMA, or None for the live `public` tables."""
+    schema = (os.environ.get("DATABASE_SCHEMA") or "").strip()
+    if not schema or schema == "public":
+        return None
+    if not _SCHEMA_NAME.match(schema):
+        raise RuntimeError(f"DATABASE_SCHEMA={schema!r} is not a plain lowercase schema name")
+    return schema
+
+
+def use_schema(conn: psycopg.Connection) -> None:
+    """Puts DATABASE_SCHEMA first on this connection's search_path (a no-op when it isn't set).
+
+    `public` stays on the path after it, because the pgvector type lives there -- so a table missing from the copy
+    would silently resolve to the LIVE table of the same name. Refuses instead: every public table and sequence must
+    exist in the schema before this connection is used for anything."""
+    schema = database_schema()
+    if schema is None:
+        return
+    cur = conn.cursor(row_factory=tuple_row)
+    missing = cur.execute(
+        "select table_name from information_schema.tables where table_schema = 'public' and table_type = 'BASE TABLE' "
+        "except select table_name from information_schema.tables where table_schema = %s "
+        "union all "
+        "(select sequence_name from information_schema.sequences where sequence_schema = 'public' "
+        "except select sequence_name from information_schema.sequences where sequence_schema = %s)",
+        (schema, schema),
+    ).fetchall()
+    if missing:
+        raise RuntimeError(
+            f"DATABASE_SCHEMA={schema!r} has no copy of {sorted(r[0] for r in missing)} -- a query on those would reach "
+            "the live public tables. Build the copy first: python -m scripts.setup_eval_schema"
+        )
+    cur.execute(
+        sql.SQL("select set_config('search_path', {} || ', ' || current_setting('search_path'), false)").format(
+            sql.Literal(sql.Identifier(schema).as_string(conn))
+        )
+    )
+
 
 _MIN_POOL_SIZE = 2
 # Capped well under Supabase's own Session Pooler limit for this project
@@ -115,6 +165,11 @@ def get_connection() -> _PooledExecutor:
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
         raise RuntimeError("DATABASE_URL is not set -- copy .env.example to .env and fill it in")
+    if database_schema() is not None:
+        # Checked once up front on its own connection, so an incomplete copy fails at once with use_schema's message.
+        # Inside the pool's configure hook the same error only shows as a pool timeout 30 s later.
+        with psycopg.connect(database_url, connect_timeout=15, autocommit=True) as conn:
+            use_schema(conn)
     pool = ConnectionPool(
         database_url,
         min_size=_MIN_POOL_SIZE,
@@ -132,6 +187,8 @@ def get_connection() -> _PooledExecutor:
         # server-side close is invisible to every caller instead of
         # surfacing as an unhandled error on whichever request loses that race.
         check=ConnectionPool.check_connection,
+        # Every new connection, including a replacement for a dropped one: the eval copy's search_path, or nothing.
+        configure=use_schema,
         open=True,
     )
     # open=True returns before min_size connections are necessarily ready

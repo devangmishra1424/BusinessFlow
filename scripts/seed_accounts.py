@@ -44,6 +44,8 @@ import psycopg
 from dotenv import load_dotenv
 from psycopg.rows import dict_row
 
+from businessflow.accounts.db import use_schema  # light: psycopg and dotenv only
+
 # Explicit here rather than relying on an import of businessflow.accounts.*
 # to load it as a side effect (this script no longer imports that package
 # at all, now that current_date()/DEMO_TODAY are gone) -- run standalone
@@ -325,6 +327,8 @@ def main():
     # connection per statement (fine for the app's normal read/write
     # calls, wrong for this all-or-nothing reseed).
     with psycopg.connect(database_url, row_factory=dict_row, autocommit=False) as conn:
+        # The nightly evals reseed their own copy of the tables (DATABASE_SCHEMA=eval), never the live demo accounts.
+        use_schema(conn)
         # Transaction-scoped: released automatically on commit OR rollback,
         # so a crash mid-seed can't leave it locked forever. A concurrent
         # reseed just blocks here until this one finishes, instead of
