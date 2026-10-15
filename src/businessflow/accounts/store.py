@@ -1193,6 +1193,31 @@ def borrower_names(account_ids: list[str], ex=None) -> dict[str, str]:
     return {r["account_id"]: r["borrower_name"] for r in rows}
 
 
+def changes_since_last_status_check(account_id: str) -> dict:
+    """What changed on this account after the agent last looked it up (its latest get_payment_status call): payments
+    recorded (through a payment link or by ops) and restructurings approved. {"payments": n, "restructurings": n,
+    "since": <that call's time>}; both 0 when nothing changed, or when it was never looked up.
+
+    Found live: a borrower paid through the link the agent had just sent, then asked "do I have any dues right now?"
+    -- and was told "21 days past due, ₹35,500 due today", from the status the agent had looked up before the payment."""
+    row = get_connection().execute(
+        """
+        with last_check as (
+            select max(created_at) as at from events
+            where account_id = %(a)s and event_type = 'tool_called' and details->>'tool' = 'get_payment_status'
+        )
+        select (select at from last_check) as since,
+               (select count(*) from payment_history, last_check
+                 where account_id = %(a)s and created_at > last_check.at) as payments,
+               (select count(*) from escalations, last_check
+                 where account_id = %(a)s and status = 'approved' and proposed_changes is not null
+                   and resolved_at > last_check.at) as restructurings
+        """,
+        {"a": account_id},
+    ).fetchone()
+    return {"since": row["since"], "payments": row["payments"], "restructurings": row["restructurings"]}
+
+
 def get_case(account_id: str, case_ref: str, ex=None) -> dict | None:
     """The case case_ref names, when it is a case on THIS account, else None
     -- the check every endpoint taking a case_ref from a request makes before

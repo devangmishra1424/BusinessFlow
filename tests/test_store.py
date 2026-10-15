@@ -317,3 +317,19 @@ def test_the_inbox_reads_list_open_claims_with_the_borrowers_name(reseed_account
 
     assert rows[opened["dispute_id"]]["kind"] == "payment_claim"
     assert rows[opened["dispute_id"]]["borrower_name"] == store.get_account_or_raise("BF-1001").borrower_name
+
+
+def test_changes_since_last_status_check_counts_payments_after_the_agents_last_lookup(reseed_accounts):
+    # Found live: a payment through the agent's own link landed after it looked up the status, and it answered "what
+    # do I owe now" from the stale lookup. agent/loop.py asks this before each turn.
+    assert store.changes_since_last_status_check("BF-1001")["payments"] == 0  # never looked up: nothing to go stale
+
+    store.log_event("BF-1001", "tool_called", {"tool": "get_payment_status", "arguments": {"account_id": "BF-1001"}})
+    assert store.changes_since_last_status_check("BF-1001")["payments"] == 0
+
+    store.record_payment("BF-1001", store.get_account_or_raise("BF-1001").emi_amount)
+    changed = store.changes_since_last_status_check("BF-1001")
+    assert changed["payments"] == 1 and changed["restructurings"] == 0
+
+    store.log_event("BF-1001", "tool_called", {"tool": "get_payment_status", "arguments": {"account_id": "BF-1001"}})
+    assert store.changes_since_last_status_check("BF-1001")["payments"] == 0  # looked again: up to date
