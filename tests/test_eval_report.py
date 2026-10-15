@@ -81,6 +81,7 @@ def test_speed_reports_seconds_and_rate_limited_replies(tmp_path):
 
     _save(tmp_path, "latency_benchmark", [_latency(3.9, 7.1), _latency(4.1, 7.3), _latency(5.2, 9.8, degraded=2)], [
         {"scenario_id": "multi_tool_hi", "elapsed_seconds": 11.2},
+        {"scenario_id": "multi_tool_hi", "elapsed_seconds": 10.4},  # the same scenario's second run: named once
         {"scenario_id": "status_en", "elapsed_seconds": 2.0},
     ])
     tonight = dict(_latency(5.2, 9.8, degraded=2), regressed_metrics=["p50_seconds", "p90_seconds"])

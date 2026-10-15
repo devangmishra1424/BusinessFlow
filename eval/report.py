@@ -176,7 +176,11 @@ def _latency(s: dict, results: list[dict], history: list[dict]) -> tuple[str, li
         f"{_secs(_usual(runs, lambda r: _p(r, 'p50_seconds')))} / {_secs(_usual(runs, lambda r: _p(r, 'p90_seconds')))}" if runs else None,
     )
     details = []
-    slowest = sorted(results, key=lambda r: r.get("elapsed_seconds") or 0, reverse=True)[:2]
+    # Each scenario runs more than once; name each one once, by its slowest run.
+    worst: dict[str, float] = {}
+    for r in results:
+        worst[r.get("scenario_id")] = max(worst.get(r.get("scenario_id"), 0.0), r.get("elapsed_seconds") or 0.0)
+    slowest = [{"scenario_id": k, "elapsed_seconds": v} for k, v in sorted(worst.items(), key=lambda kv: kv[1], reverse=True)[:2]]
     if slowest:
         details.append("slowest: " + ", ".join(f"{r.get('scenario_id')} {_secs(r.get('elapsed_seconds'))}" for r in slowest))
     if s.get("degraded_run_count"):
