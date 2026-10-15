@@ -359,3 +359,10 @@ def test_groq_client_returns_just_the_client_for_the_active_key(reset_fallback_k
     client_module.switch_to_fallback_key(0)
 
     assert client_module.groq_client().api_key == "gsk_fake_fallback_key_for_this_test"
+
+
+def test_prompt_asks_for_plain_replies_and_a_payment_link_as_a_markdown_link():
+    # Found live: "**👉 https://.../pay/<token>**" -- a bare link and an emoji inside bold.
+    prompt = build_system_prompt(language="en")
+    assert "[Pay ₹<amount> now](" in prompt
+    assert "never a bare URL" in prompt and "No emoji" in prompt

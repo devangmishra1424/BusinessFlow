@@ -103,3 +103,42 @@ test("a table with a missing cell, and text that only looks like a table, are ha
     assert.ok(!formatReply(text).includes("<table"), text);
   }
 });
+
+// ---- everything else chat models write (the same cases as tests/test_markup.py) ------------------------------------
+// Found live: "**👉 https://.../pay/<token>**" -- the link swallowed the closing "**" and showed as a plain link.
+
+const TOKEN_URL = "https://businessflowai.duckdns.org/pay/HlBBxf1eiT1lBImCDngXHO4k6NFWJt3_";
+const btn = (href, label) => `<a class="chat-pay-btn" href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+const lnk = (href, label) => `<a class="chat-link" href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+
+test("the live bold link is a Pay button, with no stray asterisks", () => {
+  const html = formatReply(`Sure, here’s a payment link for the full amount due:\n\n**👉 ${TOKEN_URL}**\n\nJust click the link.`);
+  assert.ok(html.includes(`<strong>👉 ${btn(TOKEN_URL, "Open the payment page")}</strong>`), html);
+  assert.ok(!html.includes("*"), html);
+});
+
+test("links in every shape", () => {
+  assert.equal(formatReply(`**[Pay ₹500 now](${PAY_URL})**`), `<strong>${btn(PAY_URL, "Pay ₹500 now")}</strong>`);
+  assert.equal(formatReply(`[**Pay now**](${PAY_URL})`), btn(PAY_URL, "Pay now"));
+  assert.equal(formatReply(`__${TOKEN_URL}__`), `<strong>${btn(TOKEN_URL, "Open the payment page")}</strong>`);
+  assert.equal(formatReply("See &lt;x&gt; <https://example.com/a_b>."), `See &amp;lt;x&amp;gt; ${lnk("https://example.com/a_b", "https://example.com/a_b")}.`);
+  assert.equal(formatReply("(see https://example.com/a)"), `(see ${lnk("https://example.com/a", "https://example.com/a")})`);
+  assert.equal(formatReply("**https://example.com/a**"), `<strong>${lnk("https://example.com/a", "https://example.com/a")}</strong>`);
+});
+
+test("strike, bold italic, code block, divider, quote, tasks, breaks and escapes", () => {
+  assert.equal(formatReply("~~₹500~~ ₹400, ***today***"), "<del>₹500</del> ₹400, <strong><em>today</em></strong>");
+  assert.equal(formatReply("Run:\n```\na **b** <c>\n```\ndone"), "Run:<pre><code>a **b** &lt;c&gt;</code></pre>done");
+  assert.equal(formatReply("above\n---\nbelow"), "above<hr>below");
+  assert.equal(formatReply("> Note: **fee** waived"), "<blockquote>Note: <strong>fee</strong> waived</blockquote>");
+  assert.equal(formatReply("- [ ] pay\n- [x] done\n+ plus"), "☐ pay\n☑ done\n• plus");
+  assert.equal(formatReply("one<br>two<br/>three"), "one\ntwo\nthree");
+  assert.ok(formatReply("| A | B |\n|---|---|\n| x | 1<br>2 |").includes("<td>1<br>2</td>"));
+  assert.equal(formatReply(String.raw`\*not italic\* and \_kept\_`), "*not italic* and _kept_");
+});
+
+test("odd input never breaks the page", () => {
+  assert.equal(formatReply("a\u00000\u0000b **c**"), "a0b <strong>c</strong>"); // a NUL can't reach a set-aside piece
+  assert.equal(formatReply("```\nunclosed"), "<pre><code>unclosed</code></pre>");
+  assert.equal(formatReply("> "), "<blockquote></blockquote>");
+});

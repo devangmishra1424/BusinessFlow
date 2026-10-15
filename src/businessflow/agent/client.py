@@ -87,7 +87,7 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "{ground_nach_failures} {fraud_or_identity_claim} {due_date_change_requests} "
     "{cibil_credit_score} {discount_firmness} {restructuring_approval_flow} "
     "{payment_history_requests} {closure_certificate_requests} {grievance_redressal} "
-    "{no_mental_math} {untrusted_content}"
+    "{no_mental_math} {untrusted_content} {reply_formatting}"
 )
 
 # Real borrowers hedge ("maybe 15k", "not sure which is better") instead of
@@ -677,6 +677,17 @@ def reset_to_primary_key() -> None:
         _switched_at = None
 
 
+# Every channel renders the reply's markdown (markup.py for Telegram and speech, static/richtext.js on the web), but
+# the less unusual markup there is, the less can go wrong. Found live: "**👉 https://.../pay/<token>**" -- an emoji
+# and a bare link inside bold -- showed stray asterisks on the web and had the 👉 read aloud.
+_REPLY_FORMATTING = (
+    "Formatting: replies are shown in a chat app and also read aloud, so keep them plain. Share a payment link on its "
+    "own line as [Pay ₹<amount> now](<the link generate_payment_link returned>) -- never a bare URL, never inside ** "
+    "or another markup. Use **bold** only for one key figure, '-' for a short list, and a table only when listing three "
+    "or more rows of the same fields. No emoji, headings, horizontal lines, or HTML."
+)
+
+
 def build_system_prompt(language: str = "en", account_id: str | None = None, template: str | None = None) -> str:
     """account_id, when given, tells the agent which borrower it's
     speaking with -- it's how the model knows what to pass as account_id
@@ -721,6 +732,7 @@ def build_system_prompt(language: str = "en", account_id: str | None = None, tem
         grievance_redressal=_GRIEVANCE_REDRESSAL,
         no_mental_math=_NO_MENTAL_MATH,
         untrusted_content=_UNTRUSTED_CONTENT,
+        reply_formatting=_REPLY_FORMATTING,
     )
 
 

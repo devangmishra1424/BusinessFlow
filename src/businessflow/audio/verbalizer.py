@@ -27,6 +27,7 @@ actually says the number.
 """
 
 import re
+import unicodedata
 
 from num2words import num2words
 
@@ -54,7 +55,34 @@ _ACCOUNT_ID = re.compile(r"\b([A-Z]{2,5})-(\d{3,})\b")
 _PERCENT = re.compile(r"(\d+(?:\.\d+)?)\s?%")
 # A web address, without the punctuation that ends the sentence around it. Found live: the voice read a payment link
 # out character by character. A listener can't use a link they hear; the link is in the chat, so the voice says that.
-_URL = re.compile(r"https?://[^\s<>\"']*[^\s<>\"'.,;:!?)\]]")
+# Never takes in the markdown marks that wrap a link ("**https://...**"), the same rule as markup.py's.
+_URL = re.compile(r"https?://[^\s<>\"'*`~|]*[^\s<>\"'*`~|.,;:!?)\]]")
+
+# What a voice would otherwise read out symbol by symbol. Found live: "**👉 https://...**" -- the voice said the 👉.
+_ARROWS = re.compile(r"\s*[→⇒⟶➔➜➡←↔]\s*")
+_TIMES = re.compile(r"(?<=\d)\s*[*×]\s*(?=\d)")
+_INVISIBLE = {"\ufe0f", "\ufe0e", "\u200d", "\u20e3"}  # emoji variation selectors, joiner, keycap
+_STRAY_MARKS = re.compile(r"[*`~|\\^]+|(?<!\w)#+(?!\d)|^[ \t]*>[ \t]?", re.M)
+_WORD_UNDERSCORE = re.compile(r"(?<=\w)_+(?=\w)")
+_SPACES = re.compile(r"[ \t]{2,}")
+_SPACE_BEFORE_PUNCT = re.compile(r"[ \t]+([,.;:!?])")
+
+
+def _speakable(text: str) -> str:
+    """Drops what a voice can only read out as symbol names: emoji and other pictographs (Unicode "symbol, other"),
+    arrows (a pause instead), markdown marks strip_markdown leaves when they are not a pair around words, and the
+    underscores of an identifier (a space instead). "2 * 3" becomes "2 times 3". Currency signs are not touched (the
+    amounts are already words by now)."""
+    text = _ARROWS.sub(", ", text)
+    text = _TIMES.sub(" times ", text)
+    text = "".join(
+        ch for ch in text
+        if ch not in _INVISIBLE and unicodedata.category(ch) != "So" and not ("\U0001F3FB" <= ch <= "\U0001F3FF")
+    )
+    text = _STRAY_MARKS.sub("", text)
+    text = _WORD_UNDERSCORE.sub(" ", text)
+    text = _SPACE_BEFORE_PUNCT.sub(r"\1", _SPACES.sub(" ", text))
+    return "\n".join(line.strip() for line in text.split("\n"))
 _URL_SPOKEN = {"en": "it's in the chat", "hi": "यह चैट में है"}
 
 # Letter names for spelling, and the symbols that occur in emails. Hindi
@@ -285,4 +313,5 @@ def verbalize(text: str, language: str = "en") -> str:
     if language == "hi":
         text = _HINDI_GLOSSARY_PATTERN.sub(lambda m: _HINDI_GLOSSARY[m.group(1)], text)
         text = _BARE_NUMBER.sub(_verbalize_bare_number, text)
-    return text
+    # Last, once dates, amounts, emails and IDs are words: an underscore or "*" inside one of those mattered until then.
+    return _speakable(text)
