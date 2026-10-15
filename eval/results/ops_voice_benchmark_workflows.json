@@ -1,0 +1,319 @@
+{
+  "date": "2026-10-15T17:54:59+00:00",
+  "model": "openai/gpt-oss-120b",
+  "requests": 16,
+  "right_ability_and_details": {
+    "count": 16,
+    "rate": 1.0,
+    "ci95": [
+      0.806,
+      1.0
+    ]
+  },
+  "right_ability": {
+    "count": 16,
+    "rate": 1.0,
+    "ci95": [
+      0.806,
+      1.0
+    ]
+  },
+  "invented_a_figure": 0,
+  "no_figure_requests": 0,
+  "seconds_median": 1.44,
+  "seconds_max": 7.67,
+  "results": [
+    {
+      "case_id": "start_day",
+      "said": "start my day",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "daily_briefing"
+      ],
+      "tool": "daily_briefing",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.92,
+      "error": null,
+      "arguments": {}
+    },
+    {
+      "case_id": "morning_focus",
+      "said": "what should I focus on this morning",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "daily_briefing"
+      ],
+      "tool": "daily_briefing",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 0.69,
+      "error": null,
+      "arguments": {}
+    },
+    {
+      "case_id": "calls_start",
+      "said": "let's start making calls",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "start_call_list"
+      ],
+      "tool": "start_call_list",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.53,
+      "error": null,
+      "arguments": {
+        "group": "overdue"
+      }
+    },
+    {
+      "case_id": "calls_broken",
+      "said": "call the people who broke their promises",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "show_accounts",
+        "start_call_list"
+      ],
+      "tool": "start_call_list",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.56,
+      "error": null,
+      "arguments": {
+        "group": "broken_promises"
+      }
+    },
+    {
+      "case_id": "inbox_start",
+      "said": "let's go through the inbox one by one",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "start_inbox"
+      ],
+      "tool": "start_inbox",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 0.91,
+      "error": null,
+      "arguments": {
+        "kind": "any"
+      }
+    },
+    {
+      "case_id": "claims_review",
+      "said": "review the payment claims",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "show_inbox",
+        "start_inbox"
+      ],
+      "tool": "show_inbox",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.38,
+      "error": null,
+      "arguments": {
+        "kind": "payment_claim"
+      }
+    },
+    {
+      "case_id": "run_next",
+      "said": "next",
+      "screen": "the call list (a call outcome is log_call on this account), item 1 of 2: the profile of Ravi Kumar (BF-1001)",
+      "expected_tools": [
+        "workflow_control"
+      ],
+      "tool": "workflow_control",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 0.83,
+      "error": null,
+      "arguments": {
+        "command": "next"
+      }
+    },
+    {
+      "case_id": "run_skip",
+      "said": "skip this one",
+      "screen": "the call list (a call outcome is log_call on this account), item 1 of 2: the profile of Ravi Kumar (BF-1001)",
+      "expected_tools": [
+        "workflow_control"
+      ],
+      "tool": "workflow_control",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.0,
+      "error": null,
+      "arguments": {
+        "command": "skip"
+      }
+    },
+    {
+      "case_id": "run_stop",
+      "said": "that's enough for now, stop",
+      "screen": "the call list (a call outcome is log_call on this account), item 1 of 2: the profile of Ravi Kumar (BF-1001)",
+      "expected_tools": [
+        "workflow_control"
+      ],
+      "tool": "workflow_control",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.61,
+      "error": null,
+      "arguments": {
+        "command": "stop"
+      }
+    },
+    {
+      "case_id": "run_no_answer",
+      "said": "no answer",
+      "screen": "the call list (a call outcome is log_call on this account), item 1 of 2: the profile of Ravi Kumar (BF-1001)",
+      "expected_tools": [
+        "log_call"
+      ],
+      "tool": "log_call",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.25,
+      "error": null,
+      "arguments": {
+        "account": "current",
+        "outcome": "no_answer"
+      }
+    },
+    {
+      "case_id": "run_promise",
+      "said": "reached him, he'll pay 8000 by the 25th",
+      "screen": "the call list (a call outcome is log_call on this account), item 1 of 2: the profile of Ravi Kumar (BF-1001)",
+      "expected_tools": [
+        "log_call"
+      ],
+      "tool": "log_call",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.36,
+      "error": null,
+      "arguments": {
+        "account": "BF-1001",
+        "outcome": "reached",
+        "promised_amount": 8000.0,
+        "promised_date": "2026-10-25"
+      }
+    },
+    {
+      "case_id": "run_approve",
+      "said": "approve it",
+      "screen": "working through the inbox, on case ESC-0012, item 3 of 3: the profile of Ravi Kumar (BF-1001)",
+      "expected_tools": [
+        "approve_request"
+      ],
+      "tool": "approve_request",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.5,
+      "error": null,
+      "arguments": {
+        "account": "BF-1001"
+      }
+    },
+    {
+      "case_id": "run_close_callback",
+      "said": "I called her back, close it",
+      "screen": "working through the inbox, on case ESC-0014, item 2 of 3: the profile of Asha Verma (BF-1002)",
+      "expected_tools": [
+        "approve_request",
+        "close_case"
+      ],
+      "tool": "close_case",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.39,
+      "error": null,
+      "arguments": {
+        "account": "BF-1002"
+      }
+    },
+    {
+      "case_id": "hi_help",
+      "said": "आप क्या कर सकते हो",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "help"
+      ],
+      "tool": "help",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 7.67,
+      "error": null,
+      "arguments": {}
+    },
+    {
+      "case_id": "hi_overdue",
+      "said": "कितने अकाउंट ओवरड्यू हैं",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "portfolio_overview",
+        "show_accounts"
+      ],
+      "tool": "show_accounts",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.44,
+      "error": null,
+      "arguments": {
+        "group": "overdue",
+        "sort": "most_overdue"
+      }
+    },
+    {
+      "case_id": "hi_pay",
+      "said": "फातिमा से बारह हज़ार पाँच सौ रिकॉर्ड करो",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "record_payment"
+      ],
+      "tool": "record_payment",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.92,
+      "error": null,
+      "arguments": {
+        "account": "Fatima",
+        "amount": 12500.0
+      }
+    }
+  ]
+}

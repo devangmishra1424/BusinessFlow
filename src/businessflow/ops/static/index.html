@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/styles.css?v=23" />
+<link rel="stylesheet" href="/static/styles.css?v=24" />
 </head>
 <body>
 
@@ -119,12 +119,16 @@
   <!-- Ask by voice or typing (ops/voice.py). Floats above the profile panel, so "this account" works while one is open. -->
   <section class="voice-dock" id="voice-dock" aria-label="Ask the dashboard">
     <div class="voice-reply" id="voice-reply" role="status" aria-live="polite" hidden></div>
+    <div class="voice-run" id="voice-run" aria-label="Run in progress" hidden></div>
     <form class="voice-bar" id="voice-form" autocomplete="off">
+      <button type="button" class="voice-menu" id="voice-menu" title="What can you do? (workflows, questions, actions)" aria-label="What can you do?">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/><rect x="14" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/><rect x="3" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/><rect x="14" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/></svg>
+      </button>
       <button type="button" class="voice-mic" id="voice-mic" title="Ask by voice (tap again to stop)" aria-label="Ask by voice">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="9" y="3" width="6" height="11" rx="3" stroke="currentColor" stroke-width="2"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       </button>
       <span class="voice-listening" id="voice-listening" hidden><span class="voice-pulse"></span>Listening… <b id="voice-timer">0:00</b> <small>tap the mic to stop</small></span>
-      <input id="voice-input" class="voice-input" maxlength="600" placeholder="Ask, or tell me to do something — “who should I call first?”" aria-label="Ask the dashboard" />
+      <input id="voice-input" class="voice-input" maxlength="600" placeholder="Ask, or say “start my day” — English or Hindi" aria-label="Ask the dashboard" />
       <button type="button" class="voice-sound" id="voice-sound" aria-pressed="true" title="Spoken replies on">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M4 9v6h4l5 4V5L8 9H4Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path class="voice-sound-waves" d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       </button>
@@ -247,6 +251,6 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="/static/app.js?v=25"></script>
+<script src="/static/app.js?v=26"></script>
 </body>
 </html>

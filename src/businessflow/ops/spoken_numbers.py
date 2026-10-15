@@ -14,9 +14,18 @@ about how a phrase can be split ("five thousand and two thousand" counts as
 5000, 2000 and 7000): the job is to catch a figure that appears NOWHERE in
 what was said, not to decide which reading the speaker meant -- the
 confirmation card shows the figure, and the operator decides that.
+
+Hindi too, because operators speak it (found live: a question asked in Hindi
+came back from Whisper in Devanagari, and the model understood it): Devanagari
+digits, सौ / हज़ार / लाख / करोड़ (and hazaar / sau), the common number words --
+one to twenty and the round tens and fives up to ninety-five -- and साढ़े /
+सवा / डेढ़ / ढाई ("साढ़े बारह हज़ार" is 12,500). Any other Hindi number word
+(तेईस, say) is not read, so a figure said that way is asked for again rather
+than guessed.
 """
 
 import re
+import unicodedata
 
 _UNITS = {
     "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
@@ -31,17 +40,43 @@ _SCALES = {
 _CONNECTORS = {"and", "a", "half", "point"}
 _DIGIT_WORDS = {**{w: str(n) for w, n in _UNITS.items() if n < 10}, "oh": "0"}
 
-_TOKEN = re.compile(r"\d+(?:\.\d+)?|[a-z]+")
+
+def _nfc(text: str) -> str:
+    # One spelling per word: हज़ार can arrive with a precomposed ज़ or as ज + nukta.
+    return unicodedata.normalize("NFC", text)
+
+
+# Hindi number words that stand alone, read like digits; 1.5 and 2.5 have words of their own.
+_HINDI_VALUES = {_nfc(w): v for w, v in {
+    "एक": 1, "दो": 2, "तीन": 3, "चार": 4, "पांच": 5, "पाँच": 5, "छह": 6, "छः": 6, "छे": 6, "सात": 7, "आठ": 8,
+    "नौ": 9, "दस": 10, "ग्यारह": 11, "बारह": 12, "तेरह": 13, "चौदह": 14, "पंद्रह": 15, "पन्द्रह": 15, "सोलह": 16,
+    "सत्रह": 17, "अठारह": 18, "उन्नीस": 19, "बीस": 20, "पच्चीस": 25, "तीस": 30, "पैंतीस": 35, "चालीस": 40,
+    "पैंतालीस": 45, "पचास": 50, "पचपन": 55, "साठ": 60, "पैंसठ": 65, "सत्तर": 70, "पचहत्तर": 75, "अस्सी": 80,
+    "पचासी": 85, "नब्बे": 90, "पचानवे": 95, "डेढ़": 1.5, "ढाई": 2.5, "dedh": 1.5, "derh": 1.5, "dhai": 2.5, "dhaai": 2.5,
+}.items()}
+_HINDI_SCALES = {_nfc(w): v for w, v in {
+    "सौ": 100, "हज़ार": 1_000, "हजार": 1_000, "लाख": 1_00_000, "करोड़": 1_00_00_000, "करोड": 1_00_00_000,
+    "sau": 100, "hazaar": 1_000, "hazar": 1_000, "hajar": 1_000, "hazaar": 1_000,
+}.items()}
+_SCALES = {**_SCALES, **_HINDI_SCALES}
+# साढ़े बारह = 12.5, सवा लाख = 1.25 lakh: added to the number that follows.
+_ADD_TO_NEXT = {_nfc(w): v for w, v in {
+    "साढ़े": 0.5, "सवा": 0.25, "sade": 0.5, "saade": 0.5, "sadhe": 0.5, "saadhe": 0.5, "sava": 0.25, "sawa": 0.25,
+}.items()}
+
+_TOKEN = re.compile(r"\d+(?:\.\d+)?|[a-z]+|[ऀ-ॣॱ-ॿ]+")  # Devanagari letters and signs, not its danda or digits
 _DIGIT_GROUP_COMMA = re.compile(r"(?<=\d),(?=\d)")
+_DEVANAGARI_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
 
 
 def _tokens(text: str) -> list[str]:
-    # "12,500" and "1,20,000" are one number; "12k" and "1.2lakh" are a number and a scale word.
-    return _TOKEN.findall(_DIGIT_GROUP_COMMA.sub("", text.lower()))
+    # "12,500" and "1,20,000" are one number; "12k" and "1.2lakh" are a number and a scale word; "१२५००" is 12500.
+    return _TOKEN.findall(_DIGIT_GROUP_COMMA.sub("", _nfc(text).lower().translate(_DEVANAGARI_DIGITS)))
 
 
 def _is_numberish(token: str) -> bool:
-    return token[0].isdigit() or token in _UNITS or token in _TENS or token in _SCALES or token in _CONNECTORS
+    return (token[0].isdigit() or token in _UNITS or token in _TENS or token in _SCALES or token in _CONNECTORS
+            or token in _HINDI_VALUES or token in _ADD_TO_NEXT)
 
 
 def _runs(tokens: list[str]) -> list[list[str]]:
@@ -64,6 +99,7 @@ def _phrase_values(run: list[str]) -> list[float]:
     total = current = 0.0
     started = decimal = False
     place = 0.1
+    add_to_next = 0.0  # from साढ़े / सवा
     previous = None  # what the previous token was: "num" | "tens" | "and" | "a" | "half" | "scale" | "point"
 
     def flush():
@@ -75,8 +111,12 @@ def _phrase_values(run: list[str]) -> list[float]:
         place = 0.1
 
     for i, token in enumerate(run):
-        if token[0].isdigit() or token in _UNITS or token in _TENS:
-            n = float(token) if token[0].isdigit() else float(_UNITS.get(token, _TENS.get(token, 0)))
+        if token in _ADD_TO_NEXT:
+            add_to_next += _ADD_TO_NEXT[token]
+            continue
+        if token[0].isdigit() or token in _UNITS or token in _TENS or token in _HINDI_VALUES:
+            n = float(token) if token[0].isdigit() else float(_UNITS.get(token, _TENS.get(token, _HINDI_VALUES.get(token, 0))))
+            n, add_to_next = n + add_to_next, 0.0
             if decimal and token in _UNITS:  # "one point two five"
                 current += n * place
                 place /= 10
@@ -102,7 +142,9 @@ def _phrase_values(run: list[str]) -> list[float]:
             previous = "a"
         elif token == "and":
             previous = "and"
-        elif token in _SCALES and started:
+        elif token in _SCALES and (started or add_to_next):
+            if not started:  # "सवा लाख" is 1.25 lakh: the "one" goes unsaid
+                current, started, add_to_next = 1 + add_to_next, True, 0.0
             scale = _SCALES[token]
             if scale == 100:
                 current = (current or 1) * 100
@@ -178,7 +220,7 @@ def spoken_digits(text: str) -> str:
     number against what was said; "double five" / "triple zero" are read the way people dictate numbers."""
     out = []
     repeat = 1
-    for token in _TOKEN.findall(text.lower().replace(",", "")):
+    for token in _TOKEN.findall(_nfc(text).lower().translate(_DEVANAGARI_DIGITS).replace(",", "")):
         if token in ("double", "triple"):
             repeat = 2 if token == "double" else 3
             continue

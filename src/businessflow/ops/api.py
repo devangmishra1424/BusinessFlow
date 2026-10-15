@@ -1609,11 +1609,22 @@ _speech_limiter = RateLimiter(max_requests=30, window_seconds=60)
 _MAX_VOICE_UPLOAD_BYTES = 4 * 1024 * 1024  # channels/browser_api.py's _OPS_VOICE_MAX_UPLOAD_BYTES: 30 s of WAV fits
 
 
+class VoiceWorkflowIn(BaseModel):
+    """The guided run in progress on the page, if any (ops/voice_workflows.py): which one, and where in it."""
+
+    kind: Literal["call_list", "inbox"]
+    position: int = Field(ge=1, le=500)
+    total: int = Field(ge=1, le=500)
+    case_ref: str | None = Field(default=None, max_length=40)  # the inbox's current case
+
+
 class VoiceScreenIn(BaseModel):
-    """What the operator is looking at, so "this account" and "her" mean the profile that is open."""
+    """What the operator is looking at, so "this account" and "her" mean the profile that is open, and "next" or
+    "approve it" mean the item of the run in progress."""
 
     view: Literal["overview", "inbox"] = "overview"
     account_id: str | None = Field(default=None, max_length=40)
+    workflow: VoiceWorkflowIn | None = None
 
 
 class VoiceAskTextIn(BaseModel):
@@ -1692,11 +1703,25 @@ def _check_voice_limit(limiter: RateLimiter, request: Request) -> None:
 
 
 def _describe_screen(screen: VoiceScreenIn) -> str:
+    where = "the Inbox" if screen.view == "inbox" else "the Portfolio"
     if screen.account_id:
         name = store.borrower_names([screen.account_id]).get(screen.account_id)
         if name:
-            return f"the profile of {name} ({screen.account_id})"
-    return "the Inbox" if screen.view == "inbox" else "the Portfolio"
+            where = f"the profile of {name} ({screen.account_id})"
+    run = screen.workflow
+    if run:
+        label = "the call list (a call outcome is log_call on this account)" if run.kind == "call_list" else (
+            f"working through the inbox, on case {run.case_ref}")
+        where = f"{label}, item {run.position} of {run.total}: {where}"
+    return where
+
+
+def _voice_respond(plan, heard: str, screen: VoiceScreenIn) -> voice_reply.VoiceReplyOut:
+    run = screen.workflow
+    return voice_reply.respond(
+        plan, heard, _VoiceData(), screen.account_id, store.current_date(),
+        screen_case=run.case_ref if run else None, workflow=run.kind if run else None,
+    )
 
 
 def _voice_answer(text: str, screen: VoiceScreenIn, source: str) -> voice_reply.VoiceReplyOut:
@@ -1719,7 +1744,7 @@ def _voice_answer(text: str, screen: VoiceScreenIn, source: str) -> voice_reply.
         logger.error("ops voice: Groq call failed (%s)", type(e).__name__)
         raise HTTPException(status_code=502, detail="Couldn't reach the AI service -- try again in a moment.") from e
     understood = time.monotonic()
-    reply = voice_reply.respond(plan, text, _VoiceData(), screen.account_id, store.current_date())
+    reply = _voice_respond(plan, text, screen)
     logger.info(
         "ops voice: source=%s ability=%s reply=%s model_ms=%d total_ms=%d",
         source, plan.tool, reply.kind, (understood - started) * 1000, (time.monotonic() - started) * 1000,
@@ -1772,7 +1797,7 @@ def voice_plan(request: Request, body: VoicePlanIn):
         plan = voice.parse_plan(body.tool, body.arguments)
     except voice.NotUnderstood as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    return voice_reply.respond(plan, body.heard, _VoiceData(), body.screen.account_id, store.current_date())
+    return _voice_respond(plan, body.heard, body.screen)
 
 
 @app.post("/voice/speak", dependencies=[Depends(require_api_key)])

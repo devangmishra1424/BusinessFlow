@@ -15,9 +15,14 @@ Real Groq calls on OPS_VOICE_MODEL (default openai/gpt-oss-120b), one per
 request, about 2,450 tokens each: roughly 95k tokens of that model's daily
 allowance per run. No database. Requires GROQ_API_KEY.
 
-Run from the project root: python -m eval.ops_voice_benchmark
+Two sets: CASES (the original 38: questions, navigation, single actions) and WORKFLOW_CASES (guided runs, what an
+operator says inside one, and Hindi). `--set workflows` runs only the second, about 45k tokens; each set writes its
+own results file, so a run of one never overwrites the other's numbers.
+
+Run from the project root: python -m eval.ops_voice_benchmark [--set all|workflows]
 """
 
+import argparse
 import json
 import os
 import time
@@ -102,7 +107,36 @@ CASES = [
     Case("mark_handled", "mark imran's messages as handled", {"mark_messages_handled"}, {"account": "imran"}),
 ]
 
-_SCREEN_ACCOUNTS = {_FATIMA: ("bf-1003", "fatima"), _ASHA: ("bf-1002", "asha"), _RAVI: ("bf-1001", "ravi")}
+# What ops/api.py's _describe_screen says inside a run.
+_CALLING_RAVI = "the call list (a call outcome is log_call on this account), item 1 of 2: the profile of Ravi Kumar (BF-1001)"
+_INBOX_RAVI = "working through the inbox, on case ESC-0012, item 3 of 3: the profile of Ravi Kumar (BF-1001)"
+_INBOX_ASHA = "working through the inbox, on case ESC-0014, item 2 of 3: the profile of Asha Verma (BF-1002)"
+
+WORKFLOW_CASES = [
+    Case("start_day", "start my day", {"daily_briefing"}),
+    Case("morning_focus", "what should I focus on this morning", {"daily_briefing"}),
+    Case("calls_start", "let's start making calls", {"start_call_list"}),
+    Case("calls_broken", "call the people who broke their promises", {"start_call_list", "show_accounts"},
+         {"group": "broken_promises"}),
+    Case("inbox_start", "let's go through the inbox one by one", {"start_inbox"}),
+    Case("claims_review", "review the payment claims", {"start_inbox", "show_inbox"}, {"kind": "payment_claim"}),
+    Case("run_next", "next", {"workflow_control"}, {"command": "next"}, _CALLING_RAVI),
+    Case("run_skip", "skip this one", {"workflow_control"}, {"command": "skip"}, _CALLING_RAVI),
+    Case("run_stop", "that's enough for now, stop", {"workflow_control"}, {"command": "stop"}, _CALLING_RAVI),
+    Case("run_no_answer", "no answer", {"log_call"}, {"account": CURRENT, "outcome": "no_answer"}, _CALLING_RAVI),
+    Case("run_promise", "reached him, he'll pay 8000 by the 25th", {"log_call"},
+         {"account": CURRENT, "outcome": "reached", "promised_amount": 8000, "promised_date": date(2026, 10, 25)}, _CALLING_RAVI),
+    Case("run_approve", "approve it", {"approve_request"}, {"account": CURRENT}, _INBOX_RAVI),
+    Case("run_close_callback", "I called her back, close it", {"approve_request", "close_case"}, {"account": CURRENT}, _INBOX_ASHA),
+    Case("hi_help", "आप क्या कर सकते हो", {"help"}),
+    Case("hi_overdue", "कितने अकाउंट ओवरड्यू हैं", {"show_accounts", "portfolio_overview"}),
+    Case("hi_pay", "फातिमा से बारह हज़ार पाँच सौ रिकॉर्ड करो", {"record_payment"}, {"account": "fatima", "amount": 12500}),
+]
+
+_SCREEN_ACCOUNTS = {
+    _FATIMA: ("bf-1003", "fatima"), _ASHA: ("bf-1002", "asha"), _RAVI: ("bf-1001", "ravi"),
+    _CALLING_RAVI: ("bf-1001", "ravi"), _INBOX_RAVI: ("bf-1001", "ravi"), _INBOX_ASHA: ("bf-1002", "asha"),
+}
 
 
 def _arg_ok(case: Case, name: str, expected, got) -> bool:
@@ -118,9 +152,9 @@ def _arg_ok(case: Case, name: str, expected, got) -> bool:
     return got == expected
 
 
-def run() -> dict:
+def run(cases: list[Case] = CASES, results_name: str = "ops_voice_benchmark") -> dict:
     results = []
-    for case in CASES:
+    for case in cases:
         started = time.monotonic()
         try:
             plan = voice.understand(case.said, TODAY, case.screen)
@@ -153,12 +187,12 @@ def run() -> dict:
         "right_ability_and_details": {"count": full, "rate": round(full_rate, 3), "ci95": [round(full_lo, 3), round(full_hi, 3)]},
         "right_ability": {"count": tool_only, "rate": round(tool_rate, 3), "ci95": [round(tool_lo, 3), round(tool_hi, 3)]},
         "invented_a_figure": sum(r["invented_figure"] for r in results),
-        "no_figure_requests": sum(c.no_figure for c in CASES),
+        "no_figure_requests": sum(c.no_figure for c in cases),
         "seconds_median": seconds[n // 2], "seconds_max": seconds[-1],
         "results": results,
     }
     _RESULTS_DIR.mkdir(exist_ok=True)
-    (_RESULTS_DIR / "ops_voice_benchmark.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    (_RESULTS_DIR / f"{results_name}.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     print(
         f"\nright ability and details: {full}/{n} ({full_rate:.0%}, 95% CI {full_lo:.0%}-{full_hi:.0%}); "
         f"right ability: {tool_only}/{n}; invented a figure: {summary['invented_a_figure']} of {summary['no_figure_requests']}; "
@@ -168,4 +202,9 @@ def run() -> dict:
 
 
 if __name__ == "__main__":
-    run()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--set", choices=["all", "workflows"], default="all")
+    if parser.parse_args().set == "workflows":
+        run(WORKFLOW_CASES, "ops_voice_benchmark_workflows")
+    else:
+        run(CASES + WORKFLOW_CASES)

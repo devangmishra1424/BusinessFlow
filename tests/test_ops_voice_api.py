@@ -74,7 +74,8 @@ def test_a_typed_request_is_understood_and_answered(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert seen == ["what can you do?"]
-    assert body["kind"] == "answer" and body["heard"] == "what can you do?" and "confirm" in body["say"]
+    assert body["kind"] == "answer" and body["heard"] == "what can you do?" and "ask before changing anything" in body["say"]
+    assert body["suggestions"][0] == {"label": "Start my day", "tool": "daily_briefing", "arguments": {}, "prompt": None, "group": "Start here"}
 
 
 def test_a_spoken_request_goes_through_the_speech_service_then_the_same_path(monkeypatch):
@@ -86,6 +87,19 @@ def test_a_spoken_request_goes_through_the_speech_service_then_the_same_path(mon
     assert response.status_code == 200
     assert sent == [_wav_bytes()]
     assert response.json()["heard"] == "what can you do"
+
+
+def test_the_model_is_told_where_the_operator_is_in_a_run(monkeypatch):
+    seen = []
+    monkeypatch.setattr(voice, "understand", lambda text, today, on_screen: seen.append(on_screen) or parse_plan("help", {}))
+    screen = {"view": "inbox", "workflow": {"kind": "inbox", "position": 2, "total": 5, "case_ref": "D-7"}}
+    assert ops.post("/voice/ask-text", json={"text": "approve it", "screen": screen}, headers=_auth()).status_code == 200
+    assert seen == ["working through the inbox, on case D-7, item 2 of 5: the Inbox"]
+
+
+def test_a_run_position_out_of_range_is_refused():
+    screen = {"workflow": {"kind": "call_list", "position": 0, "total": 5}}
+    assert ops.post("/voice/ask-text", json={"text": "next", "screen": screen}, headers=_auth()).status_code == 422
 
 
 def test_silence_is_said_to_be_silence_without_asking_the_model(monkeypatch):
@@ -296,6 +310,36 @@ def test_an_answer_matches_the_dashboards_own_numbers(monkeypatch, reseed_accoun
         assert reply["say"].startswith(f"{len(overdue)} overdue account")
         worst = max(overdue, key=lambda a: a["days_past_due"])
         assert worst["borrower_name"] in reply["say"]
+
+
+@_pg_skip
+def test_a_call_list_step_on_real_data_logs_the_call_and_the_promise_from_one_card(reseed_accounts):
+    from datetime import timedelta
+
+    from businessflow.accounts import store
+
+    start = ops.post("/voice/plan", json={"tool": "start_call_list"}, headers=_auth()).json()
+    if start["workflow"] is None:
+        pytest.skip("the seeded accounts have nobody overdue without a dispute today")
+    expected = [a["account_id"] for a in ops.get("/accounts?flag=overdue", headers=_auth()).json()
+                if not any(f["label"] == "disputed" for f in a["flags"])]
+    assert sorted(i["key"] for i in start["workflow"]["items"]) == sorted(expected)
+    first = start["workflow"]["items"][0]["key"]
+    assert start["screen"]["account_id"] == first
+
+    by = (store.current_date() + timedelta(days=7)).isoformat()
+    card = ops.post("/voice/plan", headers=_auth(), json={
+        "tool": "log_call", "heard": "reached them, they will pay 5000 next week",
+        "arguments": {"account": first, "outcome": "reached", "promised_amount": 5000, "promised_date": by},
+        "screen": {"workflow": {"kind": "call_list", "position": 1, "total": len(expected)}},
+    }).json()["proposal"]
+    for request in [card, *card["then"]]:  # what Confirm sends, in order
+        sent = ops.request(request["method"], request["path"], json=request["body"], headers=_auth())
+        assert sent.status_code == 200, sent.text
+
+    account = ops.get(f"/accounts/{first}", headers=_auth()).json()
+    assert account["call_log"][0]["outcome"] == "reached"
+    assert any(p["promised_amount"] == 5000 and p["promised_date"] == by for p in account["promises"])
 
 
 @_pg_skip

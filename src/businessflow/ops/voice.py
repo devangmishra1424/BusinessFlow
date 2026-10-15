@@ -109,6 +109,10 @@ class LogCallArgs(_Args):
     account: AccountRef = "current"
     outcome: Literal["reached", "no_answer", "voicemail", "wrong_number"]
     note: str | None = Field(default=None, max_length=500)
+    # "Reached, she'll pay 8,000 by Friday" is one call and one promise: both go on one card (voice_reply._log_call).
+    promised_amount: float | None = Field(default=None, gt=0)
+    promised_full_amount: bool = False
+    promised_date: date | None = None
 
 
 class MessageBorrowerArgs(_Args):
@@ -155,11 +159,31 @@ class AccountOnlyArgs(_Args):
     account: AccountRef = "current"
 
 
-# Read-only: answered at once. Everything else is an action and becomes a confirmation card.
+class StartCallListArgs(_Args):
+    group: Literal["overdue", "broken_promises"] = "overdue"
+
+
+class StartInboxArgs(_Args):
+    kind: CaseKind = "any"
+
+
+class WorkflowControlArgs(_Args):
+    command: Literal["next", "skip", "previous", "stop", "repeat"]
+
+
+class CaseStepArgs(_Args):
+    account: AccountRef
+    case: str
+
+
+# Read-only: answered at once. Everything else is an action and becomes a confirmation card. A workflow
+# (voice_workflows.py) only reads too: it walks a queue, and each action in it is a card like any other.
 QUESTION_TOOLS = {
     "portfolio_overview", "show_accounts", "show_inbox", "escalation_rate", "account_details", "open_page", "help",
-    "cannot_help",
+    "cannot_help", "daily_briefing", "start_call_list", "start_inbox", "workflow_control", "call_step", "case_step",
 }
+# Steps of a workflow the page asks for itself, one queue item at a time -- never chosen by the model, so not on MENU.
+PAGE_ONLY_TOOLS = {"call_step", "case_step"}
 
 ARGS: dict[str, type[_Args]] = {
     "portfolio_overview": NoArgs,
@@ -184,12 +208,18 @@ ARGS: dict[str, type[_Args]] = {
     "send_reminders": SendRemindersArgs,
     "update_account": UpdateAccountArgs,
     "mark_messages_handled": AccountOnlyArgs,
+    "daily_briefing": NoArgs,
+    "start_call_list": StartCallListArgs,
+    "start_inbox": StartInboxArgs,
+    "workflow_control": WorkflowControlArgs,
+    "call_step": AccountOnlyArgs,
+    "case_step": CaseStepArgs,
 }
 
 _ACCOUNT = {
     "type": "string",
-    "description": "Account ID (e.g. BF-1003) or the borrower's or business's name as the operator said it; "
-    "'current' for the account open on screen (this one / her / him / them).",
+    "description": "Account ID (e.g. BF-1003) or the borrower's or business's name as the operator said it, in "
+    "English letters even if said in Hindi; 'current' for the account open on screen (this one / her / him / them).",
 }
 _AMOUNT = {"type": "number", "description": "Rupees, only if the operator said a figure. Never guess one."}
 _FULL = {"type": "boolean", "description": "True if they said the full amount / what's due / their EMI instead of a figure."}
@@ -258,10 +288,14 @@ MENU = [
         "account": _ACCOUNT, "amount": _AMOUNT, "full_amount_due": _FULL,
         "promised_date": {"type": "string", "description": "YYYY-MM-DD they promised to pay by."},
     }, ["account"]),
-    _tool("log_call", "Log a phone call attempt and its outcome.", {
+    _tool("log_call", "Log a phone call attempt and its outcome -- in the call list, the outcome of the call on "
+          "screen ('no answer', 'reached, she'll pay 8000 by Friday').", {
         "account": _ACCOUNT,
         "outcome": {"type": "string", "enum": ["reached", "no_answer", "voicemail", "wrong_number"]},
         "note": {"type": "string", "description": "Short staff note, if they gave one."},
+        "promised_amount": {"type": "number", "description": "If they promised to pay on the call: rupees, only as said."},
+        "promised_full_amount": {"type": "boolean", "description": "They promised the full amount due."},
+        "promised_date": {"type": "string", "description": "YYYY-MM-DD they promised to pay by."},
     }, ["account", "outcome"]),
     _tool("message_borrower", "Send one borrower a general message (Telegram if linked; always on their dashboard).", {
         "account": _ACCOUNT, "message": {"type": "string", "description": _TEXT_FOR_BORROWER},
@@ -291,12 +325,22 @@ MENU = [
     }, ["account"]),
     _tool("mark_messages_handled", "Mark this borrower's messages from the team as dealt with.", {"account": _ACCOUNT},
           ["account"]),
+    _tool("daily_briefing", "Start of the day: what needs doing today -- calls, inbox, payment claims, stale cases.",),
+    _tool("start_call_list", "Start a guided call list: borrowers to phone, one at a time, most overdue first.", {
+        "group": {"type": "string", "enum": ["overdue", "broken_promises"]},
+    }),
+    _tool("start_inbox", "Start working through the open cases one at a time (or only one kind, e.g. payment claims).", {
+        "kind": {"type": "string", "enum": list(CaseKind.__args__)},
+    }),
+    _tool("workflow_control", "Inside a running call list or inbox: go to the next item, skip this one, go back, "
+          "repeat it, or stop.", {"command": {"type": "string", "enum": ["next", "skip", "previous", "stop", "repeat"]}},
+          ["command"]),
 ]
 
 _SYSTEM_PROMPT = (
     "You turn what an operator says to a loan-collections ops dashboard into exactly one function call. The "
-    "operator is staff, speaking English; their words may be a speech-recognition transcript with small errors -- "
-    "read through them. Always call exactly one function; if none fits, call cannot_help. Never invent an "
+    "operator is staff, speaking English, Hindi or Hinglish; their words may be a speech-recognition transcript, "
+    "possibly in Devanagari, with small errors -- read through them. Always call exactly one function; if none fits, call cannot_help. Never invent an "
     "amount, date, phone number, name or reason the operator did not say: leave it out and the dashboard will ask. "
     "Questions about numbers or people are answered by the dashboard from its own data -- only pick the function; "
     "you have no data and must not answer yourself. Dates are YYYY-MM-DD, worked out from today's date below."
@@ -344,6 +388,8 @@ def understand(request_text: str, today: date, on_screen: str) -> Plan:
     if not calls:
         raise NotUnderstood("the model called no function")
     call = calls[0]
+    if call.function.name in PAGE_ONLY_TOOLS:
+        raise NotUnderstood(f"{call.function.name} is asked for by the page, not chosen by the model")
     try:
         arguments = json.loads(call.function.arguments or "{}")
     except json.JSONDecodeError as e:
