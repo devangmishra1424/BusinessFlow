@@ -12,8 +12,8 @@ caught downstream (it must appear in what was said), so "invented a figure" is
 reported separately: it is the failure that check exists for.
 
 Real Groq calls on OPS_VOICE_MODEL (default openai/gpt-oss-120b), one per
-request, about 2,450 tokens each: roughly 95k tokens of that model's daily
-allowance per run. No database. Requires GROQ_API_KEY.
+request, about 2,800 tokens each with the 26-ability menu: roughly 150k tokens
+of that model's daily allowance for all 54. No database. Requires GROQ_API_KEY.
 
 Two sets: CASES (the original 38: questions, navigation, single actions) and WORKFLOW_CASES (guided runs, what an
 operator says inside one, and Hindi). `--set workflows` runs only the second, about 45k tokens; each set writes its
