@@ -47,11 +47,19 @@ Deploy (VM, one-time setup):
   (the timer activates it; enabling both double-registers the same unit
   with multi-user.target for no reason).
 
+Its own copy of the data: every suite reseeds the demo accounts, so this
+runs on the "eval" schema (eval/__init__.py sets DATABASE_SCHEMA; build or
+refresh the copy with python -m scripts.setup_eval_schema) and refuses to
+start on the live tables. Found live: run against them at 21:00 UTC, it
+wiped a payment a person had made on the demo that day, along with every
+chat and request on all ten demo accounts.
+
 Run manually: python -m scripts.run_eval_monitor
 """
 
 import logging
 
+from businessflow.accounts.db import database_schema, get_connection
 from businessflow.outbound.send import send_ops_alert
 from eval import latency_benchmark, reasoning_accuracy, red_team, tool_calling_benchmark, voice_naturalness_benchmark
 
@@ -99,7 +107,19 @@ def main() -> None:
     process exits non-zero -- visible in `systemctl status`/journalctl
     for that run, not silently swallowed into "will retry tomorrow" the
     way the old resident loop's own outer try/except used to."""
-    logger.info("running nightly eval regression check")
+    schema = database_schema()
+    if schema is None:
+        message = (
+            "BusinessFlow nightly evals did NOT run: DATABASE_SCHEMA isn't set to their own copy of the tables, and "
+            "every suite reseeds the demo accounts -- on the live tables that wipes what people did on the demo today."
+        )
+        logger.error(message)
+        send_ops_alert(message)
+        raise SystemExit(1)
+    # Opening the pool checks the copy is complete (accounts/db.py's use_schema) and raises if it isn't, before any
+    # suite runs -- a suite's own failure would only be logged and skipped.
+    get_connection().execute("select 1")
+    logger.info("running nightly eval regression check on schema %r", schema)
     regressions = run_all_suites()
 
     if not regressions:

@@ -266,7 +266,11 @@ python -m scripts.run_outbound_scheduler
 # Eval regression monitor (one-shot -- tool-calling/reasoning/red-team/latency/
 # voice-naturalness check against real Groq+Postgres+RAG+TTS, alerts on
 # regression; see scripts/run_eval_monitor.py's own docstring for why this is
-# NOT a resident process)
+# NOT a resident process). Every suite reseeds the demo accounts, so against
+# the production database the evals use their own copy of the tables, schema
+# "eval" -- never the live demo data. Build it once (and re-run after a KB doc
+# or loan agreement changes):
+python -m scripts.setup_eval_schema
 python -m scripts.run_eval_monitor
 ```
 
