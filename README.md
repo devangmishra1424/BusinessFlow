@@ -235,6 +235,7 @@ cp .env.example .env   # then fill in the keys below
 | `OPS_API_KEY` | The ops dashboard API (`ops/api.py`) -- required on every request as an `X-API-Key` header |
 | `TELEGRAM_BOT_TOKEN` | The Telegram bot (`channels/telegram_bot.py`) |
 | `CHAT_APP_BASE_URL` | Where a generated payment link should point (defaults to `http://localhost:8000`) |
+| `CHAT_INTERNAL_URL`, `OPS_VOICE_MODEL` | Ops dashboard voice (optional): where the ops service reaches the chat service's speech models (default `http://127.0.0.1:8000`), and the model that reads a request (default `openai/gpt-oss-120b`) |
 | `LANGFUSE_*` | Tracing (optional) |
 | `HF_TOKEN`, `KAGGLE_API_TOKEN` | ASR model/dataset access (voice work only) |
 
@@ -389,6 +390,31 @@ worse than one that lists them:
   Telegram is covered by tests that drive the handlers with minimal stand-ins for the message and query objects. The web page was
   exercised in a browser, with the assistant's reply stubbed so no model quota was spent. Tests: `tests/test_abilities.py` (17),
   `tests/test_telegram_abilities.py` (19), four `abilities` endpoint tests in `tests/test_browser_api.py`.
+- **Voice on the ops dashboard.** A microphone and a question box at the bottom right of the ops dashboard (also over an
+  open profile, so "her" and "this account" mean the profile on screen). Ask about the portfolio, the inbox, the escalation
+  rate or one borrower, or say what to do: record a payment, confirm a payment claim, close a case, log a promise or a call,
+  message a borrower or a group, approve or reject a request, hand an account to a person, send reminders, fix contact
+  details. One model call (`ops/voice.py`, `OPS_VOICE_MODEL`, a different model from the borrower chat's so they never
+  share a daily Groq allowance) picks one of 22 abilities from a fixed menu and fills in the details; it sees no account
+  data. The answer is written by code from the same data the cards show (`ops/voice_reply.py`) and spoken in the chat's
+  English Piper voice. An action becomes a confirmation card -- what will happen, what was heard, what the borrower will be
+  sent -- and only the operator's Confirm click sends it, through the same endpoint the dashboard's own form uses; no voice
+  endpoint writes anything. An amount, a phone number, or a figure in a message the model drafted must be found in what
+  the operator actually said (`ops/spoken_numbers.py`: "12,500", "twelve and a half thousand", "1.2 lakh", ...) or the
+  card is not shown; "the full amount" comes from the database. Two close names are asked about, never guessed. Speech
+  runs on the VM: the ops service sends the recording to the chat service over loopback (`ops/speech_client.py`), which
+  already holds Whisper and Piper, instead of loading a second copy (+125 MB for Whisper, measured; +138 MB for Piper);
+  that internal endpoint needs the ops key and refuses anything that came through the public proxy. English only; one
+  request at a time (no follow-ups beyond what is on screen); no spoken "yes" -- Confirm is a click. Picking the ability,
+  measured on 38 typical requests with the real model (`python -m eval.ops_voice_benchmark`): right ability and details
+  37 of 38 (95% interval 87-100%), no figure invented in either request that had none, median 1.3 s per request, about
+  2,450 tokens each (so roughly 80 requests a day on a free-tier allowance of 200k tokens). The same sentence can get a
+  different reading on a second try (seen once: "can't help" then "record a payment", which then asked "which
+  account?"). **Not verified:** a real microphone in a real browser (the page was exercised with typed requests and the
+  repository's recorded test clip, through real Whisper and Piper), the timings on the VM's 2 vCPUs (on the development
+  machine: about 1 s to transcribe a 5 s question, 3 s the first time, which loads Whisper), and the chat service's port on
+  the VM (`CHAT_INTERNAL_URL`; if it is wrong, voice says it is unavailable and nothing else is affected). Tests:
+  `tests/test_ops_voice.py`, `tests/test_ops_voice_api.py`, `tests/test_spoken_numbers.py`.
 - A production-grade frontend design pass beyond the current functional
   dashboards, and horizontal scaling, are out of scope for a project at
   this size. (End-to-end latency IS measured, see `eval.latency_benchmark`

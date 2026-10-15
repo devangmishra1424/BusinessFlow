@@ -1,0 +1,737 @@
+{
+  "date": "2026-10-15T14:41:55+00:00",
+  "model": "openai/gpt-oss-120b",
+  "requests": 38,
+  "right_ability_and_details": {
+    "count": 37,
+    "rate": 0.974,
+    "ci95": [
+      0.865,
+      0.995
+    ]
+  },
+  "right_ability": {
+    "count": 37,
+    "rate": 0.974,
+    "ci95": [
+      0.865,
+      0.995
+    ]
+  },
+  "invented_a_figure": 0,
+  "no_figure_requests": 2,
+  "seconds_median": 1.28,
+  "seconds_max": 12.17,
+  "results": [
+    {
+      "case_id": "portfolio_count",
+      "said": "how many accounts do we have",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "portfolio_overview",
+        "show_accounts"
+      ],
+      "tool": "portfolio_overview",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 2.16,
+      "error": null,
+      "arguments": {}
+    },
+    {
+      "case_id": "portfolio_overview",
+      "said": "give me a quick overview of the portfolio",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "portfolio_overview"
+      ],
+      "tool": "portfolio_overview",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 0.94,
+      "error": null,
+      "arguments": {}
+    },
+    {
+      "case_id": "who_overdue",
+      "said": "who is overdue",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "show_accounts"
+      ],
+      "tool": "show_accounts",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 0.94,
+      "error": null,
+      "arguments": {
+        "group": "overdue",
+        "sort": "most_overdue"
+      }
+    },
+    {
+      "case_id": "call_first",
+      "said": "who should i call first today",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "show_accounts"
+      ],
+      "tool": "show_accounts",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.19,
+      "error": null,
+      "arguments": {
+        "group": "overdue",
+        "sort": "most_overdue"
+      }
+    },
+    {
+      "case_id": "overdue_money",
+      "said": "how much money is stuck in overdue emis",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "portfolio_overview",
+        "show_accounts"
+      ],
+      "tool": "portfolio_overview",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.69,
+      "error": null,
+      "arguments": {}
+    },
+    {
+      "case_id": "disputes_open",
+      "said": "any disputes open right now",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "show_accounts",
+        "show_inbox"
+      ],
+      "tool": "show_inbox",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 0.73,
+      "error": null,
+      "arguments": {
+        "kind": "dispute"
+      }
+    },
+    {
+      "case_id": "broken_promises",
+      "said": "which accounts have broken promises",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "show_accounts"
+      ],
+      "tool": "show_accounts",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.08,
+      "error": null,
+      "arguments": {
+        "group": "broken_promises",
+        "sort": "most_overdue"
+      }
+    },
+    {
+      "case_id": "high_risk",
+      "said": "show me the high risk accounts",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "show_accounts"
+      ],
+      "tool": "show_accounts",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.27,
+      "error": null,
+      "arguments": {
+        "group": "all",
+        "sort": "highest_risk"
+      }
+    },
+    {
+      "case_id": "no_telegram",
+      "said": "who isn't on telegram yet",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "show_accounts"
+      ],
+      "tool": "show_accounts",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.12,
+      "error": null,
+      "arguments": {
+        "group": "not_on_telegram",
+        "sort": "most_overdue"
+      }
+    },
+    {
+      "case_id": "find_name",
+      "said": "find sharma",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "account_details",
+        "show_accounts"
+      ],
+      "tool": "show_accounts",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 0.81,
+      "error": null,
+      "arguments": {
+        "group": "all",
+        "sort": "most_overdue",
+        "search": "sharma"
+      }
+    },
+    {
+      "case_id": "inbox",
+      "said": "what's in the inbox",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "show_inbox"
+      ],
+      "tool": "show_inbox",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.17,
+      "error": null,
+      "arguments": {
+        "kind": "any"
+      }
+    },
+    {
+      "case_id": "payment_claims",
+      "said": "any payment claims waiting",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "show_inbox"
+      ],
+      "tool": "show_inbox",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.02,
+      "error": null,
+      "arguments": {
+        "kind": "payment_claim"
+      }
+    },
+    {
+      "case_id": "rate_week",
+      "said": "what's the escalation rate this week",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "escalation_rate"
+      ],
+      "tool": "escalation_rate",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 0.98,
+      "error": null,
+      "arguments": {
+        "window": "7d"
+      }
+    },
+    {
+      "case_id": "rate_month",
+      "said": "escalation rate for the last month",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "escalation_rate"
+      ],
+      "tool": "escalation_rate",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.19,
+      "error": null,
+      "arguments": {
+        "window": "30d"
+      }
+    },
+    {
+      "case_id": "owes",
+      "said": "how much does fatima khan owe",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "account_details"
+      ],
+      "tool": "account_details",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.19,
+      "error": null,
+      "arguments": {
+        "account": "fatima khan",
+        "topic": "dues"
+      }
+    },
+    {
+      "case_id": "last_paid",
+      "said": "when did ravi last pay",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "account_details"
+      ],
+      "tool": "account_details",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 0.95,
+      "error": null,
+      "arguments": {
+        "account": "ravi",
+        "topic": "payments"
+      }
+    },
+    {
+      "case_id": "her_phone",
+      "said": "what's her phone number",
+      "screen": "the profile of Fatima Khan (BF-1003)",
+      "expected_tools": [
+        "account_details"
+      ],
+      "tool": "account_details",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 11.36,
+      "error": null,
+      "arguments": {
+        "account": "BF-1003",
+        "topic": "contact"
+      }
+    },
+    {
+      "case_id": "open_by_id",
+      "said": "open BF 1002",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "account_details"
+      ],
+      "tool": "account_details",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 2.03,
+      "error": null,
+      "arguments": {
+        "account": "BF-1002",
+        "topic": "summary"
+      }
+    },
+    {
+      "case_id": "go_inbox",
+      "said": "take me to the inbox",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "open_page",
+        "show_inbox"
+      ],
+      "tool": "open_page",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.47,
+      "error": null,
+      "arguments": {
+        "page": "inbox"
+      }
+    },
+    {
+      "case_id": "new_account",
+      "said": "i want to open a new account",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "open_page"
+      ],
+      "tool": "open_page",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.36,
+      "error": null,
+      "arguments": {
+        "page": "new_account"
+      }
+    },
+    {
+      "case_id": "help",
+      "said": "what can you do",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "help"
+      ],
+      "tool": "help",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.31,
+      "error": null,
+      "arguments": {}
+    },
+    {
+      "case_id": "weather",
+      "said": "what's the weather in mumbai",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "cannot_help"
+      ],
+      "tool": "cannot_help",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 12.17,
+      "error": null,
+      "arguments": {
+        "reason": "Weather query not supported"
+      }
+    },
+    {
+      "case_id": "reset_key",
+      "said": "reset fatima's access key",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "cannot_help"
+      ],
+      "tool": "cannot_help",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.09,
+      "error": null,
+      "arguments": {
+        "reason": "resetting access keys is not supported"
+      }
+    },
+    {
+      "case_id": "pay_words",
+      "said": "record twelve thousand five hundred from fatima khan paid yesterday",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "record_payment"
+      ],
+      "tool": "record_payment",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.41,
+      "error": null,
+      "arguments": {
+        "account": "fatima khan",
+        "amount": 12500.0,
+        "paid_on": "2026-10-14"
+      }
+    },
+    {
+      "case_id": "pay_full",
+      "said": "she paid the full amount today by upi",
+      "screen": "the profile of Fatima Khan (BF-1003)",
+      "expected_tools": [
+        "record_payment"
+      ],
+      "tool": "confirm_payment_claim",
+      "tool_ok": false,
+      "wrong_args": [
+        "account",
+        "full_amount_due"
+      ],
+      "ok": false,
+      "invented_figure": false,
+      "seconds": 5.25,
+      "error": null,
+      "arguments": {
+        "account": "current",
+        "full_amount_due": true,
+        "note": "We have received your payment in full today. Thank you."
+      }
+    },
+    {
+      "case_id": "pay_no_amount",
+      "said": "record a payment from ravi",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "record_payment"
+      ],
+      "tool": "record_payment",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 3.16,
+      "error": null,
+      "arguments": {
+        "account": "ravi"
+      }
+    },
+    {
+      "case_id": "pay_misheard",
+      "said": "record a payment for fatma kahn of five thousand",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "record_payment"
+      ],
+      "tool": "record_payment",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 9.34,
+      "error": null,
+      "arguments": {
+        "account": "fatma kahn",
+        "amount": 5000.0
+      }
+    },
+    {
+      "case_id": "promise",
+      "said": "log a promise from ravi to pay 8000 by the 25th",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "log_promise"
+      ],
+      "tool": "log_promise",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.41,
+      "error": null,
+      "arguments": {
+        "account": "ravi",
+        "amount": 8000.0,
+        "promised_date": "2026-10-25"
+      }
+    },
+    {
+      "case_id": "call",
+      "said": "called imran no answer",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "log_call"
+      ],
+      "tool": "log_call",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.48,
+      "error": null,
+      "arguments": {
+        "account": "Imran",
+        "outcome": "no_answer"
+      }
+    },
+    {
+      "case_id": "message",
+      "said": "tell fatima we've received her documents",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "message_borrower"
+      ],
+      "tool": "message_borrower",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.23,
+      "error": null,
+      "arguments": {
+        "account": "fatima",
+        "message": "We have received your documents."
+      }
+    },
+    {
+      "case_id": "approve",
+      "said": "approve ravi's request for more time",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "approve_request"
+      ],
+      "tool": "approve_request",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.41,
+      "error": null,
+      "arguments": {
+        "account": "ravi"
+      }
+    },
+    {
+      "case_id": "reject_here",
+      "said": "reject it, the documents don't match",
+      "screen": "the profile of Ravi Kumar (BF-1001)",
+      "expected_tools": [
+        "reject_request"
+      ],
+      "tool": "reject_request",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 0.67,
+      "error": null,
+      "arguments": {
+        "account": "BF-1001",
+        "reason": "the documents don't match"
+      }
+    },
+    {
+      "case_id": "remind_overdue",
+      "said": "send reminders to everyone overdue",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "send_reminders"
+      ],
+      "tool": "send_reminders",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 0.84,
+      "error": null,
+      "arguments": {
+        "group": "overdue"
+      }
+    },
+    {
+      "case_id": "hand_over",
+      "said": "hand asha's account to a person, she sounds distressed",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "hand_to_person"
+      ],
+      "tool": "hand_to_person",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 10.59,
+      "error": null,
+      "arguments": {
+        "account": "asha",
+        "reason": "distressed"
+      }
+    },
+    {
+      "case_id": "new_number",
+      "said": "change her number to 98123 45678",
+      "screen": "the profile of Asha Verma (BF-1002)",
+      "expected_tools": [
+        "update_account"
+      ],
+      "tool": "update_account",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.27,
+      "error": null,
+      "arguments": {
+        "account": "BF-1002",
+        "phone_number": "+919812345678"
+      }
+    },
+    {
+      "case_id": "confirm_claim",
+      "said": "confirm fatima's payment claim, 12500 paid on monday",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "confirm_payment_claim"
+      ],
+      "tool": "confirm_payment_claim",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.28,
+      "error": null,
+      "arguments": {
+        "account": "fatima",
+        "amount": 12500.0,
+        "paid_on": "2026-10-12"
+      }
+    },
+    {
+      "case_id": "close_dispute",
+      "said": "close fatima's dispute, it was a bank error that's now fixed",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "close_case"
+      ],
+      "tool": "close_case",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.44,
+      "error": null,
+      "arguments": {
+        "account": "fatima",
+        "note": "It was a bank error that's now fixed."
+      }
+    },
+    {
+      "case_id": "mark_handled",
+      "said": "mark imran's messages as handled",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "mark_messages_handled"
+      ],
+      "tool": "mark_messages_handled",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 2.31,
+      "error": null,
+      "arguments": {
+        "account": "imran"
+      }
+    }
+  ]
+}

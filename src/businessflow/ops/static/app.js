@@ -264,6 +264,9 @@ function lock(message) {
   state.apiKey = "";
   localStorage.removeItem("bf_ops_key");
   stopAutoRefresh();
+  // A locked dashboard keeps no microphone open and no answer on screen.
+  stopVoiceRecording();
+  closeVoiceReply();
   $shell.hidden = true;
   $unlockScreen.hidden = false;
   $unlockInput.value = "";
@@ -648,6 +651,10 @@ function renderFilterPills() {
     { key: "disputed", label: "Disputed", count: counts.disputed },
     { key: "broken_promises", label: "Broken promises", count: counts.broken_promises },
   ];
+  // Reached only by asking ("who isn't on Telegram?"), so its pill shows only while it is the filter in use.
+  if (state.activeFilter === "not_on_telegram") {
+    pills.push({ key: "not_on_telegram", label: "Not on Telegram", count: state.accounts.filter((a) => !a.telegram_linked).length });
+  }
 
   document.getElementById("filter-pills").innerHTML = pills
     .map(
@@ -695,7 +702,9 @@ function _accountSortComparator() {
 
 function filteredAccounts() {
   let list = state.accounts;
-  if (state.activeFilter !== "all") {
+  if (state.activeFilter === "not_on_telegram") {
+    list = list.filter((a) => !a.telegram_linked);
+  } else if (state.activeFilter !== "all") {
     list = list.filter((a) => a.flags.some((f) => f.label === state.activeFilter));
   }
   if (state.search.trim()) {
@@ -2460,6 +2469,461 @@ function renderDetail(a, documents, conversation = []) {
     }
   });
 }
+
+/* ============================================================
+   Voice -- ask the dashboard, or tell it to do something, by voice
+   or typing (ops/voice.py on the server).
+
+   The server answers with what to say, where the page should go
+   (`screen`), and for an action a confirmation card (`proposal`):
+   the exact request the dashboard's own form for that action sends.
+   Nothing changes until the operator clicks Confirm, and Confirm
+   sends that request through api() like any other button here --
+   the same endpoint, the same checks, the same borrower message.
+
+   Recording is the chat page's method (channels/static/app.js):
+   MediaRecorder, then decoded and re-encoded to WAV here, because
+   the server reads WAV with no codec dependency. Copied rather than
+   shared: the two pages are separate apps with separate static
+   folders.
+   ============================================================ */
+const $voiceForm = document.getElementById("voice-form");
+const $voiceInput = document.getElementById("voice-input");
+const $voiceMic = document.getElementById("voice-mic");
+const $voiceAsk = document.getElementById("voice-ask");
+const $voiceReply = document.getElementById("voice-reply");
+const $voiceListening = document.getElementById("voice-listening");
+const $voiceTimer = document.getElementById("voice-timer");
+const $voiceSound = document.getElementById("voice-sound");
+
+const VOICE_MAX_RECORDING_MS = 30000; // the server's limit for one question
+const VOICE_SOUND_PREF_KEY = "bf_ops_voice_sound"; // on/off only -- no data
+const VOICE_RECORDING_SUPPORTED = !!(
+  navigator.mediaDevices && window.MediaRecorder && (window.AudioContext || window.webkitAudioContext)
+);
+if (!VOICE_RECORDING_SUPPORTED) $voiceMic.hidden = true;
+
+const voice = {
+  busy: false,
+  recorder: null,
+  stream: null,
+  chunks: [],
+  startedAt: 0,
+  timerId: null,
+  autoStopId: null,
+  starting: false,
+  audio: null, // the reply being spoken, if any
+  audioUrl: null,
+  soundOn: true,
+};
+try {
+  voice.soundOn = localStorage.getItem(VOICE_SOUND_PREF_KEY) !== "off";
+} catch (_) {
+  /* storage blocked (private window): the choice is simply not remembered */
+}
+
+function renderVoiceSound() {
+  $voiceSound.setAttribute("aria-pressed", String(voice.soundOn));
+  $voiceSound.title = voice.soundOn ? "Spoken replies on (click to mute)" : "Spoken replies off (click to turn on)";
+  $voiceSound.setAttribute("aria-label", $voiceSound.title);
+}
+renderVoiceSound();
+$voiceSound.addEventListener("click", () => {
+  voice.soundOn = !voice.soundOn;
+  if (!voice.soundOn) stopVoicePlayback();
+  try {
+    localStorage.setItem(VOICE_SOUND_PREF_KEY, voice.soundOn ? "on" : "off");
+  } catch (_) {
+    /* not remembered, see above */
+  }
+  renderVoiceSound();
+});
+
+function voiceScreen() {
+  return { view: state.view, account_id: state.detailAccountId };
+}
+
+function setVoiceBusy(busy) {
+  voice.busy = busy;
+  $voiceAsk.disabled = busy;
+  $voiceMic.disabled = busy;
+  $voiceInput.disabled = busy;
+}
+
+function showVoiceThinking(text) {
+  $voiceReply.hidden = false;
+  $voiceReply.innerHTML = `<div class="voice-thinking"><div class="spinner"></div><span>${escapeHtml(text)}</span></div>`;
+}
+
+function closeVoiceReply() {
+  stopVoicePlayback();
+  $voiceReply.hidden = true;
+  $voiceReply.innerHTML = "";
+}
+
+// --- asking ---
+async function voiceRequest(path, payload, thinking) {
+  if (voice.busy) return;
+  stopVoicePlayback();
+  setVoiceBusy(true);
+  showVoiceThinking(thinking);
+  try {
+    const reply = await api(path, payload);
+    renderVoiceReply(reply);
+    applyVoiceScreen(reply.screen);
+    speakVoiceReply(reply.say);
+  } catch (err) {
+    renderVoiceError(err);
+  } finally {
+    setVoiceBusy(false);
+  }
+}
+
+function askVoiceText(text) {
+  return voiceRequest(
+    "/voice/ask-text",
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, screen: voiceScreen() }) },
+    "Thinking…",
+  );
+}
+
+function askVoiceRecording(wavBlob) {
+  const form = new FormData();
+  form.append("audio", wavBlob, "question.wav");
+  form.append("screen", JSON.stringify(voiceScreen()));
+  return voiceRequest("/voice/ask", { method: "POST", body: form }, "Listening back…");
+}
+
+function runVoiceChoice(choice, heard) {
+  return voiceRequest(
+    "/voice/plan",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool: choice.tool, arguments: choice.arguments, heard: heard || "", screen: voiceScreen() }),
+    },
+    "Checking…",
+  );
+}
+
+$voiceForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const text = $voiceInput.value.trim();
+  if (!text || voice.busy) return;
+  $voiceInput.value = "";
+  askVoiceText(text);
+});
+
+// --- where the page goes ---
+function applyVoiceScreen(screen) {
+  if (!screen) return;
+  if (screen.open_form === "new_account") {
+    if (state.detailAccountId) closeDetail();
+    openNewAccountModal();
+    return;
+  }
+  if (screen.account_id) {
+    const tab = screen.tab || "overview";
+    if (state.detailAccountId === screen.account_id && !$detailPanel.hidden) {
+      state.detailTab = tab;
+      applyDetailTab();
+    } else {
+      openDetail(screen.account_id, { tab });
+    }
+    return;
+  }
+  const changesList = screen.view || screen.filter || screen.sort || screen.search !== null || screen.since_hours;
+  if (changesList && state.detailAccountId) closeDetail();
+  if (screen.view) setView(screen.view);
+  if (screen.filter) state.activeFilter = screen.filter;
+  if (screen.sort) {
+    state.sortBy = screen.sort;
+    document.getElementById("sort-select").value = screen.sort;
+  }
+  if (screen.search !== null && screen.search !== undefined) {
+    state.search = screen.search;
+    document.getElementById("search-input").value = screen.search;
+  }
+  if (screen.filter || screen.sort || screen.search !== null) {
+    renderFilterPills();
+    renderAccountGrid();
+  }
+  if (screen.since_hours && screen.since_hours !== state.sinceHours) {
+    state.sinceHours = screen.since_hours;
+    getMetrics(state.sinceHours)
+      .then((metrics) => {
+        state.metrics = metrics;
+        renderKpis();
+      })
+      .catch((err) => toast(err.message, true));
+  }
+}
+
+// --- the reply card ---
+function voiceHeardHtml(reply) {
+  return reply.heard ? `<p class="voice-heard">Heard: <q>${escapeHtml(reply.heard)}</q></p>` : `<p class="voice-heard"></p>`;
+}
+
+function renderVoiceReply(reply) {
+  $voiceReply.hidden = false;
+  const choices = (reply.choices || [])
+    .map((c, i) => `<button type="button" class="btn btn-secondary" data-voice-choice="${i}">${escapeHtml(c.label)}</button>`)
+    .join("");
+  $voiceReply.innerHTML = `
+    <div class="voice-reply-top">${voiceHeardHtml(reply)}${DETAIL_CLOSE_HTML.replace('class="detail-close"', 'class="detail-close voice-reply-close"')}</div>
+    <p class="voice-say ${reply.kind === "clarify" ? "clarify" : ""}">${escapeHtml(reply.say)}</p>
+    ${choices ? `<div class="voice-choices">${choices}</div>` : ""}
+    ${reply.proposal ? voiceProposalHtml(reply.proposal) : ""}`;
+  $voiceReply.querySelector(".voice-reply-close").addEventListener("click", closeVoiceReply);
+  $voiceReply.querySelectorAll("[data-voice-choice]").forEach((btn) =>
+    btn.addEventListener("click", () => runVoiceChoice(reply.choices[Number(btn.dataset.voiceChoice)], reply.heard)),
+  );
+  if (reply.proposal) wireVoiceProposal(reply.proposal);
+}
+
+function renderVoiceError(err) {
+  $voiceReply.hidden = false;
+  const message = err instanceof ApiError ? err.message : "Couldn't reach the dashboard -- check your connection and try again.";
+  $voiceReply.innerHTML = `
+    <div class="voice-reply-top"><p class="voice-heard"></p>${DETAIL_CLOSE_HTML.replace('class="detail-close"', 'class="detail-close voice-reply-close"')}</div>
+    <p class="voice-error">${escapeHtml(message)}</p>`;
+  $voiceReply.querySelector(".voice-reply-close").addEventListener("click", closeVoiceReply);
+}
+
+function voiceProposalHtml(p) {
+  const details = p.details.map((d) => `<dt>${escapeHtml(d.label)}</dt><dd>${escapeHtml(d.value)}</dd>`).join("");
+  const warnings = (p.warnings || []).map((w) => `<p class="voice-warning">${escapeHtml(w)}</p>`).join("");
+  const told = p.borrower_told
+    ? `<div class="voice-told"><b>The borrower will be sent</b><span data-voice-told>${escapeHtml(p.borrower_told)}</span></div>`
+    : "";
+  const editValue = p.editable && p.body ? p.body[p.editable] || "" : "";
+  const edit = p.editable
+    ? `<label class="voice-edit">${escapeHtml(p.editable_label || "Text")}<textarea rows="3" data-voice-edit>${escapeHtml(editValue)}</textarea></label>`
+    : "";
+  const credit = p.credit_choice
+    ? `<div class="voice-credit" role="radiogroup" aria-label="Credit the shortfall">
+         <p>This is less than what's due this cycle. Apply it toward the next EMI?</p>
+         <label><input type="radio" name="voice-credit" value="true" /> Yes, credit it</label>
+         <label><input type="radio" name="voice-credit" value="false" /> No, just record it</label>
+       </div>`
+    : "";
+  return `
+    <div class="voice-card">
+      <p class="voice-card-title">${escapeHtml(p.title)}</p>
+      <dl class="voice-details">${details}</dl>
+      ${warnings}${told}${edit}${credit}
+      <p class="voice-error" data-voice-error hidden></p>
+      <div class="voice-actions">
+        <button type="button" class="btn btn-primary" data-voice-confirm>Confirm</button>
+        <button type="button" class="btn btn-secondary" data-voice-cancel>Cancel</button>
+      </div>
+    </div>`;
+}
+
+function wireVoiceProposal(p) {
+  const card = $voiceReply.querySelector(".voice-card");
+  const confirmBtn = card.querySelector("[data-voice-confirm]");
+  const editEl = card.querySelector("[data-voice-edit]");
+  const errorEl = card.querySelector("[data-voice-error]");
+  const creditChosen = () => card.querySelector('input[name="voice-credit"]:checked');
+  // Confirm is only clickable once the card is complete: a required message isn't blank, and a short payment says
+  // whether to credit it.
+  // When the text being edited IS what the borrower is sent (a message, a reply), the preview follows the edit.
+  const toldEl = p.borrower_told && p.body && p.borrower_told === p.body[p.editable] ? card.querySelector("[data-voice-told]") : null;
+  const refresh = () => {
+    confirmBtn.disabled = (p.editable_required && editEl && !editEl.value.trim()) || (p.credit_choice && !creditChosen());
+    if (toldEl) toldEl.textContent = editEl.value;
+  };
+  editEl?.addEventListener("input", refresh);
+  card.querySelectorAll('input[name="voice-credit"]').forEach((r) => r.addEventListener("change", refresh));
+  refresh();
+
+  card.querySelector("[data-voice-cancel]").addEventListener("click", () => {
+    stopVoicePlayback();
+    card.innerHTML = `<p class="voice-note">Cancelled -- nothing was changed.</p>`;
+  });
+
+  confirmBtn.addEventListener("click", async () => {
+    const body = p.body ? { ...p.body } : null;
+    if (editEl && body) body[p.editable] = editEl.value.trim() || null;
+    if (p.credit_choice && body) body.apply_extra_to_next = creditChosen().value === "true";
+    confirmBtn.disabled = true;
+    errorEl.hidden = true;
+    stopVoicePlayback();
+    try {
+      const result = await api(p.path, {
+        method: p.method,
+        ...(body ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}),
+      });
+      const done = voiceDoneText(p, result);
+      card.innerHTML = `<p class="voice-done">${escapeHtml(done)}</p>`;
+      toast(done);
+      speakVoiceReply("Done.");
+      if (state.detailAccountId) {
+        const [fresh, freshDocuments, freshConversation] = await _loadDetailData(state.detailAccountId);
+        renderDetail(fresh, freshDocuments, freshConversation);
+      }
+      await loadAll();
+    } catch (err) {
+      // e.g. a 409: a colleague closed it first, or a payment looks like a duplicate -- the server's own words.
+      errorEl.textContent = err instanceof ApiError ? err.message : "Couldn't reach the dashboard -- nothing was changed.";
+      errorEl.hidden = false;
+      confirmBtn.disabled = false;
+    }
+  });
+}
+
+function voiceDoneText(p, result) {
+  if (result && typeof result.borrower_notified === "boolean") return `Done: ${p.title} -- ${notifiedText(result.borrower_notified)}.`;
+  if (result && typeof result.delivered_via_telegram === "boolean") return `Done: ${p.title} -- ${notifiedText(result.delivered_via_telegram)}.`;
+  if (result && Array.isArray(result.sent_to)) return `Done: sent to ${result.sent_to.length}, ${result.delivered_via_telegram.length} over Telegram.`;
+  if (result && Array.isArray(result.reminders_sent)) return `Done: ${result.reminders_sent.length} reminder${result.reminders_sent.length === 1 ? "" : "s"} sent.`;
+  return `Done: ${p.title}.`;
+}
+
+// --- spoken replies ---
+function stopVoicePlayback() {
+  if (voice.audio) voice.audio.pause();
+  if (voice.audioUrl) URL.revokeObjectURL(voice.audioUrl);
+  voice.audio = null;
+  voice.audioUrl = null;
+}
+
+async function speakVoiceReply(text) {
+  if (!voice.soundOn || !text) return;
+  stopVoicePlayback();
+  try {
+    const res = await fetch("/voice/speak", {
+      method: "POST",
+      headers: { "X-API-Key": state.apiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ text: text.slice(0, 400) }),
+    });
+    if (!res.ok) throw new Error(`speak failed (${res.status})`);
+    const url = URL.createObjectURL(await res.blob());
+    voice.audioUrl = url;
+    voice.audio = new Audio(url);
+    voice.audio.addEventListener("ended", stopVoicePlayback);
+    await voice.audio.play();
+  } catch (err) {
+    // The answer is already on screen; only its sound is missing. Said in the card, never a blocking error.
+    console.warn("ops voice: the spoken reply could not be played", err);
+    if (!$voiceReply.hidden && !$voiceReply.querySelector("[data-voice-silent]")) {
+      $voiceReply.insertAdjacentHTML("beforeend", `<p class="voice-note" data-voice-silent>Spoken reply unavailable right now -- the answer is above.</p>`);
+    }
+  }
+}
+
+// --- recording ---
+function audioBufferToWav(buffer) {
+  // channels/static/app.js's audioBufferToWav: mono, 16-bit PCM WAV.
+  const left = buffer.getChannelData(0);
+  let samples = left;
+  if (buffer.numberOfChannels > 1) {
+    const right = buffer.getChannelData(1);
+    samples = new Float32Array(left.length);
+    for (let i = 0; i < left.length; i++) samples[i] = (left[i] + right[i]) / 2;
+  }
+  const dataSize = samples.length * 2;
+  const view = new DataView(new ArrayBuffer(44 + dataSize));
+  const writeStr = (offset, str) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, buffer.sampleRate, true);
+  view.setUint32(28, buffer.sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, "data");
+  view.setUint32(40, dataSize, true);
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new Blob([view.buffer], { type: "audio/wav" });
+}
+
+function setVoiceRecordingUi(recording) {
+  $voiceMic.classList.toggle("recording", recording);
+  $voiceMic.title = recording ? "Stop and ask" : "Ask by voice (tap again to stop)";
+  $voiceMic.setAttribute("aria-label", recording ? "Stop recording and ask" : "Ask by voice");
+  $voiceListening.hidden = !recording;
+  $voiceInput.hidden = recording;
+  $voiceAsk.hidden = recording;
+}
+
+// A fast double-tap must not start two recordings (the chat page found that live): guarded until getUserMedia settles.
+async function startVoiceRecording() {
+  if (voice.busy || voice.starting) return;
+  voice.starting = true;
+  try {
+    voice.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
+  } catch (err) {
+    renderVoiceError(new ApiError(0, "Couldn't use the microphone -- allow microphone access for this site, or type the question."));
+    return;
+  } finally {
+    voice.starting = false;
+  }
+  stopVoicePlayback();
+  voice.chunks = [];
+  voice.recorder = new MediaRecorder(voice.stream);
+  voice.recorder.addEventListener("dataavailable", (e) => {
+    if (e.data.size > 0) voice.chunks.push(e.data);
+  });
+  voice.recorder.addEventListener("stop", onVoiceRecordingStopped);
+  voice.recorder.start();
+  voice.startedAt = Date.now();
+  $voiceTimer.textContent = "0:00";
+  voice.timerId = setInterval(() => {
+    const seconds = Math.floor((Date.now() - voice.startedAt) / 1000);
+    $voiceTimer.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  }, 250);
+  voice.autoStopId = setTimeout(stopVoiceRecording, VOICE_MAX_RECORDING_MS);
+  setVoiceRecordingUi(true);
+}
+
+// Safe to call when nothing is recording (lock() and closing the page call it unconditionally).
+function stopVoiceRecording() {
+  if (voice.recorder && voice.recorder.state !== "inactive") voice.recorder.stop();
+  clearInterval(voice.timerId);
+  clearTimeout(voice.autoStopId);
+  voice.stream?.getTracks().forEach((t) => t.stop());
+  voice.stream = null;
+  setVoiceRecordingUi(false);
+}
+
+async function onVoiceRecordingStopped() {
+  const blob = new Blob(voice.chunks, { type: voice.recorder.mimeType || "audio/webm" });
+  const durationMs = Date.now() - voice.startedAt;
+  voice.chunks = [];
+  if (blob.size === 0 || durationMs < 400) return; // an accidental tap, not a question
+  let audioCtx;
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const wav = audioBufferToWav(await audioCtx.decodeAudioData(await blob.arrayBuffer()));
+    await askVoiceRecording(wav);
+  } catch (err) {
+    renderVoiceError(new ApiError(0, "Couldn't process that recording -- please try again, or type the question."));
+  } finally {
+    audioCtx?.close();
+  }
+}
+
+if (VOICE_RECORDING_SUPPORTED) {
+  $voiceMic.addEventListener("click", () => {
+    if (voice.recorder && voice.recorder.state === "recording") stopVoiceRecording();
+    else startVoiceRecording();
+  });
+}
+window.addEventListener("pagehide", () => {
+  stopVoiceRecording();
+  stopVoicePlayback();
+});
 
 /* ============================================================
    Boot / refresh

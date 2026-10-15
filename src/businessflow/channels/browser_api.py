@@ -37,8 +37,10 @@ share state or a port.
 """
 
 import asyncio
+import hmac
 import io
 import logging
+import os
 import threading
 import uuid
 from contextlib import asynccontextmanager
@@ -694,7 +696,9 @@ def send_message_endpoint(request: Request, conversation_id: str, req: SendMessa
     return _process_text_turn(conversation_id, session, req.message, client_ip)
 
 
-def _decode_and_transcribe_voice(raw_bytes: bytes, language: str | None) -> str | None:
+def _decode_and_transcribe_voice(
+    raw_bytes: bytes, language: str | None, max_seconds: float = _MAX_VOICE_NOTE_SECONDS,
+) -> str | None:
     """Same decode/resample/VAD/transcribe pipeline as telegram_bot.py's
     _decode_and_transcribe_voice_note (see that function's docstring for
     the full reasoning) -- duplicated rather than imported across channel
@@ -704,14 +708,14 @@ def _decode_and_transcribe_voice(raw_bytes: bytes, language: str | None) -> str 
     container from the bytes themselves, so this handles the WAV this
     channel actually uploads (see send_voice_message_endpoint) exactly as
     it would OGG/Opus. Returns None if VAD found no speech, or if the
-    decoded audio exceeds _MAX_VOICE_NOTE_SECONDS -- callers must not feed
-    either case to ASR."""
+    decoded audio exceeds max_seconds -- callers must not feed either case
+    to ASR."""
     data, sr = sf.read(io.BytesIO(raw_bytes), dtype="float32", always_2d=False)
     if data.ndim > 1:
         data = data.mean(axis=1)  # collapse to mono, same convention as audio/io.py
 
     actual_duration_seconds = len(data) / sr
-    if actual_duration_seconds > _MAX_VOICE_NOTE_SECONDS:
+    if actual_duration_seconds > max_seconds:
         return None
 
     audio_tensor = torch.from_numpy(data)
@@ -842,6 +846,80 @@ def speech_text_endpoint(conversation_id: str, req: SpeechTextRequest):
         raise HTTPException(status_code=400, detail="text must not be empty")
     language = session["language"]
     return SpeechTextResponse(text=verbalize(req.text, language), language=language)
+
+
+# --- Speech for the ops dashboard ---------------------------------------------------------------------------------
+# The ops dashboard (ops/api.py, a separate service on the same VM) answers spoken questions, and it borrows this
+# process's speech models instead of loading its own: on a 3.8 GB VM with an OOM history, a second Whisper costs about
+# 125 MB (measured: +106 MB at load, +19 MB on first use) and a second Piper voice about 140 MB, while this process
+# already loads both, for borrowers' voice messages and speaker taps. The ops service sends its audio and text here
+# over the loopback interface (ops/speech_client.py).
+#
+# Not for the internet. Both gates must pass: the ops key (OPS_API_KEY, the one secret that gates the whole ops API), and
+# no X-Forwarded-For header. Caddy adds that header to every request it proxies and a client cannot take it off, so a
+# request that came in through the public site is refused before its key is even looked at -- which is also why there
+# is no brute-force limiter here: nothing outside this machine reaches the key check. The ops service calls
+# 127.0.0.1 directly, not through Caddy, so its requests never carry one.
+_OPS_VOICE_MAX_SECONDS = 30  # a question to a dashboard, not a voice note: 30 s bounds the ASR work one request can ask for
+_OPS_VOICE_MAX_UPLOAD_BYTES = 4 * 1024 * 1024  # 30 s of 16-bit mono WAV at 48 kHz is ~2.9 MB
+_OPS_SPEECH_MAX_CHARS = 400
+
+
+def _require_ops_voice_caller(request: Request) -> None:
+    if "x-forwarded-for" in request.headers:
+        raise HTTPException(status_code=403, detail="internal endpoint -- not reachable through the public site")
+    expected_key = os.environ.get("OPS_API_KEY")
+    if not expected_key:
+        raise RuntimeError("OPS_API_KEY is not set -- copy .env.example to .env and fill it in")
+    if not hmac.compare_digest(request.headers.get("x-api-key", ""), expected_key):
+        raise HTTPException(status_code=401, detail="invalid or missing X-API-Key header")
+
+
+class OpsTranscriptOut(BaseModel):
+    # None: no speech in the recording, or it ran past _OPS_VOICE_MAX_SECONDS (the same None the borrower path gets)
+    transcript: str | None
+
+
+@app.post("/internal/ops-voice/transcribe", response_model=OpsTranscriptOut, include_in_schema=False)
+async def ops_voice_transcribe_endpoint(request: Request):
+    """Speech to text for one spoken question to the ops dashboard: the request body is the WAV itself (the ops page
+    converts its recording the same way the chat page does, see static/app.js's audioBufferToWav). English: v1 of ops
+    voice takes questions in English only. The decode and Whisper run off the event loop, like every other blocking
+    call in this process."""
+    _require_ops_voice_caller(request)
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > _OPS_VOICE_MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="recording too large")
+    try:
+        transcript = await asyncio.to_thread(
+            _decode_and_transcribe_voice, bytes(raw), "en", max_seconds=_OPS_VOICE_MAX_SECONDS,
+        )
+    except sf.LibsndfileError as e:
+        raise HTTPException(status_code=400, detail="couldn't read that recording as audio") from e
+    return OpsTranscriptOut(transcript=transcript.strip() if transcript and transcript.strip() else None)
+
+
+class OpsSpeechRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=_OPS_SPEECH_MAX_CHARS)
+
+
+@app.post("/internal/ops-voice/speak", include_in_schema=False)
+def ops_voice_speak_endpoint(request: Request, req: OpsSpeechRequest):
+    """The ops dashboard's spoken answer: the same verbalize -> Piper (English) -> Opus steps as /speech above, so a
+    rupee amount or an account ID is said the way it is for a borrower."""
+    _require_ops_voice_caller(request)
+    if not req.text.strip():
+        raise HTTPException(status_code=400, detail="text must not be empty")
+    try:
+        audio_bytes = encode_ogg_opus(speak_english(verbalize(req.text, "en")))
+    except Exception as e:
+        # Same deliberately broad catch as speech_endpoint above, for the same reason (VAD/TTS/encoding fail in many
+        # ways that all mean the same thing to the caller), and logged with the stack so the cause is never lost.
+        logger.warning("ops voice: TTS synthesis failed (%d chars): %s", len(req.text), e, exc_info=True)
+        raise HTTPException(status_code=502, detail="text-to-speech is temporarily unavailable") from e
+    return Response(content=audio_bytes, media_type="audio/ogg")
 
 
 class AbilityOut(BaseModel):

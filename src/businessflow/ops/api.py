@@ -20,19 +20,21 @@ import logging
 import os
 import re
 import shutil
+import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 
+import groq
 import psycopg
 from docling.exceptions import ConversionError
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Security, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from businessflow.accounts import cases, store
 from businessflow.accounts.db import check_database, get_connection
@@ -54,6 +56,7 @@ from businessflow.accounts.escalation_kinds import (
 from businessflow.accounts.models import Account
 from businessflow.channels.credentials import build_telegram_start_payload
 from businessflow.observability import metrics
+from businessflow.ops import speech_client, voice, voice_reply
 from businessflow.ops.flags import Flag, compute_flags
 from businessflow.outbound import send as notify
 from businessflow.outbound.compose import draft_clarification_message
@@ -1282,16 +1285,23 @@ async def resolve_account_dispute(account_id: str, body: ResolveDisputeIn | None
     # Tell the borrower. Resolving used to be silent: the freeze lifted and the
     # banner vanished, but nothing said how it ended. Delivered over Telegram
     # when linked, and always shown in that case's thread on their dashboard.
-    if result["kind"] == cases.PAYMENT_CLAIM:
-        # Neutral: closing a claim without recording a payment can mean "not found" or "already recorded" (found
-        # live: a claim filed for a payment that had landed minutes earlier). The note says which.
-        message = f"Update on the payment you reported: our team has checked it and closed it. Note from our team: {resolution_note}"
-    else:
-        message = "Update on your dispute: our team has reviewed it and closed it."
-        if resolution_note:
-            message += f" Note from our team: {resolution_note}"
+    message = _case_closed_message(result["kind"], resolution_note)
     notified = await notify.notify_dispute_resolved(account_id, message, case_ref=cases.dispute_case_ref(result["dispute_id"]))
     return ResolveDisputeOut(**result, borrower_notified=notified)
+
+
+def _case_closed_message(kind: str, resolution_note: str | None) -> str:
+    """What the borrower is sent when ops closes their dispute or payment claim (also shown, ahead, on a voice
+    confirmation card -- ops/voice_reply.py)."""
+    if kind == cases.PAYMENT_CLAIM:
+        # Neutral: closing a claim without recording a payment can mean "not found" or "already recorded" (found
+        # live: a claim filed for a payment that had landed minutes earlier). The note says which.
+        message = "Update on the payment you reported: our team has checked it and closed it."
+    else:
+        message = "Update on your dispute: our team has reviewed it and closed it."
+    if resolution_note:
+        message += f" Note from our team: {resolution_note}"
+    return message
 
 
 @app.post("/accounts/{account_id}/promises", response_model=LogPromiseOut, dependencies=[Depends(require_api_key)])
@@ -1435,12 +1445,18 @@ async def confirm_payment_claim(account_id: str, case_ref: str, body: ConfirmPay
         }) from e
     payment = result["payment"]
     store.log_event(account_id, "tool_called", {"tool": "confirm_payment_claim", "arguments": {"case_ref": case_ref, **body.model_dump(mode="json")}, "result": result})
-    paid_on = date.fromisoformat(payment["payment_date"]).strftime("%d %b %Y")
-    message = f"Good news: we've found your payment of ₹{payment['amount']:,.2f} from {paid_on} and recorded it on your account."
-    if note:
-        message += f" Note from our team: {note}"
+    message = _claim_confirmed_message(payment["amount"], date.fromisoformat(payment["payment_date"]), note)
     notified = await notify.notify_dispute_resolved(account_id, message, case_ref=case_ref)
     return ConfirmPaymentOut(case_ref=case_ref, payment=RecordPaymentOut(**payment), borrower_notified=notified)
+
+
+def _claim_confirmed_message(amount: float, paid_on: date, note: str | None) -> str:
+    """What the borrower is sent when ops confirms their payment claim (also shown, ahead, on a voice confirmation
+    card -- ops/voice_reply.py)."""
+    message = f"Good news: we've found your payment of ₹{amount:,.2f} from {paid_on:%d %b %Y} and recorded it on your account."
+    if note:
+        message += f" Note from our team: {note}"
+    return message
 
 
 def _escalation_out(escalation, borrower_notified: bool | None = None) -> EscalationOut:
@@ -1576,6 +1592,198 @@ def get_metrics(since_hours: float = 24.0):
         event_counts=metrics.event_counts_since(since),
         escalation_rate=metrics.escalation_rate(since),
     )
+
+
+# --- Voice -----------------------------------------------------------------------------------------------------------
+# Ask the dashboard a question, or tell it to do something, by voice or typing: ops/voice.py works out what was meant
+# (one language-model call choosing from a fixed menu), ops/voice_reply.py answers from the data below or builds a
+# confirmation card. No endpoint in this section writes anything: an action happens only when the operator clicks
+# Confirm on its card, which calls the ordinary endpoint above that the dashboard's own form for it uses.
+#
+# Speech goes through the chat service's Whisper and Piper (ops/speech_client.py), never loaded in this process.
+
+# Each question is a model call plus database reads, and each recording is Whisper time on a 2-vCPU VM the borrowers'
+# voice messages share -- and the ops key is a single shared secret -- so both are capped per client.
+_voice_limiter = RateLimiter(max_requests=12, window_seconds=60)
+_speech_limiter = RateLimiter(max_requests=30, window_seconds=60)
+_MAX_VOICE_UPLOAD_BYTES = 4 * 1024 * 1024  # channels/browser_api.py's _OPS_VOICE_MAX_UPLOAD_BYTES: 30 s of WAV fits
+
+
+class VoiceScreenIn(BaseModel):
+    """What the operator is looking at, so "this account" and "her" mean the profile that is open."""
+
+    view: Literal["overview", "inbox"] = "overview"
+    account_id: str | None = Field(default=None, max_length=40)
+
+
+class VoiceAskTextIn(BaseModel):
+    text: str = Field(min_length=1, max_length=voice.MAX_REQUEST_CHARS)
+    screen: VoiceScreenIn = VoiceScreenIn()
+
+
+class VoicePlanIn(BaseModel):
+    """A plan the page already has -- one of the "did you mean" choices of an earlier reply -- run without the model."""
+
+    tool: str
+    arguments: dict = {}
+    heard: str = Field(default="", max_length=voice.MAX_REQUEST_CHARS)
+    screen: VoiceScreenIn = VoiceScreenIn()
+
+
+class VoiceSpeakIn(BaseModel):
+    text: str = Field(min_length=1, max_length=400)
+
+
+class _VoiceData:
+    """ops/voice_reply.py's DashboardData, served by this module's own endpoint functions -- the same data, the same
+    shape, the dashboard draws its cards from. Remembers what it read for the length of one request."""
+
+    def __init__(self):
+        self._accounts: list[dict] | None = None
+        self._details: dict[str, dict | None] = {}
+
+    def accounts(self) -> list[dict]:
+        if self._accounts is None:
+            self._accounts = [a.model_dump() for a in list_accounts()]
+        return self._accounts
+
+    def account(self, account_id: str) -> dict | None:
+        if account_id not in self._details:
+            try:
+                self._details[account_id] = get_account(account_id).model_dump()
+            except HTTPException as e:
+                if e.status_code != 404:
+                    raise
+                self._details[account_id] = None
+        return self._details[account_id]
+
+    def inbox(self) -> list[dict]:
+        return [c.model_dump() for c in get_inbox()]
+
+    def metrics(self, since_hours: float) -> dict:
+        return get_metrics(since_hours).model_dump()
+
+    def documents(self, account_id: str) -> list[dict]:
+        return [d.model_dump() for d in list_account_documents(account_id)]
+
+    def conversation(self, account_id: str) -> list[dict]:
+        return [e.model_dump() for e in get_account_conversation(account_id)]
+
+    def decision_message(self, case: dict, account: dict, approved: bool, reason: str | None) -> str | None:
+        if approved:
+            # The restructuring terms the approval applies are the proposal's own (store.approve_restructuring).
+            return _approval_message(case["kind"], case.get("proposed_changes") or {}, store.get_account(account["account_id"]))
+        return _rejection_message(case["kind"], reason)
+
+    def claim_confirmed_message(self, amount: float, paid_on: date, note: str | None) -> str:
+        return _claim_confirmed_message(amount, paid_on, note)
+
+    def case_closed_message(self, kind: str, note: str | None) -> str:
+        return _case_closed_message(kind, note)
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _check_voice_limit(limiter: RateLimiter, request: Request) -> None:
+    if not limiter.check(_client_ip(request)):
+        raise HTTPException(status_code=429, detail="Too many voice requests in a minute -- wait a moment and try again.")
+
+
+def _describe_screen(screen: VoiceScreenIn) -> str:
+    if screen.account_id:
+        name = store.borrower_names([screen.account_id]).get(screen.account_id)
+        if name:
+            return f"the profile of {name} ({screen.account_id})"
+    return "the Inbox" if screen.view == "inbox" else "the Portfolio"
+
+
+def _voice_answer(text: str, screen: VoiceScreenIn, source: str) -> voice_reply.VoiceReplyOut:
+    """Understand text (a transcript or a typed request) and answer it. Logs the ability chosen and the time taken --
+    never the words, which name borrowers."""
+    started = time.monotonic()
+    try:
+        plan = voice.understand(text, store.current_date(), _describe_screen(screen))
+    except voice.NotUnderstood as e:
+        logger.warning("ops voice: model's choice unusable (%s) -- a steady stream of these means the menu or prompt needs work", e)
+        return voice_reply.VoiceReplyOut(
+            heard=text, kind="clarify", say="Sorry, I didn't understand that. Ask “what can you do?” to hear what I can.",
+        )
+    except groq.RateLimitError as e:
+        logger.error("ops voice: every Groq key is rate-limited for the voice model -- voice is down until a bucket refills")
+        raise HTTPException(
+            status_code=503, detail="Voice is out of its AI allowance for now -- use the dashboard's buttons, or try again later.",
+        ) from e
+    except (groq.APIConnectionError, groq.APIStatusError) as e:
+        logger.error("ops voice: Groq call failed (%s)", type(e).__name__)
+        raise HTTPException(status_code=502, detail="Couldn't reach the AI service -- try again in a moment.") from e
+    understood = time.monotonic()
+    reply = voice_reply.respond(plan, text, _VoiceData(), screen.account_id, store.current_date())
+    logger.info(
+        "ops voice: source=%s ability=%s reply=%s model_ms=%d total_ms=%d",
+        source, plan.tool, reply.kind, (understood - started) * 1000, (time.monotonic() - started) * 1000,
+    )
+    return reply
+
+
+@app.post("/voice/ask", response_model=voice_reply.VoiceReplyOut, dependencies=[Depends(require_api_key)])
+def voice_ask(request: Request, audio: UploadFile = File(...), screen: str = Form("{}")):
+    """A spoken request: the page's recording, as WAV (converted in the browser, like the chat page's), plus what is on
+    screen (JSON). Transcribed by the chat service, then answered like a typed one."""
+    _check_voice_limit(_voice_limiter, request)
+    try:
+        screen_in = VoiceScreenIn.model_validate_json(screen)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="screen must be a JSON object like {\"view\": \"overview\"}") from e
+    raw = audio.file.read(_MAX_VOICE_UPLOAD_BYTES + 1)
+    if len(raw) > _MAX_VOICE_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Recording too long -- keep a question under 30 seconds.")
+    started = time.monotonic()
+    try:
+        transcript = speech_client.transcribe(raw)
+    except speech_client.UnreadableRecording as e:
+        raise HTTPException(status_code=400, detail="Couldn't read that recording -- please try again.") from e
+    except speech_client.SpeechServiceUnavailable as e:
+        raise HTTPException(status_code=503, detail="Voice is unavailable right now (the speech service isn't answering). Typing still works.") from e
+    logger.info("ops voice: transcribed %d bytes in %d ms", len(raw), (time.monotonic() - started) * 1000)
+    if not transcript:
+        return voice_reply.VoiceReplyOut(
+            kind="clarify", say="I didn't hear anything. Hold the mic closer and keep the question under 30 seconds.",
+        )
+    return _voice_answer(transcript, screen_in, "voice")
+
+
+@app.post("/voice/ask-text", response_model=voice_reply.VoiceReplyOut, dependencies=[Depends(require_api_key)])
+def voice_ask_text(request: Request, body: VoiceAskTextIn):
+    """The same as /voice/ask for a typed request -- for when speaking isn't possible."""
+    _check_voice_limit(_voice_limiter, request)
+    if not body.text.strip():
+        raise HTTPException(status_code=400, detail="text must not be empty")
+    return _voice_answer(body.text.strip(), body.screen, "text")
+
+
+@app.post("/voice/plan", response_model=voice_reply.VoiceReplyOut, dependencies=[Depends(require_api_key)])
+def voice_plan(request: Request, body: VoicePlanIn):
+    """Runs a plan the page sends back (a "did you mean" choice), checked against the same menu as the model's own
+    choices. heard is the original request, which a figure on a resulting card must still be found in."""
+    _check_voice_limit(_voice_limiter, request)
+    try:
+        plan = voice.parse_plan(body.tool, body.arguments)
+    except voice.NotUnderstood as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return voice_reply.respond(plan, body.heard, _VoiceData(), body.screen.account_id, store.current_date())
+
+
+@app.post("/voice/speak", dependencies=[Depends(require_api_key)])
+def voice_speak(request: Request, body: VoiceSpeakIn):
+    """A reply, spoken: OGG/Opus from the chat service's Piper voice."""
+    _check_voice_limit(_speech_limiter, request)
+    try:
+        audio_bytes = speech_client.speak(body.text)
+    except (speech_client.SpeechServiceUnavailable, speech_client.UnreadableRecording) as e:
+        raise HTTPException(status_code=503, detail="Spoken replies are unavailable right now; the text is on screen.") from e
+    return Response(content=audio_bytes, media_type="audio/ogg")
 
 
 @app.get("/", include_in_schema=False)
