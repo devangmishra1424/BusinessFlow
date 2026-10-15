@@ -420,11 +420,14 @@ worse than one that lists them:
   Speech runs on the VM: the ops service sends the recording to the chat service over loopback (`ops/speech_client.py`),
   which already holds Whisper and Piper, instead of loading a second copy (+125 MB for Whisper, measured; +138 MB for
   Piper); that internal endpoint needs the ops key and refuses anything that came through the public proxy (checked live:
-  403). Replies are in English; no spoken "yes" -- Confirm is a click. Picking the ability, with the real model
-  (`python -m eval.ops_voice_benchmark`): 37 of 38 single requests (95% interval 87-100%; measured before the workflow
-  abilities were added to the menu, not yet re-run) and 16 of 16 workflow, in-run and Hindi requests (81-100%), no
-  figure invented, median 1.3-1.4 s, about 2,800 tokens a request with the 26-ability menu (measured: 2,796 in, 28 out;
-  roughly 70 a day on a free-tier allowance of 200k). The same sentence can get a different reading on a second try. **Verified live (2026-10-15):** the
+  403). Replies are in English; no spoken "yes" -- Confirm is a click. Picking the ability, with the real model and the
+  26-ability menu (`python -m eval.ops_voice_benchmark`, all 54 in one run): 51 of 54 (95% interval 85-98%) -- 36 of 38
+  single requests and 15 of 16 workflow, in-run and Hindi requests; each miss a wrong ability, never a wrong detail; no
+  figure invented; median 1.3 s. The misses: "who should I call first" started the call list (whose first step names
+  that borrower); "she paid the full amount" was read as confirming a claim (code makes it a payment when none was
+  filed); "what should I focus on this morning" got the overview (which offers Start my day) -- it passed the run
+  before, so the same sentence can get a different reading on a second try. About 2,800 tokens a request (measured:
+  2,796 in, 28 out; roughly 70 a day on a free-tier allowance of 200k). **Verified live (2026-10-15):** the
   microphone and the spoken reply on the deployed dashboard, a Hindi question understood. **Not verified:** the
   workflows on the live dashboard (exercised in a preview with made-up accounts, the real model, real Whisper and Piper,
   and Confirm requests recorded instead of sent); exact timings on the VM. Tests: `tests/test_ops_voice.py`,

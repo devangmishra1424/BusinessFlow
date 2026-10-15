@@ -1,27 +1,27 @@
 {
-  "date": "2026-10-15T14:41:55+00:00",
+  "date": "2026-10-15T18:48:41+00:00",
   "model": "openai/gpt-oss-120b",
-  "requests": 38,
+  "requests": 54,
   "right_ability_and_details": {
-    "count": 37,
-    "rate": 0.974,
+    "count": 51,
+    "rate": 0.944,
     "ci95": [
-      0.865,
-      0.995
+      0.849,
+      0.981
     ]
   },
   "right_ability": {
-    "count": 37,
-    "rate": 0.974,
+    "count": 51,
+    "rate": 0.944,
     "ci95": [
-      0.865,
-      0.995
+      0.849,
+      0.981
     ]
   },
   "invented_a_figure": 0,
   "no_figure_requests": 2,
-  "seconds_median": 1.28,
-  "seconds_max": 12.17,
+  "seconds_median": 1.31,
+  "seconds_max": 16.33,
   "results": [
     {
       "case_id": "portfolio_count",
@@ -36,7 +36,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 2.16,
+      "seconds": 1.55,
       "error": null,
       "arguments": {}
     },
@@ -52,7 +52,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 0.94,
+      "seconds": 0.8,
       "error": null,
       "arguments": {}
     },
@@ -68,7 +68,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 0.94,
+      "seconds": 1.27,
       "error": null,
       "arguments": {
         "group": "overdue",
@@ -82,16 +82,17 @@
       "expected_tools": [
         "show_accounts"
       ],
-      "tool": "show_accounts",
-      "tool_ok": true,
-      "wrong_args": [],
-      "ok": true,
+      "tool": "start_call_list",
+      "tool_ok": false,
+      "wrong_args": [
+        "group"
+      ],
+      "ok": false,
       "invented_figure": false,
-      "seconds": 1.19,
+      "seconds": 1.22,
       "error": null,
       "arguments": {
-        "group": "overdue",
-        "sort": "most_overdue"
+        "group": "overdue"
       }
     },
     {
@@ -107,7 +108,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 1.69,
+      "seconds": 1.44,
       "error": null,
       "arguments": {}
     },
@@ -119,15 +120,16 @@
         "show_accounts",
         "show_inbox"
       ],
-      "tool": "show_inbox",
+      "tool": "show_accounts",
       "tool_ok": true,
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 0.73,
+      "seconds": 0.94,
       "error": null,
       "arguments": {
-        "kind": "dispute"
+        "group": "disputed",
+        "sort": "most_overdue"
       }
     },
     {
@@ -142,7 +144,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 1.08,
+      "seconds": 1.16,
       "error": null,
       "arguments": {
         "group": "broken_promises",
@@ -161,7 +163,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 1.27,
+      "seconds": 1.73,
       "error": null,
       "arguments": {
         "group": "all",
@@ -180,7 +182,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 1.12,
+      "seconds": 2.12,
       "error": null,
       "arguments": {
         "group": "not_on_telegram",
@@ -200,12 +202,12 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 0.81,
+      "seconds": 0.94,
       "error": null,
       "arguments": {
         "group": "all",
         "sort": "most_overdue",
-        "search": "sharma"
+        "search": "Sharma"
       }
     },
     {
@@ -220,7 +222,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 1.17,
+      "seconds": 7.17,
       "error": null,
       "arguments": {
         "kind": "any"
@@ -238,7 +240,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 1.02,
+      "seconds": 1.3,
       "error": null,
       "arguments": {
         "kind": "payment_claim"
@@ -256,7 +258,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 0.98,
+      "seconds": 1.59,
       "error": null,
       "arguments": {
         "window": "7d"
@@ -274,7 +276,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 1.19,
+      "seconds": 1.11,
       "error": null,
       "arguments": {
         "window": "30d"
@@ -292,10 +294,10 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 1.19,
+      "seconds": 1.36,
       "error": null,
       "arguments": {
-        "account": "fatima khan",
+        "account": "Fatima Khan",
         "topic": "dues"
       }
     },
@@ -311,10 +313,10 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 0.95,
+      "seconds": 16.33,
       "error": null,
       "arguments": {
-        "account": "ravi",
+        "account": "Ravi",
         "topic": "payments"
       }
     },
@@ -330,7 +332,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 11.36,
+      "seconds": 1.34,
       "error": null,
       "arguments": {
         "account": "BF-1003",
@@ -349,7 +351,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 2.03,
+      "seconds": 1.36,
       "error": null,
       "arguments": {
         "account": "BF-1002",
@@ -369,7 +371,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 1.47,
+      "seconds": 1.19,
       "error": null,
       "arguments": {
         "page": "inbox"
@@ -387,7 +389,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 1.36,
+      "seconds": 1.16,
       "error": null,
       "arguments": {
         "page": "new_account"
@@ -405,7 +407,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 1.31,
+      "seconds": 16.22,
       "error": null,
       "arguments": {}
     },
@@ -421,10 +423,10 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 12.17,
+      "seconds": 1.23,
       "error": null,
       "arguments": {
-        "reason": "Weather query not supported"
+        "reason": "Weather inquiry not supported"
       }
     },
     {
@@ -439,10 +441,10 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 1.09,
+      "seconds": 1.27,
       "error": null,
       "arguments": {
-        "reason": "resetting access keys is not supported"
+        "reason": "reset access key not supported"
       }
     },
     {
@@ -457,10 +459,10 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 1.41,
+      "seconds": 1.11,
       "error": null,
       "arguments": {
-        "account": "fatima khan",
+        "account": "Fatima Khan",
         "amount": 12500.0,
         "paid_on": "2026-10-14"
       }
@@ -480,12 +482,11 @@
       ],
       "ok": false,
       "invented_figure": false,
-      "seconds": 5.25,
+      "seconds": 1.48,
       "error": null,
       "arguments": {
-        "account": "current",
-        "full_amount_due": true,
-        "note": "We have received your payment in full today. Thank you."
+        "account": "BF-1003",
+        "full_amount_due": true
       }
     },
     {
@@ -500,7 +501,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 3.16,
+      "seconds": 1.42,
       "error": null,
       "arguments": {
         "account": "ravi"
@@ -518,7 +519,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 9.34,
+      "seconds": 10.36,
       "error": null,
       "arguments": {
         "account": "fatma kahn",
@@ -537,7 +538,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 1.41,
+      "seconds": 1.36,
       "error": null,
       "arguments": {
         "account": "ravi",
@@ -557,7 +558,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 1.48,
+      "seconds": 1.31,
       "error": null,
       "arguments": {
         "account": "Imran",
@@ -576,10 +577,10 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 1.23,
+      "seconds": 0.97,
       "error": null,
       "arguments": {
-        "account": "fatima",
+        "account": "Fatima",
         "message": "We have received your documents."
       }
     },
@@ -595,7 +596,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 1.41,
+      "seconds": 1.38,
       "error": null,
       "arguments": {
         "account": "ravi"
@@ -613,7 +614,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 0.67,
+      "seconds": 1.34,
       "error": null,
       "arguments": {
         "account": "BF-1001",
@@ -632,7 +633,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 0.84,
+      "seconds": 15.34,
       "error": null,
       "arguments": {
         "group": "overdue"
@@ -650,7 +651,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 10.59,
+      "seconds": 1.25,
       "error": null,
       "arguments": {
         "account": "asha",
@@ -669,7 +670,7 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 1.27,
+      "seconds": 1.69,
       "error": null,
       "arguments": {
         "account": "BF-1002",
@@ -688,10 +689,10 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 1.28,
+      "seconds": 1.05,
       "error": null,
       "arguments": {
-        "account": "fatima",
+        "account": "Fatima",
         "amount": 12500.0,
         "paid_on": "2026-10-12"
       }
@@ -708,11 +709,11 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 1.44,
+      "seconds": 1.25,
       "error": null,
       "arguments": {
         "account": "fatima",
-        "note": "It was a bank error that's now fixed."
+        "note": "The dispute has been resolved as it was a bank error that is now fixed."
       }
     },
     {
@@ -727,10 +728,302 @@
       "wrong_args": [],
       "ok": true,
       "invented_figure": false,
-      "seconds": 2.31,
+      "seconds": 1.05,
       "error": null,
       "arguments": {
         "account": "imran"
+      }
+    },
+    {
+      "case_id": "start_day",
+      "said": "start my day",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "daily_briefing"
+      ],
+      "tool": "daily_briefing",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 0.88,
+      "error": null,
+      "arguments": {}
+    },
+    {
+      "case_id": "morning_focus",
+      "said": "what should I focus on this morning",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "daily_briefing"
+      ],
+      "tool": "portfolio_overview",
+      "tool_ok": false,
+      "wrong_args": [],
+      "ok": false,
+      "invented_figure": false,
+      "seconds": 16.23,
+      "error": null,
+      "arguments": {}
+    },
+    {
+      "case_id": "calls_start",
+      "said": "let's start making calls",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "start_call_list"
+      ],
+      "tool": "start_call_list",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.34,
+      "error": null,
+      "arguments": {
+        "group": "overdue"
+      }
+    },
+    {
+      "case_id": "calls_broken",
+      "said": "call the people who broke their promises",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "show_accounts",
+        "start_call_list"
+      ],
+      "tool": "start_call_list",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.2,
+      "error": null,
+      "arguments": {
+        "group": "broken_promises"
+      }
+    },
+    {
+      "case_id": "inbox_start",
+      "said": "let's go through the inbox one by one",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "start_inbox"
+      ],
+      "tool": "start_inbox",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.33,
+      "error": null,
+      "arguments": {
+        "kind": "any"
+      }
+    },
+    {
+      "case_id": "claims_review",
+      "said": "review the payment claims",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "show_inbox",
+        "start_inbox"
+      ],
+      "tool": "start_inbox",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 0.91,
+      "error": null,
+      "arguments": {
+        "kind": "payment_claim"
+      }
+    },
+    {
+      "case_id": "run_next",
+      "said": "next",
+      "screen": "the call list (a call outcome is log_call on this account), item 1 of 2: the profile of Ravi Kumar (BF-1001)",
+      "expected_tools": [
+        "workflow_control"
+      ],
+      "tool": "workflow_control",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.14,
+      "error": null,
+      "arguments": {
+        "command": "next"
+      }
+    },
+    {
+      "case_id": "run_skip",
+      "said": "skip this one",
+      "screen": "the call list (a call outcome is log_call on this account), item 1 of 2: the profile of Ravi Kumar (BF-1001)",
+      "expected_tools": [
+        "workflow_control"
+      ],
+      "tool": "workflow_control",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 15.34,
+      "error": null,
+      "arguments": {
+        "command": "skip"
+      }
+    },
+    {
+      "case_id": "run_stop",
+      "said": "that's enough for now, stop",
+      "screen": "the call list (a call outcome is log_call on this account), item 1 of 2: the profile of Ravi Kumar (BF-1001)",
+      "expected_tools": [
+        "workflow_control"
+      ],
+      "tool": "workflow_control",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.09,
+      "error": null,
+      "arguments": {
+        "command": "stop"
+      }
+    },
+    {
+      "case_id": "run_no_answer",
+      "said": "no answer",
+      "screen": "the call list (a call outcome is log_call on this account), item 1 of 2: the profile of Ravi Kumar (BF-1001)",
+      "expected_tools": [
+        "log_call"
+      ],
+      "tool": "log_call",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 0.8,
+      "error": null,
+      "arguments": {
+        "account": "BF-1001",
+        "outcome": "no_answer"
+      }
+    },
+    {
+      "case_id": "run_promise",
+      "said": "reached him, he'll pay 8000 by the 25th",
+      "screen": "the call list (a call outcome is log_call on this account), item 1 of 2: the profile of Ravi Kumar (BF-1001)",
+      "expected_tools": [
+        "log_call"
+      ],
+      "tool": "log_call",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 0.89,
+      "error": null,
+      "arguments": {
+        "account": "BF-1001",
+        "outcome": "reached",
+        "promised_amount": 8000.0,
+        "promised_date": "2026-10-25"
+      }
+    },
+    {
+      "case_id": "run_approve",
+      "said": "approve it",
+      "screen": "working through the inbox, on case ESC-0012, item 3 of 3: the profile of Ravi Kumar (BF-1001)",
+      "expected_tools": [
+        "approve_request"
+      ],
+      "tool": "approve_request",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 0.81,
+      "error": null,
+      "arguments": {
+        "account": "BF-1001"
+      }
+    },
+    {
+      "case_id": "run_close_callback",
+      "said": "I called her back, close it",
+      "screen": "working through the inbox, on case ESC-0014, item 2 of 3: the profile of Asha Verma (BF-1002)",
+      "expected_tools": [
+        "approve_request",
+        "close_case"
+      ],
+      "tool": "close_case",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.39,
+      "error": null,
+      "arguments": {
+        "account": "BF-1002"
+      }
+    },
+    {
+      "case_id": "hi_help",
+      "said": "आप क्या कर सकते हो",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "help"
+      ],
+      "tool": "help",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 1.28,
+      "error": null,
+      "arguments": {}
+    },
+    {
+      "case_id": "hi_overdue",
+      "said": "कितने अकाउंट ओवरड्यू हैं",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "portfolio_overview",
+        "show_accounts"
+      ],
+      "tool": "show_accounts",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 2.2,
+      "error": null,
+      "arguments": {
+        "group": "overdue",
+        "sort": "most_overdue"
+      }
+    },
+    {
+      "case_id": "hi_pay",
+      "said": "फातिमा से बारह हज़ार पाँच सौ रिकॉर्ड करो",
+      "screen": "the Portfolio",
+      "expected_tools": [
+        "record_payment"
+      ],
+      "tool": "record_payment",
+      "tool_ok": true,
+      "wrong_args": [],
+      "ok": true,
+      "invented_figure": false,
+      "seconds": 13.03,
+      "error": null,
+      "arguments": {
+        "account": "Fatima",
+        "amount": 12500.0
       }
     }
   ]
