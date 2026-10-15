@@ -536,6 +536,8 @@ def _account_change_note(conversation: list[dict], account_id: str | None) -> di
         what.append("a payment was recorded" if changed["payments"] == 1 else f"{changed['payments']} payments were recorded")
     if changed["restructurings"]:
         what.append("a restructuring was approved, changing the EMI or term")
+    if changed.get("corrections"):
+        what.append("our team corrected the account")
     if not what:
         return None
     return {

@@ -418,6 +418,40 @@ def get_dispute(dispute_id: int, ex=None) -> dict | None:
     return dict(row) if row else None
 
 
+# How far back "Confirm payment" looks for the same payment already on record. Found live: a borrower paid through the
+# payment link, the agent then filed a payment claim for that same payment, and confirming the claim recorded it a
+# second time -- the account skipped a month.
+DUPLICATE_PAYMENT_WINDOW_DAYS = 7
+
+
+class PossibleDuplicatePaymentError(ValueError):
+    """A payment of this amount was already recorded on the account recently; .existing lists them."""
+
+    def __init__(self, existing: list[dict]):
+        self.existing = existing
+        super().__init__(f"{len(existing)} payment(s) of this amount already recorded in the last {DUPLICATE_PAYMENT_WINDOW_DAYS} days")
+
+
+def recent_payments(account_ids: list[str], days: int = DUPLICATE_PAYMENT_WINDOW_DAYS, ex=None) -> dict[str, list[dict]]:
+    """{account_id: [{id, amount, payment_date, recorded_at}, ...]} newest first: payments on record that were PAID in
+    the last `days`, for the given accounts, in one query. Shown on a payment claim, so whoever checks it sees a payment
+    that is already on record before confirming another. By the date paid, not the date recorded: a reseed re-records a
+    demo account's old history all at once, and a July payment is no duplicate of one made today."""
+    if not account_ids:
+        return {}
+    rows = (ex or get_connection()).execute(
+        "select account_id, id, amount, payment_date, created_at as recorded_at from payment_history "
+        "where account_id = any(%s) and payment_date > %s order by payment_date desc, created_at desc",
+        (list(account_ids), current_date() - timedelta(days=days)),
+    ).fetchall()
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        out.setdefault(r["account_id"], []).append(
+            {"id": r["id"], "amount": float(r["amount"]), "payment_date": r["payment_date"], "recorded_at": r["recorded_at"]}
+        )
+    return out
+
+
 def confirm_payment_claim(
     account_id: str,
     dispute_id: int,
@@ -425,6 +459,7 @@ def confirm_payment_claim(
     payment_date: date | None = None,
     apply_extra_to_next: bool | None = None,
     resolution_note: str | None = None,
+    record_even_if_duplicate: bool = False,
 ) -> dict:
     """Ops found the payment a borrower reported: records it (record_payment's
     rules, see there) and closes the claim, in one transaction -- the payment
@@ -432,7 +467,14 @@ def confirm_payment_claim(
     payment. Raises NoOpenDisputeError when that claim isn't open any more (a
     second click, or a colleague got there first), so the payment is never
     recorded twice, and ValueError when the case isn't a payment claim on this
-    account. Returns {"payment": <record_payment's dict>, "dispute_id": ...}."""
+    account. Returns {"payment": <record_payment's dict>, "dispute_id": ...}.
+
+    Raises PossibleDuplicatePaymentError, recording nothing, when a payment of
+    the same amount (to the rupee) was recorded on the account in the last
+    DUPLICATE_PAYMENT_WINDOW_DAYS -- most likely the very payment the claim is
+    about, already in. record_even_if_duplicate=True records it anyway, for a
+    genuinely separate second payment. Checked under the account lock, so two
+    confirms at once can't both pass it."""
     with get_connection().transaction() as tx:
         _lock_account(tx, account_id)  # account first, as everywhere else, then the claim
         claim = tx.execute(
@@ -445,6 +487,10 @@ def confirm_payment_claim(
             raise ValueError(f"case D-{dispute_id} is a {claim['kind']}, not a payment claim")
         if claim["status"] != "open":
             raise NoOpenDisputeError(f"case D-{dispute_id} is already closed")
+        if not record_even_if_duplicate:
+            same = [p for p in recent_payments([account_id], ex=tx).get(account_id, []) if abs(p["amount"] - amount) < 1]
+            if same:
+                raise PossibleDuplicatePaymentError(same)
         payment = _record_payment_in(tx, account_id, amount, payment_date, apply_extra_to_next, None)
         tx.execute(
             "update disputes set status = 'resolved', resolved_at = now(), resolution_note = %s where id = %s",
@@ -1195,8 +1241,9 @@ def borrower_names(account_ids: list[str], ex=None) -> dict[str, str]:
 
 def changes_since_last_status_check(account_id: str) -> dict:
     """What changed on this account after the agent last looked it up (its latest get_payment_status call): payments
-    recorded (through a payment link or by ops) and restructurings approved. {"payments": n, "restructurings": n,
-    "since": <that call's time>}; both 0 when nothing changed, or when it was never looked up.
+    recorded (through a payment link or by ops), restructurings approved, and corrections by the team (a
+    "data_correction" event, e.g. a duplicate payment removed). {"payments": n, "restructurings": n, "corrections": n,
+    "since": <that call's time>}; all 0 when nothing changed, or when it was never looked up.
 
     Found live: a borrower paid through the link the agent had just sent, then asked "do I have any dues right now?"
     -- and was told "21 days past due, ₹35,500 due today", from the status the agent had looked up before the payment."""
@@ -1211,11 +1258,16 @@ def changes_since_last_status_check(account_id: str) -> dict:
                  where account_id = %(a)s and created_at > last_check.at) as payments,
                (select count(*) from escalations, last_check
                  where account_id = %(a)s and status = 'approved' and proposed_changes is not null
-                   and resolved_at > last_check.at) as restructurings
+                   and resolved_at > last_check.at) as restructurings,
+               (select count(*) from events, last_check
+                 where account_id = %(a)s and event_type = 'data_correction' and created_at > last_check.at) as corrections
         """,
         {"a": account_id},
     ).fetchone()
-    return {"since": row["since"], "payments": row["payments"], "restructurings": row["restructurings"]}
+    return {
+        "since": row["since"], "payments": row["payments"], "restructurings": row["restructurings"],
+        "corrections": row["corrections"],
+    }
 
 
 def get_case(account_id: str, case_ref: str, ex=None) -> dict | None:

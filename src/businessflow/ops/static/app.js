@@ -85,9 +85,10 @@ let loadGeneration = 0;
    API layer
    ============================================================ */
 class ApiError extends Error {
-  constructor(status, detail) {
+  constructor(status, detail, data = null) {
     super(detail || `request failed (${status})`);
     this.status = status;
+    this.data = data; // a structured detail ({code, message, ...}), when the server sent one
   }
 }
 
@@ -105,6 +106,7 @@ async function api(path, opts = {}) {
   }
   if (!res.ok) {
     let detail = `request failed (${res.status})`;
+    let data = null;
     try {
       const body = await res.json();
       // FastAPI's own validation errors (422s) send detail as a LIST of
@@ -114,11 +116,14 @@ async function api(path, opts = {}) {
       // (ValueError, HTTPException(detail=str)) already sends a string.
       if (Array.isArray(body.detail)) {
         detail = body.detail.map((e) => e.msg || JSON.stringify(e)).join("; ");
+      } else if (body.detail && typeof body.detail === "object") {
+        data = body.detail; // e.g. confirm-payment's {code: "possible_duplicate", message, existing}
+        detail = body.detail.message || JSON.stringify(body.detail);
       } else if (body.detail) {
         detail = body.detail;
       }
-    } catch (_) {}
-    throw new ApiError(res.status, detail);
+    } catch (_) {} // no JSON body: the status line above is the message
+    throw new ApiError(res.status, detail, data);
   }
   if (res.status === 204) return null;
   return res.json();
@@ -1038,6 +1043,7 @@ function caseFormsHtml(c, amountHint) {
         <input type="date" name="payment_date" aria-label="Date the borrower paid" title="Date the borrower paid (decides on time or late; defaults to today)" />
       </div>
       <input type="text" name="note" class="case-note-input" maxlength="500" placeholder="Note to the borrower (optional)" />
+      <label class="case-duplicate-ok" hidden><input type="checkbox" name="record_even_if_duplicate" /> It's a second, separate payment: record it anyway</label>
       <div class="mini-form-radio-row case-extra-question" hidden>
         <span class="clarify-hint full-row">Less than what's due this cycle — apply it toward the next EMI?</span>
         <label><input type="radio" name="apply" value="true" /> Yes, credit it</label>
@@ -1072,6 +1078,17 @@ function caseFormsHtml(c, amountHint) {
   return forms.join("");
 }
 
+// A payment already recorded on the account in the last few days, shown on an open payment claim. Found live: a
+// borrower paid through the link, the agent filed a claim for that same payment, and confirming it recorded it twice.
+function recentPaymentsHtml(c) {
+  const recent = c.recent_payments || [];
+  if (!c.open || c.kind !== "payment_claim" || !recent.length) return "";
+  const items = recent
+    .map((p) => `<li>${fmtInr(p.amount)} paid ${fmtShortDate(p.payment_date)}, recorded ${relativeTime(p.recorded_at)}</li>`)
+    .join("");
+  return `<div class="case-notice"><b>Already on record, paid in the last 7 days:</b><ul>${items}</ul>If one of these is the payment they mean, close the claim instead of confirming.</div>`;
+}
+
 function caseCardHtml(c, { inInbox = false, amountHint = null } = {}) {
   const kind = c.kind || "request";
   const acct = state.accounts.find((a) => a.account_id === c.account_id);
@@ -1093,6 +1110,7 @@ function caseCardHtml(c, { inInbox = false, amountHint = null } = {}) {
     ${who ? `<div class="escalation-who">${escapeHtml(who)}</div>` : ""}
     <div class="case-words"><span class="case-words-label">${wordsLabel}</span>${escapeHtml(c.borrower_words)}</div>
     ${proposedTermsHtml(c.proposed_changes)}
+    ${recentPaymentsHtml(c)}
     ${caseThreadHtml(c, { compact: inInbox })}
     ${outcome}
     ${caseActionsHtml(c)}
@@ -1146,6 +1164,7 @@ async function submitCaseForm(form, card) {
       const amount = Number(field("amount"));
       if (!(amount > 0)) throw new Error("Enter the amount you found.");
       const payload = { amount, payment_date: field("payment_date") || null, note: field("note") || null };
+      if (form.querySelector('[name="record_even_if_duplicate"]')?.checked) payload.record_even_if_duplicate = true;
       const extra = form.querySelector(".case-extra-question");
       if (!extra.hidden) {
         const picked = form.querySelector('input[name="apply"]:checked');
@@ -1221,6 +1240,10 @@ function wireCaseActions(root) {
       if (form.dataset.caseForm === "confirm" && err instanceof ApiError && err.status === 422) {
         form.querySelector(".case-extra-question").hidden = false;
         errorEl.textContent = "That's less than what's due this cycle — choose whether to credit it toward the next EMI.";
+      } else if (form.dataset.caseForm === "confirm" && err instanceof ApiError && err.data?.code === "possible_duplicate") {
+        // Nothing was recorded. Say what's already on record, and only then offer to record a second payment.
+        form.querySelector(".case-duplicate-ok").hidden = false;
+        errorEl.textContent = err.message;
       } else {
         errorEl.textContent = err.message;
       }
