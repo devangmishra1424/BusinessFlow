@@ -85,3 +85,12 @@ def test_the_note_is_in_this_turn_only_and_never_kept_in_the_conversation(monkey
     assert sent[-2]["role"] == "system" and "Account update" in sent[-2]["content"]  # right before the question
     assert not any("Account update" in (m.get("content") or "") for m in after)
     assert reply == "Nothing is overdue."
+
+
+def test_a_correction_by_the_team_counts_as_a_change(monkeypatch):
+    monkeypatch.setattr(
+        loop.store, "changes_since_last_status_check",
+        lambda account_id: {"since": None, "payments": 0, "restructurings": 0, "corrections": 1},
+    )
+
+    assert "our team corrected the account" in loop._account_change_note(_conversation(True), ACCOUNT)["content"]

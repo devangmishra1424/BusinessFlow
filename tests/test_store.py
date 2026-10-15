@@ -333,3 +333,46 @@ def test_changes_since_last_status_check_counts_payments_after_the_agents_last_l
 
     store.log_event("BF-1001", "tool_called", {"tool": "get_payment_status", "arguments": {"account_id": "BF-1001"}})
     assert store.changes_since_last_status_check("BF-1001")["payments"] == 0  # looked again: up to date
+
+
+def test_confirming_a_claim_for_a_payment_already_on_record_records_nothing(reseed_accounts):
+    # Found live: a borrower paid through the link, the agent filed a payment claim for that same payment, and
+    # "Confirm payment" recorded it a second time -- the account skipped a month.
+    emi = store.get_account_or_raise("BF-1001").emi_amount
+    store.record_payment("BF-1001", emi)  # the real payment, through the link
+    after_real = store.get_account_or_raise("BF-1001")
+    opened = store.open_dispute("BF-1001", "I already paid", "payment_claim")
+
+    with pytest.raises(store.PossibleDuplicatePaymentError) as caught:
+        store.confirm_payment_claim("BF-1001", opened["dispute_id"], emi)
+
+    assert caught.value.existing[0]["amount"] == emi
+    again = store.get_account_or_raise("BF-1001")
+    assert len(again.payment_history) == len(after_real.payment_history)  # nothing recorded
+    assert again.emi_due_date == after_real.emi_due_date
+    assert store.get_case("BF-1001", f"D-{opened['dispute_id']}")["open"] is True  # nothing closed either
+
+
+def test_a_genuinely_separate_second_payment_can_still_be_recorded_on_purpose(reseed_accounts):
+    emi = store.get_account_or_raise("BF-1001").emi_amount
+    store.record_payment("BF-1001", emi)
+    opened = store.open_dispute("BF-1001", "I paid next month's too", "payment_claim")
+
+    result = store.confirm_payment_claim("BF-1001", opened["dispute_id"], emi, record_even_if_duplicate=True)
+
+    assert result["payment"]["amount"] == emi
+    assert store.get_case("BF-1001", f"D-{opened['dispute_id']}")["open"] is False
+
+
+def test_recent_payments_go_by_the_date_paid_not_the_date_recorded(reseed_accounts):
+    # A reseed records a demo account's whole history at once; its July payment is no duplicate of one made today.
+    assert store.recent_payments(["BF-1001"]) == {}
+    store.record_payment("BF-1001", store.get_account_or_raise("BF-1001").emi_amount)
+    assert len(store.recent_payments(["BF-1001"])["BF-1001"]) == 1
+
+
+def test_a_correction_by_the_team_also_tells_the_agent_to_look_again(reseed_accounts):
+    store.log_event("BF-1001", "tool_called", {"tool": "get_payment_status", "arguments": {"account_id": "BF-1001"}})
+    store.log_event("BF-1001", "data_correction", {"what": "removed a duplicate payment"})
+
+    assert store.changes_since_last_status_check("BF-1001")["corrections"] == 1

@@ -392,6 +392,12 @@ class EscalateToHumanIn(BaseModel):
     reason: str
 
 
+class RecentPaymentOut(BaseModel):
+    amount: float
+    payment_date: date
+    recorded_at: datetime
+
+
 class CaseMessageOut(BaseModel):
     author: str  # "borrower" | "ops"
     message: str
@@ -419,6 +425,9 @@ class CaseOut(BaseModel):
     outcome: str | None = None  # ops' note on how it ended
     thread: list[CaseMessageOut] = []
     can_reply: bool = True  # False for a system notice: the borrower never sees it, so a reply would go nowhere
+    # Payment claims only: payments already recorded on the account in the last few days, shown on the claim so a
+    # payment that is already in is never confirmed a second time.
+    recent_payments: list[RecentPaymentOut] = []
 
 
 class CaseReplyIn(BaseModel):
@@ -436,6 +445,8 @@ class ConfirmPaymentIn(BaseModel):
     # Same as RecordPaymentIn: only needed when the amount is less than what is due this cycle.
     apply_extra_to_next: bool | None = None
     note: str | None = None  # optional, added to the message the borrower gets
+    # Set only after the 409 "possible_duplicate" answer, when ops has checked it is a second, separate payment.
+    record_even_if_duplicate: bool = False
 
     @field_validator("amount")
     @classmethod
@@ -581,6 +592,7 @@ class AccountDetailOut(AccountSummaryOut):
 # Triage order for the inbox, lowest first: escalation_kinds.URGENCY_RANK, with a payment claim or dispute next to an
 # ordinary request (reminders are paused on the account while either is open, so neither should sit at the bottom).
 _CASE_URGENCY = {**URGENCY_RANK, cases.PAYMENT_CLAIM: 1, cases.DISPUTE: 1}
+_IST = timezone(timedelta(hours=5, minutes=30), "IST")
 
 _CASE_TITLES = {
     cases.PAYMENT_CLAIM: "Says they already paid",
@@ -620,10 +632,14 @@ def _thread_out(thread: list[dict]) -> list[CaseMessageOut]:
     return [CaseMessageOut(**{k: m[k] for k in ("author", "message", "created_at", "delivered_via_telegram")}) for m in thread]
 
 
-def _dispute_case(d: dict, account_id: str, borrower_name: str | None, threads: dict[str, list[dict]]) -> CaseOut:
+def _dispute_case(
+    d: dict, account_id: str, borrower_name: str | None, threads: dict[str, list[dict]], recent: dict[str, list[dict]] | None = None,
+) -> CaseOut:
     case_ref = cases.dispute_case_ref(d["id"])
     is_open = d["status"] == "open"
+    claim_payments = (recent or {}).get(account_id, []) if d["kind"] == cases.PAYMENT_CLAIM and is_open else []
     return CaseOut(
+        recent_payments=[RecentPaymentOut(**{k: p[k] for k in ("amount", "payment_date", "recorded_at")}) for p in claim_payments],
         case_ref=case_ref, source="dispute", kind=d["kind"], title=_case_title(d["kind"], d["reason"]),
         account_id=account_id, borrower_name=borrower_name, open=is_open, status="open" if is_open else "resolved",
         opened_at=d["opened_at"], closed_at=d.get("resolved_at"), borrower_words=d["reason"],
@@ -760,8 +776,9 @@ def get_account(account_id: str):
         call_log = store.get_call_log(account_id, ex=conn)
         threads = store.get_case_threads(account_id, ex=conn)
         messages = store.get_borrower_messages(account_id, ex=conn)
+        recent = store.recent_payments([account_id], ex=conn) if account.dispute_open else {}
     case_list = _sorted_cases(
-        [_dispute_case(d, account_id, account.borrower_name, threads) for d in disputes]
+        [_dispute_case(d, account_id, account.borrower_name, threads, recent) for d in disputes]
         + [_escalation_case(e, account.borrower_name, threads) for e in escalations]
     )
     return AccountDetailOut(
@@ -1332,8 +1349,9 @@ def get_inbox():
         names = store.borrower_names(sorted({e.account_id for e in escalations}), ex=conn)
         refs = [e.escalation_id for e in escalations] + [cases.dispute_case_ref(d["id"]) for d in disputes]
         threads = store.get_threads_for_cases(refs, ex=conn)
+        recent = store.recent_payments(sorted({d["account_id"] for d in disputes if d["kind"] == cases.PAYMENT_CLAIM}), ex=conn)
     items = [_escalation_case(e, names.get(e.account_id), threads) for e in escalations]
-    items += [_dispute_case(d, d["account_id"], d["borrower_name"], threads) for d in disputes]
+    items += [_dispute_case(d, d["account_id"], d["borrower_name"], threads, recent) for d in disputes]
     return _sorted_cases(items)
 
 
@@ -1394,11 +1412,27 @@ async def confirm_payment_claim(account_id: str, case_ref: str, body: ConfirmPay
         result = store.confirm_payment_claim(
             account_id, dispute_id, body.amount, payment_date=body.payment_date,
             apply_extra_to_next=body.apply_extra_to_next, resolution_note=note or "Payment confirmed and recorded.",
+            record_even_if_duplicate=body.record_even_if_duplicate,
         )
     except store.ExtraPaymentDecisionRequiredError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
     except store.NoOpenDisputeError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
+    except store.PossibleDuplicatePaymentError as e:
+        # Structured, so the case card can show what is already on record and offer "record it anyway".
+        first = e.existing[0]
+        raise HTTPException(status_code=409, detail={
+            "code": "possible_duplicate",
+            "message": (
+                f"A payment of ₹{first['amount']:,.2f} (paid {first['payment_date']:%d %b}) was already recorded on this account "
+                f"{first['recorded_at'].astimezone(_IST):%d %b, %H:%M} IST. If it's the payment this claim is about, close the "
+                "claim instead; record this only if it's a second, separate payment."
+            ),
+            "existing": [
+                {"amount": p["amount"], "payment_date": p["payment_date"].isoformat(), "recorded_at": p["recorded_at"].isoformat()}
+                for p in e.existing
+            ],
+        }) from e
     payment = result["payment"]
     store.log_event(account_id, "tool_called", {"tool": "confirm_payment_claim", "arguments": {"case_ref": case_ref, **body.model_dump(mode="json")}, "result": result})
     paid_on = date.fromisoformat(payment["payment_date"]).strftime("%d %b %Y")

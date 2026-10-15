@@ -1604,3 +1604,26 @@ def test_an_approval_message_goes_into_that_requests_thread(reseed_accounts):
     assert response.status_code == 200
     thread = store.get_case_threads("BF-1001")[escalation_id]
     assert len(thread) == 1 and thread[0]["author"] == "ops"
+
+
+@_pg_skip
+def test_confirm_payment_stops_on_a_payment_already_on_record_and_says_what_it_found(reseed_accounts):
+    from businessflow.accounts import store
+
+    due = next(a for a in client.get("/accounts", headers=_auth()).json() if a["account_id"] == "BF-1001")["amount_due_now"]
+    store.record_payment("BF-1001", due)  # the real payment
+    ref = _open_payment_claim()
+
+    claim = next(c for c in client.get("/inbox", headers=_auth()).json() if c["case_ref"] == ref)
+    assert [p["amount"] for p in claim["recent_payments"]] == [due]  # shown on the claim up front
+
+    blocked = client.post(f"/accounts/BF-1001/cases/{ref}/confirm-payment", json={"amount": due}, headers=_auth())
+    assert blocked.status_code == 409
+    detail = blocked.json()["detail"]
+    assert detail["code"] == "possible_duplicate" and "already recorded" in detail["message"]
+    assert detail["existing"][0]["amount"] == due
+
+    on_purpose = client.post(
+        f"/accounts/BF-1001/cases/{ref}/confirm-payment", json={"amount": due, "record_even_if_duplicate": True}, headers=_auth()
+    )
+    assert on_purpose.status_code == 200
