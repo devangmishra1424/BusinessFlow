@@ -397,7 +397,9 @@ def list_open_disputes(ex=None) -> list[dict]:
     first, with the borrower's name -- the ops inbox's half that isn't an
     escalation. Bounded."""
     rows = (ex or get_connection()).execute(
-        "select d.id, d.account_id, d.kind, d.reason, d.opened_at, a.borrower_name from disputes d "
+        # The same columns as get_disputes_for_account (plus the name), so one builder serves both.
+        "select d.id, d.account_id, d.kind, d.reason, d.status, d.opened_at, d.resolved_at, d.resolution_note, "
+        "a.borrower_name from disputes d "
         "join accounts a on a.account_id = d.account_id where d.status = 'open' order by d.opened_at limit %s",
         (_MAX_OPEN_DISPUTES,),
     ).fetchall()
