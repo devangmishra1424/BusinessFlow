@@ -62,6 +62,7 @@ import logging
 from businessflow.accounts.db import database_schema, get_connection
 from businessflow.outbound.send import send_ops_alert
 from eval import latency_benchmark, reasoning_accuracy, red_team, tool_calling_benchmark, voice_naturalness_benchmark
+from eval.report import RESULTS_DIR, SuiteOutcome, build_report, for_telegram
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -75,28 +76,26 @@ _SUITES = [
 ]
 
 
-def run_all_suites() -> dict[str, list[str]]:
-    """Runs every suite in _SUITES against real Groq/Postgres/RAG, returns
-    {suite_name: [regressed metric names]} for suites that actually
-    regressed -- a suite with nothing to report isn't included at all, so
-    an empty dict back means a clean night across the board.
+def run_all_suites() -> list[SuiteOutcome]:
+    """Runs every suite in _SUITES against real Groq/Postgres/RAG and returns
+    one outcome per suite: its summary (with regressed_metrics, the metrics
+    worse than the previous run), or the error if it couldn't run.
 
-    A suite that raises outright is logged loudly and skipped, not
+    A suite that raises outright is logged loudly and recorded, not
     allowed to crash the rest -- one suite's transient failure (a bad API
     response, a momentary DB blip) must not silence every other suite's
-    own real signal for the night. Investigate a skipped suite by running
-    it directly: `python -m eval.<name>`."""
-    regressions_by_suite = {}
+    own real signal for the night. Broad on purpose: any failure in a suite
+    is that suite's result for the night, and it goes into the report
+    (it used to be logged only, so a suite that never ran told no one).
+    Investigate with `python -m eval.<name>`."""
+    outcomes = []
     for name, run in _SUITES:
         try:
-            summary = run()
-        except Exception:
-            logger.exception("eval suite %r failed to run -- skipping it for tonight; investigate with `python -m eval.%s`", name, name)
-            continue
-        regressed = summary.get("regressed_metrics") or []
-        if regressed:
-            regressions_by_suite[name] = regressed
-    return regressions_by_suite
+            outcomes.append(SuiteOutcome(name, summary=run()))
+        except Exception as e:
+            logger.exception("eval suite %r failed to run -- reported as 'couldn't run'; investigate with `python -m eval.%s`", name, name)
+            outcomes.append(SuiteOutcome(name, error=f"{type(e).__name__}: {e}"))
+    return outcomes
 
 
 def main() -> None:
@@ -120,18 +119,20 @@ def main() -> None:
     # suite runs -- a suite's own failure would only be logged and skipped.
     get_connection().execute("select 1")
     logger.info("running nightly eval regression check on schema %r", schema)
-    regressions = run_all_suites()
+    outcomes = run_all_suites()
 
-    if not regressions:
-        logger.info("nightly eval check: no regressions")
+    # The whole report every night, on the server and in the log; Telegram only when something needs a look.
+    report = build_report(outcomes, results_dir=RESULTS_DIR)
+    RESULTS_DIR.mkdir(exist_ok=True)
+    (RESULTS_DIR / "nightly_report.txt").write_text(report + "\n", encoding="utf-8")
+    needs_a_look = any(o.regressed or o.error for o in outcomes)
+    if not needs_a_look:
+        logger.info("nightly eval check: all suites held steady\n%s", report)
         return
 
-    message = "BusinessFlow eval regression detected:\n" + "\n".join(
-        f"- {suite}: {', '.join(metrics)}" for suite, metrics in regressions.items()
-    ) + "\n\nCheck eval/results/<suite>_history.jsonl or re-run `python -m eval.<suite>` to investigate."
-    logger.error(message)
-    if not send_ops_alert(message):
-        logger.warning("regression alert could not be delivered via Telegram (OPS_ALERT_TELEGRAM_CHAT_ID unset or delivery failed) -- see the ERROR line above instead")
+    logger.error("nightly eval check needs a look:\n%s", report)
+    if not send_ops_alert(for_telegram(report)):
+        logger.warning("nightly eval report could not be delivered via Telegram (OPS_ALERT_TELEGRAM_CHAT_ID unset or delivery failed) -- see the ERROR line above instead")
 
 
 if __name__ == "__main__":
