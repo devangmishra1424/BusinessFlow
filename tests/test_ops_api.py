@@ -1464,3 +1464,143 @@ def test_a_rejected_reupload_leaves_the_previous_version_in_place_on_disk_and_in
         delete_chunks_for_document(str(saved_path))
         saved_path.unlink(missing_ok=True)
 
+
+# --- One case, one conversation: /inbox, case replies, confirming a payment claim ---------------------------
+
+
+def _open_payment_claim(account_id="BF-1001", words="Paid by UPI on the 3rd"):
+    from businessflow.tools.account_tools import flag_dispute
+
+    return flag_dispute(account_id, words, kind="payment_claim")["case_ref"]
+
+
+@_pg_skip
+def test_inbox_lists_open_claims_disputes_and_escalations_with_the_borrowers_words(reseed_accounts):
+    ref = _open_payment_claim()
+
+    response = client.get("/inbox", headers=_auth())
+
+    assert response.status_code == 200
+    items = response.json()
+    claim = next(c for c in items if c["case_ref"] == ref)
+    assert claim["kind"] == "payment_claim" and claim["title"] == "Says they already paid"
+    assert claim["borrower_words"] == "Paid by UPI on the 3rd" and claim["borrower_name"]
+    assert any(c["kind"] == "dispute" and c["account_id"] == "BF-1003" for c in items)  # the seeded open dispute
+    assert all(c["open"] for c in items)
+
+
+def test_inbox_rejects_a_missing_api_key():
+    assert client.get("/inbox").status_code == 401
+
+
+@_pg_skip
+def test_a_reply_lands_in_that_cases_thread_on_both_dashboards(reseed_accounts):
+    from businessflow.accounts import store
+
+    ref = _open_payment_claim()
+
+    response = client.post(f"/accounts/BF-1001/cases/{ref}/reply", json={"message": "Could you share the UTR?"}, headers=_auth())
+
+    assert response.status_code == 200 and response.json()["author"] == "ops"
+    detail = client.get("/accounts/BF-1001", headers=_auth()).json()
+    case = next(c for c in detail["cases"] if c["case_ref"] == ref)
+    assert [(m["author"], m["message"]) for m in case["thread"]] == [("ops", "Could you share the UTR?")]
+    assert all(m["message"] != "Could you share the UTR?" for m in store.get_borrower_messages("BF-1001"))
+
+
+@_pg_skip
+def test_a_reply_to_another_accounts_case_is_not_found(reseed_accounts):
+    ref = _open_payment_claim("BF-1001")
+
+    response = client.post(f"/accounts/BF-1002/cases/{ref}/reply", json={"message": "hello"}, headers=_auth())
+
+    assert response.status_code == 404
+
+
+@_pg_skip
+def test_a_reply_needs_words_and_a_real_case_reference(reseed_accounts):
+    ref = _open_payment_claim()
+
+    assert client.post(f"/accounts/BF-1001/cases/{ref}/reply", json={"message": "   "}, headers=_auth()).status_code == 400
+    assert client.post("/accounts/BF-1001/cases/D-0/reply", json={"message": "hi"}, headers=_auth()).status_code == 404
+
+
+@_pg_skip
+def test_a_system_notice_takes_no_reply(reseed_accounts):
+    from businessflow.accounts import store
+    from businessflow.accounts.escalation_kinds import CHRONIC_DELINQUENCY_REASON
+
+    escalation_id = store.create_escalation("BF-1001", CHRONIC_DELINQUENCY_REASON)
+
+    response = client.post(f"/accounts/BF-1001/cases/{escalation_id}/reply", json={"message": "hi"}, headers=_auth())
+
+    assert response.status_code == 400
+
+
+@_pg_skip
+def test_confirming_a_payment_claim_records_it_closes_it_and_tells_the_borrower_in_the_thread(reseed_accounts):
+    ref = _open_payment_claim()
+    due = next(a for a in client.get("/accounts", headers=_auth()).json() if a["account_id"] == "BF-1001")["amount_due_now"]
+
+    response = client.post(f"/accounts/BF-1001/cases/{ref}/confirm-payment", json={"amount": due}, headers=_auth())
+
+    assert response.status_code == 200
+    assert response.json()["payment"]["amount"] == due
+    detail = client.get("/accounts/BF-1001", headers=_auth()).json()
+    assert detail["dispute_open"] is False
+    case = next(c for c in detail["cases"] if c["case_ref"] == ref)
+    assert case["open"] is False and "found your payment" in case["thread"][-1]["message"]
+
+    again = client.post(f"/accounts/BF-1001/cases/{ref}/confirm-payment", json={"amount": due}, headers=_auth())
+    assert again.status_code == 409
+
+
+@_pg_skip
+def test_a_dispute_is_not_confirmed_as_a_payment(reseed_accounts):
+    from businessflow.tools.account_tools import flag_dispute
+
+    ref = flag_dispute("BF-1001", "The fee is wrong")["case_ref"]
+
+    response = client.post(f"/accounts/BF-1001/cases/{ref}/confirm-payment", json={"amount": 100}, headers=_auth())
+
+    assert response.status_code == 400
+
+
+@_pg_skip
+def test_a_short_confirmed_payment_asks_for_the_credit_decision(reseed_accounts):
+    ref = _open_payment_claim()
+
+    response = client.post(f"/accounts/BF-1001/cases/{ref}/confirm-payment", json={"amount": 1}, headers=_auth())
+
+    assert response.status_code == 422
+
+
+@_pg_skip
+def test_closing_a_payment_claim_without_a_payment_needs_a_reason_for_the_borrower(reseed_accounts):
+    ref = _open_payment_claim()
+    dispute_id = int(ref.removeprefix("D-"))
+
+    no_note = client.post("/accounts/BF-1001/disputes/resolve", json={"dispute_id": dispute_id}, headers=_auth())
+    assert no_note.status_code == 400
+
+    response = client.post(
+        "/accounts/BF-1001/disputes/resolve",
+        json={"dispute_id": dispute_id, "resolution_note": "No credit on the 3rd in the bank record"},
+        headers=_auth(),
+    )
+    assert response.status_code == 200 and response.json()["kind"] == "payment_claim"
+    case = next(c for c in client.get("/accounts/BF-1001", headers=_auth()).json()["cases"] if c["case_ref"] == ref)
+    assert "No credit on the 3rd" in case["thread"][-1]["message"]
+
+
+@_pg_skip
+def test_an_approval_message_goes_into_that_requests_thread(reseed_accounts):
+    from businessflow.accounts import store
+
+    escalation_id = store.create_escalation("BF-1001", "Borrower requested a human agent from the dashboard")
+
+    response = client.post(f"/escalations/{escalation_id}/approve", headers=_auth())
+
+    assert response.status_code == 200
+    thread = store.get_case_threads("BF-1001")[escalation_id]
+    assert len(thread) == 1 and thread[0]["author"] == "ops"

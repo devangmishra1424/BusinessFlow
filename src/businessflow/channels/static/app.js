@@ -29,7 +29,7 @@ const TOOL_LABELS = {
   get_payment_status: "Checked your account",
   get_payment_history: "Looked up your payment history",
   log_promise_to_pay: "Noted your promise to pay",
-  flag_dispute: "Recorded your dispute",
+  flag_dispute: "Passed this to our team to check",
   escalate_to_human: "Passed this to our team",
   request_closure_certificate: "Checked your loan closure status",
   propose_restructuring: "Reviewed your request for more time",
@@ -69,6 +69,10 @@ const sendMessageApi = (conversationId, message) =>
 const getDashboard = (conversationId) => api(`/conversations/${conversationId}/dashboard`);
 const postDispute = (conversationId, reason) =>
   api(`/conversations/${conversationId}/quick-actions/dispute`, { method: "POST", body: JSON.stringify({ reason }) });
+const postPaymentClaim = (conversationId, details) =>
+  api(`/conversations/${conversationId}/quick-actions/payment-claim`, { method: "POST", body: JSON.stringify({ details }) });
+const postCaseNote = (conversationId, caseRef, message) =>
+  api(`/conversations/${conversationId}/cases/${encodeURIComponent(caseRef)}/notes`, { method: "POST", body: JSON.stringify({ message }) });
 const postAgent = (conversationId, reason) =>
   api(`/conversations/${conversationId}/quick-actions/agent`, { method: "POST", body: JSON.stringify({ reason: reason || null }) });
 const postPaymentLink = (conversationId, amount) =>
@@ -1111,7 +1115,10 @@ async function startPayment(amount, $result) {
 // "This isn't right" (contestPrefix) used to raise a dispute in ONE tap with
 // the banner's own sentence as its "reason" -- information-free for ops, easy
 // to hit by accident right next to the Pay button, and it froze the account's
-// reminders. It now asks what isn't right first.
+// reminders. Then it opened its own little form, a second way to do what the
+// Get help card does. Now it opens Get help itself: "I've already paid" or
+// "Something's wrong", in the borrower's own words, with contestPrefix telling
+// ops which warning it was about.
 const WARNING_ACTIONS = {
   overdue: {
     resolveLabel: (account) => `Pay ${fmtInr(account.amount_due_now)} now`,
@@ -1123,9 +1130,9 @@ const WARNING_ACTIONS = {
     resolveLabel: "Talk to our team",
     resolve: async () => {
       await postAgent(state.conversationId, "Following up on the earlier payment promises on my account");
-      return "Request sent \u2014 our team will pick it up. You can follow it under Your requests.";
+      return "Request sent \u2014 our team will pick it up. You can follow it under Requests & messages.";
     },
-    refreshAfterResolve: true, // a new request just appeared in "Your requests"
+    refreshAfterResolve: true, // a new request just appeared under "Requests & messages"
     contestPrefix: "Disputing the missed-promise count",
   },
 };
@@ -1139,6 +1146,10 @@ const WARNING_STYLE = { overdue: "", disputed: "info", broken_promises: "notice"
 // not a stale snapshot from an earlier render.
 let _lastWarnings = [];
 let _lastAccount = null;
+
+const MESSAGES_SHOWN = 4; // the rest behind "Show all": a long reminder history shouldn't bury the requests above it
+let messagesExpanded = false;
+let _lastMessages = [];
 
 const MESSAGE_KIND_LABELS = {
   message: "Message from our team",
@@ -1210,16 +1221,8 @@ function renderDashboard(data) {
         ? `<div class="dash-warning-actions">
              <button type="button" class="btn-primary" data-warning-action="resolve" data-warning-idx="${i}">${escapeHtml(resolveLabel)}</button>
              <button type="button" class="btn-cancel" data-warning-action="contest" data-warning-idx="${i}">This isn't right</button>
-           </div>
-           <form class="contest-form" id="contest-form-${i}" data-warning-idx="${i}" hidden>
-             <label class="field-label" for="contest-reason-${i}">What isn't right?</label>
-             <textarea id="contest-reason-${i}" rows="2" placeholder="e.g. I already paid this EMI on the 3rd"></textarea>
-             <div class="action-form-row">
-               <button type="submit" class="btn-primary">Send to our team</button>
-               <button type="button" class="btn-cancel" data-warning-action="contest-cancel" data-warning-idx="${i}">Cancel</button>
-             </div>
-           </form>`
-        : `<p class="dash-warning-note">This is already an open claim \u2014 our team is reviewing it and nothing more is needed from you here. The outcome will appear under Messages from us.</p>`;
+           </div>`
+        : `<p class="dash-warning-note">This is already open with our team \u2014 nothing more is needed from you. You can follow it, and add anything, under Requests & messages.</p>`;
       return `<div class="dash-warning ${WARNING_STYLE[w.label] || ""}">
         <button type="button" class="dash-warning-head" data-warning-toggle="${i}">
           ${WARNING_ICON}<span>${escapeHtml(w.text)}</span>${CHEVRON_ICON}
@@ -1230,16 +1233,6 @@ function renderDashboard(data) {
     .join("");
   document.getElementById("attention-section").hidden = warnings.length === 0;
 
-  // Everything we've sent this borrower -- staff messages, decisions, dispute
-  // outcomes, reminders -- whether or not Telegram delivered it.
-  document.getElementById("dash-messages").innerHTML = messages.length
-    ? messages
-        .map(
-          (m) =>
-            `<div class="dash-msg-card"><div><p class="dash-msg-kind">${escapeHtml(MESSAGE_KIND_LABELS[m.kind] || "Message")}</p><p class="dash-msg-text">${escapeHtml(m.message)}</p><p class="dash-msg-meta">${fmtDateTime(m.created_at)}</p></div>${m.delivered_via_telegram ? `<span class="dash-msg-badge yes">Also sent on Telegram</span>` : ""}</div>`
-        )
-        .join("")
-    : `<p class="dash-no-data">No messages from us yet.</p>`;
 
   // Hero identity (no risk label: it described the borrower, not the loan)
   document.getElementById("dash-avatar").textContent = initials(account.borrower_name);
@@ -1282,16 +1275,7 @@ function renderDashboard(data) {
   _lastTimeline = timeline;
   renderTimeline();
 
-  // The borrower's own requests and disputes, in their terms (the server never
-  // sends internal system tickets or raw staff wording -- see _build_requests).
-  document.getElementById("dash-escalations").innerHTML = requests.length
-    ? requests
-        .map(
-          (r) =>
-            `<div class="esc-card"><div><p class="esc-title">${escapeHtml(r.title)}</p>${r.detail ? `<p class="esc-detail">${escapeHtml(r.detail)}</p>` : ""}<p class="esc-meta">Requested ${fmtDateTime(r.created_at)}${r.resolved_at ? ` \u00b7 closed ${fmtDateTime(r.resolved_at)}` : ""}</p>${r.outcome ? `<p class="esc-outcome"><b>From our team:</b> ${escapeHtml(r.outcome)}</p>` : ""}</div><span class="esc-status ${escapeHtml(r.status)}">${escapeHtml(r.status_label)}</span></div>`
-        )
-        .join("")
-    : `<p class="dash-no-data">Nothing yet. If you ask our team for something, you can follow it here.</p>`;
+  renderRequestsAndMessages(requests, messages);
 
   // Documents -- real download links, scoped to this conversation's verified account.
   document.getElementById("dash-documents").innerHTML = documents.length
@@ -1303,6 +1287,109 @@ function renderDashboard(data) {
         .join("")
     : `<p class="dash-no-data">No documents uploaded yet.</p>`;
 }
+
+// "Requests & messages": each request is one conversation -- what the borrower
+// said, our replies, how it ended -- with a box to add a note while it's open;
+// then everything else we've sent (reminders, general messages). Before, a
+// request and our reply to it sat in two different panels ("Your requests",
+// "Messages from us") with nothing connecting them.
+const DISPUTE_KINDS = ["dispute", "payment_claim"];
+
+function threadMsgHtml(author, text, when) {
+  const you = author === "borrower";
+  return `<div class="thread-msg ${you ? "you" : "team"}"><p class="thread-who">${you ? "You" : "Our team"} <span class="thread-time">${fmtDateTime(when)}</span></p><p class="thread-text">${escapeHtml(text)}</p></div>`;
+}
+
+function requestCardHtml(r) {
+  const isDispute = DISPUTE_KINDS.includes(r.kind);
+  const thread = r.thread || [];
+  // A dispute's detail is the borrower's own words, so it opens the conversation; a request's detail (e.g. the
+  // terms asked for) is a summary line under the title.
+  const opening = isDispute && r.detail ? threadMsgHtml("borrower", r.detail, r.created_at) : "";
+  const summary = !isDispute && r.detail ? `<p class="esc-detail">${escapeHtml(r.detail)}</p>` : "";
+  // How it ended is a message in the thread for anything closed since threads existed; older ones only have the note.
+  const outcome = r.outcome && !thread.some((m) => m.author === "ops") ? threadMsgHtml("ops", r.outcome, r.resolved_at || r.created_at) : "";
+  const note = r.can_reply
+    ? `<form class="case-note-form" data-case-ref="${escapeHtml(r.id)}">
+         <label class="sr-only" for="note-${escapeHtml(r.id)}">Add a note for our team</label>
+         <textarea id="note-${escapeHtml(r.id)}" rows="1" maxlength="1000" placeholder="${r.kind === "payment_claim" ? "Add a payment reference (UTR) or anything else" : "Add a note for our team"}"></textarea>
+         <button type="submit" class="btn-cancel">Send</button>
+       </form>`
+    : "";
+  return `<div class="esc-card case-card${r.status === "open" ? " is-open" : ""}">
+    <div class="case-head"><p class="esc-title">${escapeHtml(r.title)}</p><span class="esc-status ${escapeHtml(r.status)}">${escapeHtml(r.status_label)}</span></div>
+    ${summary}
+    <div class="thread">${opening}${thread.map((m) => threadMsgHtml(m.author, m.message, m.created_at)).join("")}${outcome}</div>
+    <p class="esc-meta">Opened ${fmtDateTime(r.created_at)}${r.resolved_at ? ` \u00b7 closed ${fmtDateTime(r.resolved_at)}` : ""}</p>
+    ${note}
+  </div>`;
+}
+
+function renderMessages() {
+  const messages = _lastMessages;
+  const $toggle = document.getElementById("messages-toggle-btn");
+  const shown = messagesExpanded ? messages : messages.slice(0, MESSAGES_SHOWN);
+  document.getElementById("dash-messages").innerHTML = messages.length
+    ? `<p class="dash-subhead">Other messages from us</p>` +
+      shown
+        .map(
+          (m) =>
+            `<div class="dash-msg-card"><div><p class="dash-msg-kind">${escapeHtml(MESSAGE_KIND_LABELS[m.kind] || "Message")}</p><p class="dash-msg-text">${escapeHtml(m.message)}</p><p class="dash-msg-meta">${fmtDateTime(m.created_at)}</p></div>${m.delivered_via_telegram ? `<span class="dash-msg-badge yes">Also sent on Telegram</span>` : ""}</div>`
+        )
+        .join("")
+    : "";
+  $toggle.hidden = messages.length <= MESSAGES_SHOWN;
+  $toggle.setAttribute("aria-expanded", String(messagesExpanded));
+  $toggle.textContent = messagesExpanded ? "Show fewer messages" : `Show all ${messages.length} messages`;
+}
+
+function renderRequestsAndMessages(requests, messages) {
+  // Open requests first (they may need something from the borrower), then the rest, newest first -- the server
+  // already sends newest first, so a stable sort keeps that order within each group.
+  const ordered = requests.slice().sort((a, b) => (a.status === "open" ? 0 : 1) - (b.status === "open" ? 0 : 1));
+  document.getElementById("dash-escalations").innerHTML = ordered.length
+    ? ordered.map(requestCardHtml).join("")
+    : messages.length
+      ? ""
+      : `<p class="dash-no-data">Nothing yet. If you ask our team for something with Get help, you can follow it here.</p>`;
+  _lastMessages = messages;
+  renderMessages();
+}
+
+document.getElementById("messages-toggle-btn").addEventListener("click", () => {
+  messagesExpanded = !messagesExpanded;
+  renderMessages();
+});
+
+// Delegated, like the warnings below: the list is re-rendered on every load.
+document.getElementById("dash-escalations").addEventListener("submit", async (e) => {
+  const form = e.target.closest(".case-note-form");
+  if (!form) return;
+  e.preventDefault();
+  const $text = form.querySelector("textarea");
+  const text = $text.value.trim();
+  if (!text) {
+    $text.focus();
+    return;
+  }
+  const $btn = form.querySelector("button[type=submit]");
+  $btn.disabled = true;
+  $btn.textContent = "Sending\u2026";
+  try {
+    await postCaseNote(state.conversationId, form.dataset.caseRef, text);
+    await loadDashboard(); // shows the note in its thread
+  } catch (err) {
+    $btn.disabled = false;
+    $btn.textContent = "Send";
+    let $err = form.querySelector(".case-note-error");
+    if (!$err) {
+      $err = document.createElement("p");
+      $err.className = "case-note-error";
+      form.appendChild($err);
+    }
+    $err.innerHTML = err.status === 409 ? "This request was just closed \u2014 use Get help to raise something new." : friendlyActionError(err);
+  }
+});
 
 // Wired once, not per-render -- #dash-warnings' own innerHTML is fully
 // replaced on every renderDashboard call, so binding to individual
@@ -1327,15 +1414,11 @@ document.getElementById("dash-warnings").addEventListener("click", async (e) => 
   const cfg = warning && WARNING_ACTIONS[warning.label];
   if (!cfg) return;
   const action = actionBtn.dataset.warningAction;
-  const $form = document.getElementById(`contest-form-${idx}`);
 
   if (action === "contest") {
-    $form.hidden = !$form.hidden;
-    if (!$form.hidden) $form.querySelector("textarea").focus();
-    return;
-  }
-  if (action === "contest-cancel") {
-    $form.hidden = true;
+    // Overdue: it may be a payment we haven't seen, or a wrong figure -- let them say which. A promise count can only
+    // be wrong.
+    openHelp({ choice: warning.label === "overdue" ? null : "wrong", context: cfg.contestPrefix });
     return;
   }
 
@@ -1353,44 +1436,6 @@ document.getElementById("dash-warnings").addEventListener("click", async (e) => 
     showActionResult($result, friendlyActionError(err), false);
   } finally {
     actionBtn.disabled = false;
-  }
-});
-
-// "This isn't right": a reason is required, and it is the borrower's own
-// words that reach ops (prefixed with which warning it's about).
-document.getElementById("dash-warnings").addEventListener("submit", async (e) => {
-  const form = e.target.closest(".contest-form");
-  if (!form) return;
-  e.preventDefault();
-  const idx = Number(form.dataset.warningIdx);
-  const warning = _lastWarnings[idx];
-  const cfg = warning && WARNING_ACTIONS[warning.label];
-  if (!cfg) return;
-  const $result = document.getElementById("warnings-action-result");
-  const text = form.querySelector("textarea").value.trim();
-  if (!text) {
-    showActionResult($result, "Tell us what isn't right first.", false);
-    form.querySelector("textarea").focus();
-    return;
-  }
-  const $submit = form.querySelector('button[type="submit"]');
-  $submit.disabled = true;
-  try {
-    const result = await postDispute(state.conversationId, `${cfg.contestPrefix}: ${text}`);
-    showActionResult(
-      $result,
-      escapeHtml(
-        result.already_open
-          ? "You already have an open dispute \u2014 our team is reviewing it."
-          : "Thanks \u2014 our team will review this and we'll post the outcome here."
-      ),
-      true
-    );
-    loadDashboard(); // a "disputed" warning + a new entry under Your requests just appeared
-  } catch (err) {
-    showActionResult($result, friendlyActionError(err), false);
-  } finally {
-    $submit.disabled = false;
   }
 });
 
@@ -1482,59 +1527,118 @@ function wireActionToggle(btnId, formId, resultId) {
   return { $form, $result };
 }
 
-const { $form: $disputeForm, $result: $disputeResult } = wireActionToggle("action-dispute-btn", "dispute-form", "dispute-result");
-document.getElementById("dispute-cancel-btn").addEventListener("click", () => { $disputeForm.hidden = true; });
-$disputeForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const $reasonInput = document.getElementById("dispute-reason");
-  const reason = $reasonInput.value.trim();
-  if (!reason) {
-    showActionResult($disputeResult, "Enter a reason first.", false);
-    return;
-  }
-  const $btn = document.getElementById("dispute-submit-btn");
-  $btn.disabled = true;
-  try {
-    const result = await postDispute(state.conversationId, reason);
-    showActionResult(
-      $disputeResult,
-      escapeHtml(
-        result.already_open
-          ? "You already have an open dispute — our team is reviewing it."
-          : "Thanks — our team will review this and we'll post the outcome here."
-      ),
-      true
-    );
-    $disputeForm.hidden = true;
-    $reasonInput.value = "";
-    loadDashboard(); // dispute_open + warnings just changed
-  } catch (err) {
-    showActionResult($disputeResult, friendlyActionError(err), false);
-  } finally {
-    $btn.disabled = false;
-  }
+// Get help: one card for everything a borrower brings to us -- "I've already
+// paid" (a payment claim the team checks against the bank record), "Something's
+// wrong" (a dispute), "Talk to a person" (a request). These were two cards
+// ("Something looks wrong", "Talk to our team") plus a form under each warning,
+// and "I already paid" had no place of its own: it was filed as a dispute.
+const HELP_CHOICES = {
+  paid: {
+    label: "When and how did you pay?",
+    placeholder: "e.g. \u20b912,500 by UPI on 3 Oct, reference 4521\u2026",
+    hint: "Our team checks it against the bank record and updates your account. Reminders pause until then.",
+    required: true,
+  },
+  wrong: {
+    label: "What isn't right?",
+    placeholder: "e.g. A late fee was added although I paid on time",
+    hint: "Reminders pause while our team looks into it. You'll see the reply under Requests & messages.",
+    required: true,
+  },
+  person: {
+    label: "What do you need help with? (optional)",
+    placeholder: "Anything that helps our team prepare",
+    hint: "A person on our team picks this up and replies under Requests & messages.",
+    required: false,
+  },
+};
+
+const $helpBtn = document.getElementById("action-help-btn");
+const { $form: $helpForm, $result: $helpResult } = wireActionToggle("action-help-btn", "help-form", "help-result");
+const $helpFields = document.getElementById("help-fields");
+const $helpText = document.getElementById("help-text");
+let helpChoice = null;
+let helpContext = null; // which warning "This isn't right" came from, so ops knows what it is about
+
+function selectHelpChoice(choice) {
+  helpChoice = choice;
+  $helpForm.querySelectorAll("[data-help-choice]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.helpChoice === choice)));
+  const cfg = HELP_CHOICES[choice];
+  $helpFields.hidden = !cfg;
+  if (!cfg) return;
+  document.getElementById("help-label").textContent = cfg.label;
+  $helpText.placeholder = cfg.placeholder;
+  document.getElementById("help-hint").textContent = cfg.hint;
+  $helpText.focus();
+}
+
+function resetHelp() {
+  helpContext = null;
+  $helpText.value = "";
+  selectHelpChoice(null);
+}
+
+/** Opens Get help, optionally on one choice -- also what a warning's "This isn't right" does. */
+function openHelp({ choice = null, context = null } = {}) {
+  if ($helpForm.hidden) $helpBtn.click();
+  $helpResult.hidden = true;
+  helpContext = context;
+  selectHelpChoice(choice);
+  $helpBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+$helpBtn.addEventListener("click", () => {
+  $helpBtn.setAttribute("aria-expanded", String(!$helpForm.hidden));
+  if ($helpForm.hidden) resetHelp();
+});
+$helpForm.querySelectorAll("[data-help-choice]").forEach((btn) =>
+  btn.addEventListener("click", () => selectHelpChoice(btn.dataset.helpChoice))
+);
+document.getElementById("help-cancel-btn").addEventListener("click", () => {
+  $helpForm.hidden = true;
+  $helpBtn.setAttribute("aria-expanded", "false");
+  resetHelp();
 });
 
-const { $form: $agentForm, $result: $agentResult } = wireActionToggle("action-agent-btn", "agent-form", "agent-result");
-document.getElementById("agent-cancel-btn").addEventListener("click", () => { $agentForm.hidden = true; });
-$agentForm.addEventListener("submit", async (e) => {
+function helpResultText(choice, result) {
+  if (choice === "person") return "Request sent \u2014 a person on our team will pick it up. You can follow it under Requests & messages.";
+  if (result.already_open) {
+    return result.kind === "payment_claim"
+      ? "Added to the payment you already reported \u2014 our team will see it there."
+      : "You already have an open case with us \u2014 we've added this to it.";
+  }
+  if (choice === "paid") {
+    const days = result.review_within_working_days;
+    return `Thanks \u2014 our team will check this payment against the bank record${days ? ` within ${days} working day${days === 1 ? "" : "s"}` : ""} and update your account. Reminders are paused until then. You can follow it under Requests & messages.`;
+  }
+  return "Thanks \u2014 our team will look into this and reply under Requests & messages. Reminders are paused meanwhile.";
+}
+
+$helpForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  const $reasonInput = document.getElementById("agent-reason");
-  const reason = $reasonInput.value.trim();
-  const $btn = document.getElementById("agent-submit-btn");
+  const cfg = HELP_CHOICES[helpChoice];
+  if (!cfg) return;
+  const text = $helpText.value.trim();
+  if (cfg.required && !text) {
+    showActionResult($helpResult, "Please add a few words first.", false);
+    $helpText.focus();
+    return;
+  }
+  const $btn = document.getElementById("help-submit-btn");
   $btn.disabled = true;
+  const choice = helpChoice;
   try {
-    const result = await postAgent(state.conversationId, reason);
-    showActionResult(
-      $agentResult,
-      escapeHtml("Request sent — our team will pick it up. You can follow it under Your requests."),
-      true
-    );
-    $agentForm.hidden = true;
-    $reasonInput.value = "";
-    loadDashboard(); // a new escalation just appeared in the list
+    let result;
+    if (choice === "paid") result = await postPaymentClaim(state.conversationId, text);
+    else if (choice === "wrong") result = await postDispute(state.conversationId, helpContext ? `${helpContext}: ${text}` : text);
+    else result = await postAgent(state.conversationId, text);
+    showActionResult($helpResult, escapeHtml(helpResultText(choice, result)), true);
+    $helpForm.hidden = true;
+    $helpBtn.setAttribute("aria-expanded", "false");
+    resetHelp();
+    loadDashboard(); // the request (and, for a claim, the paused-reminders notice) just appeared
   } catch (err) {
-    showActionResult($agentResult, friendlyActionError(err), false);
+    showActionResult($helpResult, friendlyActionError(err), false);
   } finally {
     $btn.disabled = false;
   }

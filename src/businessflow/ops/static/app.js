@@ -8,14 +8,14 @@ const state = {
   view: "overview",
   accounts: [],
   metrics: null,
-  escalations: [],
+  inbox: [], // every open case (GET /inbox): payment claims, disputes, requests, system notices
   activeFilter: "all",
   sortBy: "urgency", // "urgency" | "risk" | "id" -- see filteredAccounts()
   search: "",
   selectedAccountIds: new Set(),
   sinceHours: 24,
   detailAccountId: null,
-  detailTab: "overview", // "overview" | "activity" | "payments" | "outreach" | "documents"
+  detailTab: "overview", // "overview" | "cases" | "payments" | "documents"
   refreshTimer: null,
 };
 
@@ -34,17 +34,33 @@ const GRACE_PERIOD_DAYS = 3;
 // Before, a fraud claim, a guardrail artifact, a chronic-delinquency notice and a
 // borrower's call-back request were indistinguishable cards with the same
 // Approve/Reject pair.
+// Short, so the pill says what TYPE a case is and the title next to it says what it's about.
 const KIND_LABELS = {
-  fraud: "Urgent \u00b7 identity / fraud claim",
+  payment_claim: "Payment claim",
+  dispute: "Dispute",
+  fraud: "Urgent",
   request: "Request",
-  restructuring: "Restructuring",
-  callback: "Call-back request",
-  closure: "Closure certificate",
-  system: "System notice",
+  restructuring: "More time",
+  callback: "Call-back",
+  closure: "Closure",
+  system: "System",
 };
+
+// "Dispute · Dispute" says nothing twice: the title shows only when it adds to the pill.
+function caseHeading(c) {
+  const pill = KIND_LABELS[c.kind] || c.kind;
+  return c.title && c.title.toLowerCase() !== pill.toLowerCase() ? c.title : "";
+}
 // Triage order, lowest first (mirrors escalation_kinds.URGENCY_RANK): a fraud
 // claim must not sit at the bottom of an oldest-first list just because it is new.
-const KIND_URGENCY = { fraud: 0, request: 1, restructuring: 2, callback: 2, closure: 3, system: 4 };
+const KIND_URGENCY = { fraud: 0, payment_claim: 1, dispute: 1, request: 1, restructuring: 2, callback: 2, closure: 3, system: 4 };
+
+// What was sent, for the profile's history (store.get_borrower_messages' kinds).
+const SENT_KIND_LABELS = { message: "Message sent", decision: "Decision sent", dispute: "Dispute update sent", reminder: "Reminder sent" };
+
+// The usual first reply to a payment claim, one tap away inside its reply box.
+const ASK_REFERENCE_TEXT =
+  "Thanks for letting us know. Could you share the payment reference (UTR or transaction ID), with the date and the amount? We'll match it against the bank record.";
 
 const CALL_OUTCOME_LABELS = {
   reached: "Reached",
@@ -110,7 +126,7 @@ async function api(path, opts = {}) {
 
 const getAccounts = (flag) => api(`/accounts${flag ? `?flag=${flag}` : ""}`);
 const getAccount = (id) => api(`/accounts/${id}`);
-const getEscalations = () => api("/escalations");
+const getInbox = () => api("/inbox");
 const getMetrics = (sinceHours) => api(`/metrics?since_hours=${sinceHours}`);
 const approveEscalation = (id) => api(`/escalations/${id}/approve`, { method: "POST" });
 const rejectEscalation = (id, reason) =>
@@ -173,11 +189,23 @@ const recordPayment = (accountId, payload) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-const resolveDispute = (accountId, resolutionNote) =>
+const resolveDispute = (accountId, resolutionNote, disputeId = null) =>
   api(`/accounts/${accountId}/disputes/resolve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ resolution_note: resolutionNote || null }),
+    body: JSON.stringify({ resolution_note: resolutionNote || null, dispute_id: disputeId }),
+  });
+const replyToCase = (accountId, caseRef, message) =>
+  api(`/accounts/${accountId}/cases/${encodeURIComponent(caseRef)}/reply`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+const confirmPaymentClaim = (accountId, caseRef, payload) =>
+  api(`/accounts/${accountId}/cases/${encodeURIComponent(caseRef)}/confirm-payment`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
   });
 const logPromise = (accountId, payload) =>
   api(`/accounts/${accountId}/promises`, {
@@ -211,8 +239,6 @@ const sendBulkClarification = (accountIds, message) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ account_ids: accountIds, message }),
   });
-const markClarificationsResolved = (accountId) =>
-  api(`/accounts/${accountId}/clarification-requests/mark-resolved`, { method: "POST" });
 const escalateAccount = (accountId, reason) =>
   api(`/accounts/${accountId}/escalate`, {
     method: "POST",
@@ -319,7 +345,7 @@ function setView(view) {
   state.view = view;
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === view));
   document.getElementById("view-overview").hidden = view !== "overview";
-  document.getElementById("view-escalations").hidden = view !== "escalations";
+  document.getElementById("view-inbox").hidden = view !== "inbox";
 }
 
 /* ============================================================
@@ -447,7 +473,7 @@ function toast(message, isError = false) {
 // A one-line, plain-language read of the whole portfolio -- the first
 // thing anyone unfamiliar with this dashboard sees, so they don't have to
 // mentally tally the account cards themselves to know what's going on.
-function renderPortfolioSummary(accounts, openEscalations) {
+function renderPortfolioSummary(accounts, openCases) {
   const el = document.getElementById("portfolio-summary");
   if (!accounts.length) {
     el.textContent = "No accounts on the books yet.";
@@ -462,8 +488,8 @@ function renderPortfolioSummary(accounts, openEscalations) {
   if (cleanCount > 0) {
     parts.push(`${cleanCount} clean`);
   }
-  if (openEscalations > 0) {
-    parts.push(`${openEscalations} waiting on a human`);
+  if (openCases > 0) {
+    parts.push(`${openCases} open case${openCases === 1 ? "" : "s"} waiting on a human`);
   }
   el.textContent = parts.join(" — ");
 }
@@ -477,8 +503,8 @@ function renderKpis() {
   // hand. emi_amount is already on every AccountSummaryOut; this is a pure
   // client-side sum, no new backend data.
   const overdueRupees = overdueAccounts.reduce((sum, a) => sum + a.emi_amount, 0);
-  const openEscalations = state.escalations.filter((e) => e.status === "queued_for_human").length;
-  renderPortfolioSummary(accounts, openEscalations);
+  const openCases = state.inbox.length;
+  renderPortfolioSummary(accounts, openCases);
   const rate = state.metrics ? Math.round(state.metrics.escalation_rate * 100) : null;
   const toolCalls = state.metrics ? state.metrics.event_counts.tool_called || 0 : 0; // the rate's denominator
 
@@ -506,11 +532,11 @@ function renderKpis() {
     },
     {
       icon: iconInbox(),
-      cls: openEscalations ? "warn" : "ok",
+      cls: openCases ? "warn" : "ok",
       label: "Awaiting a human",
-      value: openEscalations,
-      sub: "open escalations",
-      action: "escalations",
+      value: openCases,
+      sub: openCases ? "open cases in the inbox" : "inbox is clear",
+      action: "inbox",
     },
     {
       icon: iconPulse(),
@@ -565,8 +591,8 @@ function renderKpis() {
   document.querySelectorAll("#kpi-row [data-kpi-action]").forEach((card) => {
     const activate = () => {
       const action = card.dataset.kpiAction;
-      if (action === "escalations") {
-        setView("escalations");
+      if (action === "inbox") {
+        setView("inbox");
         return;
       }
       setView("overview");
@@ -584,10 +610,10 @@ function renderKpis() {
     });
   });
 
-  const badge = document.getElementById("escalation-count-badge");
-  if (openEscalations > 0) {
+  const badge = document.getElementById("inbox-count-badge");
+  if (openCases > 0) {
     badge.hidden = false;
-    badge.textContent = openEscalations;
+    badge.textContent = openCases;
   } else {
     badge.hidden = true;
   }
@@ -902,14 +928,17 @@ document.getElementById("search-input").addEventListener("input", (e) => {
 });
 
 /* ============================================================
-   Escalation queue view
+   Inbox, and the case card it shares with the profile's Cases tab
    ============================================================ */
+// One list of everything open that needs a person -- payment claims, disputes,
+// requests, system notices -- where there used to be an escalation queue that
+// never showed a dispute at all. Each card is one case (accounts/cases.py): what
+// the borrower said, the messages since, and the one action that closes it.
+//
 // An escalation open 20 minutes and one open 5 days are very different
-// problems -- the latter is stalling a real restructuring request or
-// dispute. Bucketed so staleness is visible without opening the tab and
-// reading every card's relative time by hand.
+// problems, so open cases are also bucketed by age.
 function renderSlaBuckets() {
-  const open = state.escalations.filter((e) => e.status === "queued_for_human");
+  const open = state.inbox;
   const container = document.getElementById("sla-buckets");
   if (!open.length) {
     container.innerHTML = "";
@@ -917,8 +946,8 @@ function renderSlaBuckets() {
   }
   const now = Date.now();
   const buckets = { fresh: 0, aging: 0, stale: 0 };
-  open.forEach((e) => {
-    const hours = (now - new Date(e.created_at).getTime()) / 3_600_000;
+  open.forEach((c) => {
+    const hours = (now - new Date(c.opened_at).getTime()) / 3_600_000;
     if (hours < 24) buckets.fresh++;
     else if (hours < 72) buckets.aging++;
     else buckets.stale++;
@@ -930,24 +959,12 @@ function renderSlaBuckets() {
   `;
 }
 
-function renderEscalationList() {
+function renderInbox() {
   renderSlaBuckets();
-  // Most urgent kind first, then oldest first within a kind.
-  const list = state.escalations.slice().sort(
-    (a, b) =>
-      (KIND_URGENCY[a.kind] ?? 1) - (KIND_URGENCY[b.kind] ?? 1) || new Date(a.created_at) - new Date(b.created_at)
-  );
-  const container = document.getElementById("escalation-list");
-  document.getElementById("escalation-empty").hidden = list.length !== 0;
-  container.innerHTML = list.map((e) => escalationCardHtml(e, { withAccountLink: true })).join("");
-
-  container.querySelectorAll(".escalation-account").forEach((el) =>
-    el.addEventListener("click", () => openDetail(el.dataset.id))
-  );
-  // Full reload, same reasoning as the detail panel's own escalation
-  // actions -- an approval/rejection can change the account's own fields,
-  // not just the escalation's status.
-  wireEscalationActions(container, () => loadAll());
+  // The server already sorts (most urgent kind, then oldest); kept as sent.
+  const container = document.getElementById("inbox-list");
+  document.getElementById("inbox-empty").hidden = state.inbox.length !== 0;
+  container.innerHTML = state.inbox.map((c) => caseCardHtml(c, { inInbox: true })).join("");
 }
 
 function proposedTermsHtml(pc) {
@@ -966,47 +983,121 @@ function proposedTermsHtml(pc) {
   return `<div class="escalation-terms">${rows}</div>`;
 }
 
-function escalationCardHtml(e, { withAccountLink }) {
-  const isOpen = e.status === "queued_for_human";
-  const kind = e.kind || "request";
-  const acct = state.accounts.find((a) => a.account_id === e.account_id);
-  // Who and how much, right on the card -- an operator triaging the queue
-  // shouldn't have to open every account to learn who it is and how late.
-  const who = acct
-    ? `${acct.borrower_name} \u00b7 ${fmtInr(acct.emi_amount)} EMI${acct.days_past_due > 0 ? ` \u00b7 ${acct.days_past_due}d past due` : ""}`
-    : "";
-  // Only a restructuring or a closure certificate is something to approve or
-  // reject. Everything else is "handled"; a system notice is just acknowledged
-  // (and never messages the borrower).
-  const canReject = kind === "restructuring" || kind === "closure";
-  const approveLabel = kind === "system" ? "Acknowledge" : canReject ? "Approve" : "Mark handled";
-  return `
-  <div class="escalation-card${kind === "fraud" ? " urgent" : ""}" data-escalation-id="${e.escalation_id}" data-kind="${escapeHtml(kind)}">
-    <div class="escalation-main">
-      <div class="escalation-top">
-        ${withAccountLink ? `<span class="escalation-account" data-id="${e.account_id}">${e.account_id}</span>` : ""}
-        <span class="kind-pill ${escapeHtml(kind)}">${escapeHtml(KIND_LABELS[kind] || kind)}</span>
-        <span class="status-pill ${e.status}">${e.status.replace(/_/g, " ")}</span>
-        <span class="escalation-time">${relativeTime(e.created_at)}</span>
-      </div>
-      ${withAccountLink && who ? `<div class="escalation-who">${escapeHtml(who)}</div>` : ""}
-      <div class="escalation-reason">${escapeHtml(e.reason)}</div>
-      ${proposedTermsHtml(e.proposed_changes)}
-      ${e.resolution_reason ? `<div class="escalation-reason" style="margin-top:6px;color:var(--text-3)">Reason given: ${escapeHtml(e.resolution_reason)}</div>` : ""}
-      <div class="reject-reason-row" id="reject-row-${e.escalation_id}">
-        <input type="text" placeholder="Optional reason shown to the borrower" id="reject-input-${e.escalation_id}" />
-        <button class="btn btn-danger confirm-reject" data-id="${e.escalation_id}">Confirm reject</button>
-      </div>
-    </div>
-    ${
-      isOpen
-        ? `<div class="escalation-actions">
-            <button class="btn btn-success" data-action="approve" data-id="${e.escalation_id}">${approveLabel}</button>
-            ${canReject ? `<button class="btn btn-danger" data-action="reject" data-id="${e.escalation_id}">Reject</button>` : ""}
-          </div>`
-        : ""
-    }
+function caseMessageHtml(m) {
+  const fromBorrower = m.author === "borrower";
+  const delivery = fromBorrower ? "" : m.delivered_via_telegram ? " · on Telegram" : " · dashboard only";
+  return `<div class="case-msg ${fromBorrower ? "borrower" : "ops"}">
+    <span class="case-msg-who">${fromBorrower ? "Borrower" : "Team"}</span>
+    <span class="case-msg-text">${escapeHtml(m.message)}</span>
+    <span class="case-msg-meta">${relativeTime(m.created_at)}${delivery}</span>
   </div>`;
+}
+
+// The inbox shows the last two messages of each case; the profile shows all of them.
+function caseThreadHtml(c, { compact }) {
+  const msgs = c.thread || [];
+  if (!msgs.length) return "";
+  const shown = compact ? msgs.slice(-2) : msgs;
+  const earlier = msgs.length - shown.length;
+  return `<div class="case-thread">${earlier ? `<p class="case-earlier">${earlier} earlier message${earlier === 1 ? "" : "s"} — open the case to read them</p>` : ""}${shown.map(caseMessageHtml).join("")}</div>`;
+}
+
+// The one right action per kind, plus Reply. Only a restructuring or a closure
+// certificate is approved or rejected; a payment claim is confirmed (the payment
+// recorded) or closed with a reason; a dispute is resolved with a note.
+function caseActionsHtml(c) {
+  if (!c.open) return "";
+  const b = (action, label, cls = "btn-secondary") => `<button type="button" class="btn ${cls}" data-case-action="${action}">${label}</button>`;
+  const actions = {
+    payment_claim: b("confirm", "Confirm payment…", "btn-success") + b("resolve", "Close without payment…"),
+    dispute: b("resolve", "Resolve…", "btn-success"),
+    restructuring: b("approve", "Approve", "btn-success") + b("reject", "Reject…", "btn-danger"),
+    closure: b("approve", "Approve", "btn-success") + b("reject", "Reject…", "btn-danger"),
+    system: b("approve", "Acknowledge", "btn-success"),
+  };
+  return `<div class="case-actions">${actions[c.kind] ?? b("approve", "Mark handled", "btn-success")}${c.can_reply ? b("reply", "Reply…") : ""}</div>`;
+}
+
+function caseFormsHtml(c, amountHint) {
+  const forms = [];
+  if (c.can_reply) {
+    forms.push(`<form class="case-form" data-case-form="reply" hidden>
+      <textarea rows="3" maxlength="1000" placeholder="Your reply — shown in this case on the borrower's dashboard, and sent on Telegram if linked"></textarea>
+      <div class="clarify-actions-row">
+        <button type="submit" class="btn btn-primary">Send reply</button>
+        ${c.kind === "payment_claim" ? `<button type="button" class="btn btn-ghost" data-case-action="fill-reference">Ask for the payment reference</button>` : ""}
+      </div>
+      <p class="mini-form-error" hidden></p>
+    </form>`);
+  }
+  if (c.kind === "payment_claim") {
+    forms.push(`<form class="case-form" data-case-form="confirm" hidden>
+      <p class="inline-form-title">The payment you found in the bank record</p>
+      <div class="upload-row">
+        <input type="number" name="amount" min="0.01" step="0.01" required value="${amountHint ?? ""}" aria-label="Amount paid (₹)" placeholder="Amount (₹)" />
+        <input type="date" name="payment_date" aria-label="Date the borrower paid" title="Date the borrower paid (decides on time or late; defaults to today)" />
+      </div>
+      <input type="text" name="note" class="case-note-input" maxlength="500" placeholder="Note to the borrower (optional)" />
+      <div class="mini-form-radio-row case-extra-question" hidden>
+        <span class="clarify-hint full-row">Less than what's due this cycle — apply it toward the next EMI?</span>
+        <label><input type="radio" name="apply" value="true" /> Yes, credit it</label>
+        <label><input type="radio" name="apply" value="false" /> No, just record it</label>
+      </div>
+      <div class="clarify-actions-row">
+        <button type="submit" class="btn btn-success">Record payment &amp; close</button>
+        <span class="clarify-hint">Records it on the account, closes the claim and tells the borrower.</span>
+      </div>
+      <p class="mini-form-error" hidden></p>
+    </form>`);
+  }
+  if (c.source === "dispute") {
+    const claim = c.kind === "payment_claim";
+    forms.push(`<form class="case-form" data-case-form="resolve" hidden>
+      <input type="text" name="note" class="case-note-input" maxlength="500" ${claim ? "required" : ""}
+        placeholder="${claim ? "Why it couldn't be confirmed — sent to the borrower" : "How it was resolved (optional) — sent to the borrower"}" />
+      <div class="clarify-actions-row">
+        <button type="submit" class="btn ${claim ? "btn-secondary" : "btn-success"}">${claim ? "Close without payment" : "Resolve"}</button>
+        <span class="clarify-hint">Reminders resume once it's closed.</span>
+      </div>
+      <p class="mini-form-error" hidden></p>
+    </form>`);
+  }
+  if (c.kind === "restructuring" || c.kind === "closure") {
+    forms.push(`<form class="case-form" data-case-form="reject" hidden>
+      <input type="text" name="reason" class="case-note-input" maxlength="500" placeholder="Reason shown to the borrower (optional)" />
+      <div class="clarify-actions-row"><button type="submit" class="btn btn-danger">Reject</button></div>
+      <p class="mini-form-error" hidden></p>
+    </form>`);
+  }
+  return forms.join("");
+}
+
+function caseCardHtml(c, { inInbox = false, amountHint = null } = {}) {
+  const kind = c.kind || "request";
+  const acct = state.accounts.find((a) => a.account_id === c.account_id);
+  // Who and how much, right on an inbox card -- triage shouldn't need every account opened.
+  const who = inInbox && acct ? `${fmtInr(acct.emi_amount)} EMI${acct.days_past_due > 0 ? ` · ${acct.days_past_due}d past due` : ""}` : "";
+  const prefill = amountHint ?? acct?.amount_due_now ?? acct?.emi_amount ?? null;
+  const wordsLabel = c.source === "dispute" ? "Borrower said" : kind === "system" ? "Raised by the system" : "Reason";
+  const outcome = !c.open && c.outcome && !(c.thread || []).some((m) => m.author === "ops")
+    ? `<div class="case-outcome">Outcome: ${escapeHtml(c.outcome)}</div>`
+    : "";
+  return `
+  <article class="case-card${kind === "fraud" ? " urgent" : ""}${c.open ? "" : " closed"}" data-case-ref="${escapeHtml(c.case_ref)}" data-account-id="${escapeHtml(c.account_id)}" data-kind="${escapeHtml(kind)}">
+    <div class="case-top">
+      <span class="kind-pill ${escapeHtml(kind)}">${escapeHtml(KIND_LABELS[kind] || kind)}</span>
+      ${caseHeading(c) ? `<span class="case-title">${escapeHtml(caseHeading(c))}</span>` : ""}
+      ${inInbox ? `<button type="button" class="case-account" data-open-account="${escapeHtml(c.account_id)}" title="Open this account's cases">${escapeHtml(c.borrower_name || c.account_id)} · ${escapeHtml(c.account_id)}</button>` : ""}
+      <span class="case-age">${c.open ? `opened ${relativeTime(c.opened_at)}` : `${escapeHtml(c.status)} ${relativeTime(c.closed_at || c.opened_at)}`}</span>
+    </div>
+    ${who ? `<div class="escalation-who">${escapeHtml(who)}</div>` : ""}
+    <div class="case-words"><span class="case-words-label">${wordsLabel}</span>${escapeHtml(c.borrower_words)}</div>
+    ${proposedTermsHtml(c.proposed_changes)}
+    ${caseThreadHtml(c, { compact: inInbox })}
+    ${outcome}
+    ${caseActionsHtml(c)}
+    ${c.open ? caseFormsHtml(c, prefill) : ""}
+  </article>`;
 }
 
 // What the operator is told happened to the BORROWER's side of an approve /
@@ -1015,44 +1106,128 @@ function escalationCardHtml(e, { withAccountLink }) {
 function decisionToast(verb, result) {
   if (result.kind === "system") return `${verb} \u2014 internal notice, nothing sent to the borrower.`;
   if (result.borrower_notified === true) return `${verb} \u2014 borrower notified on Telegram.`;
-  if (result.borrower_notified === false) return `${verb} \u2014 no linked Telegram, so it's logged and shown on the borrower's dashboard.`;
+  if (result.borrower_notified === false) return `${verb} \u2014 no linked Telegram, so it's shown in this case on the borrower's dashboard.`;
   return `${verb}.`;
 }
 
-function wireEscalationActions(root, onDone) {
-  root.querySelectorAll('[data-action="approve"]').forEach((btn) =>
-    btn.addEventListener("click", async () => {
-      btn.disabled = true;
-      try {
-        const result = await approveEscalation(btn.dataset.id);
-        toast(decisionToast(result.kind === "restructuring" || result.kind === "closure" ? "Approved" : "Closed", result));
-        await onDone();
-      } catch (e) {
-        toast(e.message, true);
-        btn.disabled = false;
+function notifiedText(notified) {
+  return notified ? "borrower notified on Telegram" : "shown in this case on the borrower's dashboard (no linked Telegram)";
+}
+
+// After any action on a case: the profile (if this case is in it) and the
+// whole dashboard reload -- confirming a payment changes the account's EMI and
+// flags, and every action changes the inbox.
+async function afterCaseAction(root, accountId) {
+  if (root === $detailPanel && state.detailAccountId === accountId) {
+    const [fresh, freshDocuments, freshConversation] = await _loadDetailData(accountId);
+    renderDetail(fresh, freshDocuments, freshConversation);
+  }
+  await loadAll();
+}
+
+function showCaseForm(card, name) {
+  card.querySelectorAll("[data-case-form]").forEach((f) => {
+    f.hidden = f.dataset.caseForm === name ? !f.hidden : true;
+  });
+  card.querySelector(`[data-case-form="${name}"]:not([hidden]) textarea, [data-case-form="${name}"]:not([hidden]) input`)?.focus();
+}
+
+async function submitCaseForm(form, card) {
+  const { caseRef, accountId, kind } = card.dataset;
+  const field = (name) => form.querySelector(`[name="${name}"]`)?.value.trim() || "";
+  switch (form.dataset.caseForm) {
+    case "reply": {
+      const message = form.querySelector("textarea").value.trim();
+      if (!message) throw new Error("Write a reply first.");
+      const result = await replyToCase(accountId, caseRef, message);
+      return `Reply sent — ${notifiedText(result.delivered_via_telegram)}.`;
+    }
+    case "confirm": {
+      const amount = Number(field("amount"));
+      if (!(amount > 0)) throw new Error("Enter the amount you found.");
+      const payload = { amount, payment_date: field("payment_date") || null, note: field("note") || null };
+      const extra = form.querySelector(".case-extra-question");
+      if (!extra.hidden) {
+        const picked = form.querySelector('input[name="apply"]:checked');
+        if (!picked) throw new Error("Choose whether to credit it toward the next EMI.");
+        payload.apply_extra_to_next = picked.value === "true";
       }
-    })
-  );
-  root.querySelectorAll('[data-action="reject"]').forEach((btn) =>
-    btn.addEventListener("click", () => {
-      document.getElementById(`reject-row-${btn.dataset.id}`).classList.add("open");
-    })
-  );
-  root.querySelectorAll(".confirm-reject").forEach((btn) =>
-    btn.addEventListener("click", async () => {
-      const id = btn.dataset.id;
-      const reason = document.getElementById(`reject-input-${id}`).value.trim();
-      btn.disabled = true;
-      try {
-        const result = await rejectEscalation(id, reason);
-        toast(decisionToast("Rejected", result));
-        await onDone();
-      } catch (e) {
-        toast(e.message, true);
-        btn.disabled = false;
+      const result = await confirmPaymentClaim(accountId, caseRef, payload);
+      return `${fmtInr(result.payment.amount)} recorded and the claim closed — ${notifiedText(result.borrower_notified)}.`;
+    }
+    case "resolve": {
+      const note = field("note");
+      if (kind === "payment_claim" && !note) throw new Error("Say why it couldn't be confirmed — the borrower is sent this.");
+      const result = await resolveDispute(accountId, note, Number(caseRef.replace(/^D-/, "")));
+      return `${kind === "payment_claim" ? "Claim closed" : "Dispute resolved"} — ${notifiedText(result.borrower_notified)}.`;
+    }
+    case "reject": {
+      const result = await rejectEscalation(caseRef, field("reason"));
+      return decisionToast("Rejected", result);
+    }
+  }
+  throw new Error(`unknown case form ${form.dataset.caseForm}`);
+}
+
+// Delegated once per container (the inbox list, the detail panel): both are
+// re-rendered on every load, so handlers on the cards themselves would be lost.
+function wireCaseActions(root) {
+  root.addEventListener("click", async (e) => {
+    const opener = e.target.closest("[data-open-account]");
+    if (opener) {
+      openDetail(opener.dataset.openAccount, { tab: "cases" });
+      return;
+    }
+    const btn = e.target.closest("[data-case-action]");
+    const card = btn?.closest(".case-card");
+    if (!card) return;
+    const action = btn.dataset.caseAction;
+    if (action === "fill-reference") {
+      const box = card.querySelector('[data-case-form="reply"] textarea');
+      box.value = ASK_REFERENCE_TEXT;
+      box.focus();
+      return;
+    }
+    if (action !== "approve") {
+      showCaseForm(card, action);
+      return;
+    }
+    btn.disabled = true;
+    try {
+      const result = await approveEscalation(card.dataset.caseRef);
+      const verb = result.kind === "restructuring" || result.kind === "closure" ? "Approved" : result.kind === "system" ? "Acknowledged" : "Closed";
+      toast(decisionToast(verb, result));
+      await afterCaseAction(root, card.dataset.accountId);
+    } catch (err) {
+      toast(err.message, true);
+      btn.disabled = false;
+    }
+  });
+
+  root.addEventListener("submit", async (e) => {
+    const form = e.target.closest("[data-case-form]");
+    const card = form?.closest(".case-card");
+    if (!card) return;
+    e.preventDefault();
+    const submit = form.querySelector("button[type=submit]");
+    const errorEl = form.querySelector(".mini-form-error");
+    errorEl.hidden = true;
+    submit.disabled = true;
+    try {
+      toast(await submitCaseForm(form, card));
+      await afterCaseAction(root, card.dataset.accountId);
+    } catch (err) {
+      // A 422 on confirm means the amount is short of this cycle's EMI: ask, as Record payment does.
+      if (form.dataset.caseForm === "confirm" && err instanceof ApiError && err.status === 422) {
+        form.querySelector(".case-extra-question").hidden = false;
+        errorEl.textContent = "That's less than what's due this cycle — choose whether to credit it toward the next EMI.";
+      } else {
+        errorEl.textContent = err.message;
       }
-    })
-  );
+      errorEl.hidden = false;
+      submit.disabled = false;
+    }
+  });
 }
 
 /* ============================================================
@@ -1090,9 +1265,9 @@ function _loadDetailData(accountId) {
 
 const DETAIL_CLOSE_HTML = `<button type="button" class="detail-close" aria-label="Close">✕</button>`;
 
-async function openDetail(accountId) {
+async function openDetail(accountId, { tab = "overview" } = {}) {
   state.detailAccountId = accountId;
-  state.detailTab = "overview"; // a freshly opened account always starts on its overview
+  state.detailTab = tab; // a freshly opened account starts on its overview, or on Cases when opened from the inbox
   $detailPanel.hidden = false;
   $detailBackdrop.hidden = false;
   setTimeout(() => {
@@ -1162,6 +1337,8 @@ function closeDetail() {
 }
 
 $detailBackdrop.addEventListener("click", closeDetail);
+wireCaseActions($detailPanel);
+wireCaseActions(document.getElementById("inbox-list"));
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !$detailPanel.hidden) closeDetail();
 });
@@ -1533,24 +1710,6 @@ function renderDetail(a, documents, conversation = []) {
         .join("")
     : `<p class="no-data">No active flags — this account is clean.</p>`;
 
-  const hasUnresolvedClarifications = a.clarification_requests.some((c) => !c.resolved);
-  const clarificationHistoryHtml = a.clarification_requests.length
-    ? a.clarification_requests
-        .map(
-          (c) => `<div class="clarification-entry">
-            <div class="clarification-entry-top">
-              <span class="delivery-badge ${c.delivered_via_telegram ? "delivered" : "not-delivered"}">
-                ${c.delivered_via_telegram ? "Delivered via Telegram" : "Not delivered — no linked Telegram"}
-              </span>
-              <span class="delivery-badge ${c.resolved ? "delivered" : "not-delivered"}">${c.resolved ? "Resolved" : "Pending"}</span>
-              <span class="escalation-time">${relativeTime(c.created_at)}</span>
-            </div>
-            <div class="clarification-entry-message">${escapeHtml(c.message)}</div>
-          </div>`
-        )
-        .join("")
-    : `<p class="no-data">No clarification requests sent yet.</p>`;
-
   const payments = a.payment_history.slice(-8);
   const maxAmt = Math.max(1, ...payments.map((p) => p.amount));
   const barsHtml = payments.length
@@ -1647,84 +1806,64 @@ function renderDetail(a, documents, conversation = []) {
         .join("")
     : `<p class="no-data">No payment history and no scheduled EMIs.</p>`;
 
-  const promisesHtml = a.promises.length
-    ? a.promises
-        .slice()
-        .reverse()
-        .map((p) => {
-          const status = p.kept === null ? "pending" : p.kept ? "kept" : "broken";
-          const icon = status === "kept" ? "✓" : status === "broken" ? "✕" : "…";
-          const statusText = status === "kept" ? "kept" : status === "broken" ? "broken" : "pending";
-          return `<div class="promise-row">
-            <div class="promise-dot ${status}">${icon}</div>
-            <div class="promise-info">
-              <b>${fmtInr(p.promised_amount)}</b> promised for ${fmtDate(p.promised_date)}
-              <div class="promise-meta">made ${fmtDate(p.made_on)} · ${statusText}</div>
-            </div>
-          </div>`;
-        })
-        .join("")
-    : `<p class="no-data">No promises to pay logged.</p>`;
-
-  // The real reason text behind THIS account's dispute(s) -- previously
-  // invisible anywhere in the ops UI (the flags list only ever showed a
-  // fixed generic "has an open, unresolved dispute" string; see
-  // flags.py). Matters directly for the client dashboard's "Contest"
-  // warning action: an operator opening this profile needs to see WHAT
-  // was actually contested, not just that something was.
-  const disputesHtml = a.disputes.length
-    ? a.disputes
+  // Cases tab: open cases first (each one conversation, with its action), then
+  // one history of everything else between the team and this borrower. This
+  // replaces two tabs ("Case activity", "Outreach") and six separate lists
+  // (escalations, disputes, promises, calls, clarification history, the
+  // clarification form) that each told part of the same story.
+  const openCases = a.cases.filter((c) => c.open);
+  const history = [];
+  a.cases
+    .filter((c) => !c.open)
+    .forEach((c) => {
+      const msgs = c.thread || [];
+      history.push({
+        when: c.closed_at || c.opened_at,
+        tone: c.status === "rejected" ? "broken" : "kept",
+        icon: "✓",
+        html: `<b>${escapeHtml(KIND_LABELS[c.kind] || c.kind)}${caseHeading(c) ? `: ${escapeHtml(caseHeading(c))}` : ""}</b> — ${escapeHtml(c.status)}
+          <div class="history-sub">${escapeHtml(c.borrower_words)}</div>
+          ${c.outcome ? `<div class="history-sub">Outcome: ${escapeHtml(c.outcome)}</div>` : ""}
+          ${msgs.length ? `<details class="history-thread"><summary>${msgs.length} message${msgs.length === 1 ? "" : "s"}</summary>${msgs.map(caseMessageHtml).join("")}</details>` : ""}`,
+      });
+    });
+  a.promises.forEach((p) => {
+    const status = p.kept === null ? "pending" : p.kept ? "kept" : "broken";
+    history.push({
+      when: p.made_on,
+      tone: status,
+      icon: status === "kept" ? "✓" : status === "broken" ? "✕" : "…",
+      html: `Promised <b>${fmtInr(p.promised_amount)}</b> by ${fmtDate(p.promised_date)} — ${status}`,
+    });
+  });
+  a.call_log.forEach((c) =>
+    history.push({
+      when: c.created_at,
+      tone: c.outcome === "reached" ? "kept" : "pending",
+      icon: "☎",
+      html: `Call: ${escapeHtml(CALL_OUTCOME_LABELS[c.outcome] || c.outcome)}${c.note ? ` — ${escapeHtml(c.note)}` : ""}`,
+    })
+  );
+  a.messages.forEach((m) =>
+    history.push({
+      when: m.created_at,
+      tone: "info",
+      icon: "✉",
+      html: `${escapeHtml(SENT_KIND_LABELS[m.kind] || "Message sent")}${m.delivered_via_telegram ? " · on Telegram" : " · dashboard only"}<div class="history-sub">${escapeHtml(m.message)}</div>`,
+    })
+  );
+  history.sort((x, y) => new Date(y.when) - new Date(x.when));
+  const HISTORY_SHOWN = 12;
+  const historyHtml = history.length
+    ? history
         .map(
-          (d) => `<div class="dispute-entry">
-            <div class="promise-row">
-              <div class="promise-dot ${d.status === "open" ? "broken" : "kept"}">${d.status === "open" ? "!" : "✓"}</div>
-              <div class="promise-info">
-                ${escapeHtml(d.reason)}
-                <div class="promise-meta">opened ${fmtDate(d.opened_at.slice(0, 10))} · ${d.status}${d.resolved_at ? ` ${fmtDate(d.resolved_at.slice(0, 10))}` : ""}</div>
-                ${d.resolution_note ? `<div class="promise-meta">Resolution: ${escapeHtml(d.resolution_note)}</div>` : ""}
-              </div>
-              ${d.status === "open" ? `<button type="button" class="btn btn-secondary resolve-dispute-btn">Resolve</button>` : ""}
-            </div>
-            ${
-              d.status === "open"
-                ? `<div class="reject-reason-row" id="resolve-dispute-row">
-                    <input type="text" placeholder="Optional note on how this was resolved" id="resolve-dispute-note" />
-                    <button class="btn btn-success confirm-resolve-dispute">Confirm resolve</button>
-                  </div>`
-                : ""
-            }
+          (h, i) => `<div class="history-row"${i >= HISTORY_SHOWN ? " hidden data-history-more" : ""}>
+            <div class="promise-dot ${h.tone}">${h.icon}</div>
+            <div class="history-info">${h.html}<div class="promise-meta">${relativeTime(h.when)}</div></div>
           </div>`
         )
         .join("")
-    : `<p class="no-data">No disputes on this account.</p>`;
-
-  const callLogHtml = a.call_log.length
-    ? a.call_log
-        .map(
-          (c) => `<div class="promise-row">
-            <div class="promise-dot ${c.outcome === "reached" ? "kept" : "pending"}">${c.outcome === "reached" ? "✓" : "…"}</div>
-            <div class="promise-info">
-              ${escapeHtml(CALL_OUTCOME_LABELS[c.outcome] || c.outcome)}${c.note ? ` — ${escapeHtml(c.note)}` : ""}
-              <div class="promise-meta">${relativeTime(c.created_at)}</div>
-            </div>
-          </div>`
-        )
-        .join("")
-    : `<p class="no-data">No calls logged yet.</p>`;
-
-  const escalationsHtml = a.escalations.length
-    ? a.escalations
-        .slice()
-        .sort((x, y) => new Date(y.created_at) - new Date(x.created_at))
-        .map((e) => `<div class="escalation-mini">${escalationCardHtml(e, { withAccountLink: false })}</div>`)
-        .join("")
-    : `<p class="no-data">No escalations for this account.</p>`;
-
-  // Open items an operator must act on -- shown as a count on the tab, so they
-  // are visible without opening it.
-  const openCaseItems =
-    a.escalations.filter((e) => e.status === "queued_for_human").length + a.disputes.filter((d) => d.status === "open").length;
-  const pendingClarifications = a.clarification_requests.filter((c) => !c.resolved).length;
+    : `<p class="no-data">Nothing yet.</p>`;
 
   $detailPanel.innerHTML = `
     <div class="detail-top">
@@ -1769,9 +1908,8 @@ function renderDetail(a, documents, conversation = []) {
 
       <nav class="detail-tabs" role="tablist" aria-label="Account sections">
         <button type="button" class="detail-tab" role="tab" data-detail-tab="overview">Overview</button>
-        <button type="button" class="detail-tab" role="tab" data-detail-tab="activity">Case activity${openCaseItems ? `<span class="tab-count attention" title="Open escalations and disputes">${openCaseItems}</span>` : ""}</button>
+        <button type="button" class="detail-tab" role="tab" data-detail-tab="cases">Cases${openCases.length ? `<span class="tab-count attention" title="Open cases">${openCases.length}</span>` : ""}</button>
         <button type="button" class="detail-tab" role="tab" data-detail-tab="payments">Payments</button>
-        <button type="button" class="detail-tab" role="tab" data-detail-tab="outreach">Outreach${pendingClarifications ? `<span class="tab-count" title="Clarification requests still pending">${pendingClarifications}</span>` : ""}</button>
         <button type="button" class="detail-tab" role="tab" data-detail-tab="documents">Documents<span class="tab-count" id="documents-count">${documents.length}</span></button>
       </nav>
     </div>
@@ -1830,78 +1968,111 @@ function renderDetail(a, documents, conversation = []) {
           <p class="section-subtitle">Rule-based, not a black-box score — each flag below states exactly why it fired.</p>
           ${flagsHtml}
         </div>
+
+        <div class="section-block">
+          <p class="section-title">Telegram <span class="status-dot ${a.telegram_linked ? "on" : "off"}">${a.telegram_linked ? "Linked" : "Not linked"}</span></p>
+          <p class="section-subtitle">${
+            a.telegram_linked
+              ? "This borrower has verified over Telegram — reminders and replies reach them there too."
+              : "Not linked yet — reminders and replies are shown on their dashboard only."
+          }</p>
+          <button type="button" class="btn ${a.telegram_linked ? "btn-secondary" : "btn-primary"}" id="telegram-invite-btn">
+            ${a.telegram_linked ? "Reset access key & get a new invite link" : "Get a Telegram invite link"}
+          </button>
+          <div id="telegram-invite-result"></div>
+        </div>
       </section>
 
-      <section class="detail-tabpanel" data-detail-panel="activity" role="tabpanel" hidden>
-        <div class="detail-cols">
-          <div>
-            <div class="section-block">
-              <p class="section-title">Escalations <span class="count">${a.escalations.length}</span></p>
-              <p class="section-subtitle">Requests handed off to a human — a restructuring proposal, or anything the agent couldn't resolve on its own.</p>
-              ${escalationsHtml}
-            </div>
+      <section class="detail-tabpanel" data-detail-panel="cases" role="tabpanel" hidden>
+        <div class="cases-toolbar" role="group" aria-label="Add to this account">
+          <button type="button" class="btn btn-secondary" data-compose="message" aria-pressed="false">✉ Message the borrower</button>
+          <button type="button" class="btn btn-secondary" data-compose="promise" aria-pressed="false">+ Promise to pay</button>
+          <button type="button" class="btn btn-secondary" data-compose="call" aria-pressed="false">+ Log a call</button>
+        </div>
 
-            <div class="section-block">
-              <p class="section-title">Disputes <span class="count">${a.disputes.length}</span></p>
-              <p class="section-subtitle">The borrower's own stated reason for each dispute -- including one raised via "Contest" on their dashboard.</p>
-              <div class="row-list">${disputesHtml}</div>
+        <div class="compose-panel section-block" data-compose-panel="message" hidden>
+          <p class="section-title">Message the borrower</p>
+          <p class="section-subtitle">For anything that isn't about one open case — to answer a case, use Reply on it.</p>
+          <form class="clarify-form" id="clarify-form">
+            <label class="clarify-label" for="clarify-note">Your note (what's going on, in your own words)</label>
+            <textarea id="clarify-note" rows="2" placeholder="e.g. Third missed promise this quarter — need them to explain."></textarea>
+            <div class="clarify-actions-row">
+              <button type="button" class="btn btn-secondary" id="clarify-polish-btn">✨ Polish wording</button>
+              ${a.flags.length ? `<button type="button" class="btn btn-secondary" id="clarify-summarize-btn">📋 Summarize all flags</button>` : ""}
+              <span class="clarify-hint">Drafts a message below from this account's real flags — you review it before sending.</span>
             </div>
-
-            <div class="section-block">
-              <p class="section-title">Promises to pay <span class="count">${a.promises.length}</span></p>
-              <p class="section-subtitle">Commitments the borrower made to pay by a specific date — kept, broken, or still pending.</p>
-              <div class="row-list">${promisesHtml}</div>
-              <form class="upload-form inline-form" id="log-promise-form">
-                <p class="inline-form-title">Log a new promise</p>
-                <div class="upload-row">
-                  <input type="number" id="lp-amount" placeholder="Promised amount (₹)" min="0.01" step="0.01" required />
-                  <input type="date" id="lp-date" required title="Date they promised to pay by" />
-                </div>
-                <button type="submit" class="btn btn-primary upload-btn" id="log-promise-btn">Log a promise to pay</button>
-                <p class="mini-form-error" id="log-promise-error" hidden></p>
-                <p class="upload-result" id="log-promise-result" hidden></p>
-              </form>
+            <label class="clarify-label" for="clarify-message">Message to send</label>
+            <textarea id="clarify-message" rows="4" placeholder="Write directly, or use Polish wording above to draft one."></textarea>
+            <div class="clarify-actions-row">
+              <button type="submit" class="btn btn-primary" id="clarify-send-btn">Send to borrower</button>
+              <span class="clarify-hint">Shown on their dashboard; sent on Telegram too if linked.</span>
             </div>
-          </div>
+            <p class="clarify-result" id="clarify-result" hidden></p>
+          </form>
+        </div>
 
-          <div>
-            <div class="section-block">
-              <p class="section-title">Call log <span class="count">${a.call_log.length}</span></p>
-              <p class="section-subtitle">Every phone contact attempt on record, so a colleague opening this account later can see one already happened.</p>
-              <div class="row-list">${callLogHtml}</div>
-              <form class="upload-form inline-form" id="call-log-form">
-                <p class="inline-form-title">Log a call</p>
-                <div class="upload-row">
-                  <select id="cl-outcome">
-                    <option value="reached">Reached</option>
-                    <option value="no_answer">No answer</option>
-                    <option value="voicemail">Left voicemail</option>
-                    <option value="wrong_number">Wrong number</option>
-                  </select>
-                  <input type="text" id="cl-note" placeholder="Note (optional)" />
-                </div>
-                <button type="submit" class="btn btn-primary upload-btn" id="call-log-btn">Log this call</button>
-              </form>
-              <div class="call-log-nudge" id="call-log-nudge" hidden>
-                <p class="clarify-hint">Didn't reach them — escalate to a human instead of leaving it here?</p>
-                <div class="clarify-actions-row">
-                  <button type="button" class="btn btn-primary" id="call-log-escalate-btn">Escalate to a human</button>
-                  <button type="button" class="btn btn-secondary" id="call-log-dismiss-btn">No, that's fine</button>
-                </div>
-              </div>
+        <div class="compose-panel section-block" data-compose-panel="promise" hidden>
+          <form class="upload-form" id="log-promise-form">
+            <p class="inline-form-title">A promise to pay the borrower made (e.g. on a call)</p>
+            <div class="upload-row">
+              <input type="number" id="lp-amount" placeholder="Promised amount (₹)" min="0.01" step="0.01" required />
+              <input type="date" id="lp-date" required title="Date they promised to pay by" />
             </div>
+            <button type="submit" class="btn btn-primary upload-btn" id="log-promise-btn">Log a promise to pay</button>
+            <p class="mini-form-error" id="log-promise-error" hidden></p>
+            <p class="upload-result" id="log-promise-result" hidden></p>
+          </form>
+        </div>
 
-            <div class="section-block">
-              <p class="section-title">Conversation <span class="count">${conversation.length}</span></p>
-              <p class="section-subtitle">What the AI agent actually said to this borrower, and what it did on their behalf — not just messages ops itself sent.</p>
-              <div class="convo-list">${
-                conversation.length
-                  ? conversation.map(conversationEntryHtml).join("")
-                  : `<p class="no-data">No AI conversation on record for this account yet.</p>`
-              }</div>
+        <div class="compose-panel section-block" data-compose-panel="call" hidden>
+          <form class="upload-form" id="call-log-form">
+            <p class="inline-form-title">A call to ${escapeHtml(a.phone_number)}</p>
+            <div class="upload-row">
+              <select id="cl-outcome">
+                <option value="reached">Reached</option>
+                <option value="no_answer">No answer</option>
+                <option value="voicemail">Left voicemail</option>
+                <option value="wrong_number">Wrong number</option>
+              </select>
+              <input type="text" id="cl-note" placeholder="Note (optional)" />
+            </div>
+            <button type="submit" class="btn btn-primary upload-btn" id="call-log-btn">Log this call</button>
+          </form>
+          <div class="call-log-nudge" id="call-log-nudge" hidden>
+            <p class="clarify-hint">Didn't reach them — escalate to a human instead of leaving it here?</p>
+            <div class="clarify-actions-row">
+              <button type="button" class="btn btn-primary" id="call-log-escalate-btn">Escalate to a human</button>
+              <button type="button" class="btn btn-secondary" id="call-log-dismiss-btn">No, that's fine</button>
             </div>
           </div>
         </div>
+
+        <div class="section-block">
+          <p class="section-title">Open <span class="count">${openCases.length}</span></p>
+          <p class="section-subtitle">Each case is one conversation with the borrower: what they said, every reply, and the action that closes it.</p>
+          <div class="case-list">${
+            openCases.length
+              ? openCases.map((c) => caseCardHtml(c, { amountHint: a.amount_due_now })).join("")
+              : `<p class="no-data">Nothing open on this account.</p>`
+          }</div>
+        </div>
+
+        <div class="section-block">
+          <p class="section-title">History <span class="count">${history.length}</span></p>
+          <p class="section-subtitle">Everything else between the team and this borrower, newest first: closed cases, promises, calls and messages sent.</p>
+          <div class="history-list">${historyHtml}</div>
+          ${history.length > HISTORY_SHOWN ? `<button type="button" class="btn btn-ghost history-more-btn" id="history-more-btn">Show all ${history.length}</button>` : ""}
+        </div>
+
+        <details class="section-block convo-details">
+          <summary class="section-title">AI conversation <span class="count">${conversation.length}</span></summary>
+          <p class="section-subtitle">What the AI agent said to this borrower, and what it did on their behalf.</p>
+          <div class="convo-list">${
+            conversation.length
+              ? conversation.map(conversationEntryHtml).join("")
+              : `<p class="no-data">No AI conversation on record for this account yet.</p>`
+          }</div>
+        </details>
       </section>
 
       <section class="detail-tabpanel" data-detail-panel="payments" role="tabpanel" hidden>
@@ -1931,55 +2102,6 @@ function renderDetail(a, documents, conversation = []) {
             <p class="section-title">EMI timeline <span class="count">${timeline.length}</span></p>
             <p class="section-subtitle">Every real past payment, plus every EMI still scheduled ahead — projected monthly from the next due date.</p>
             <div class="timeline-list">${timelineHtml}</div>
-          </div>
-        </div>
-      </section>
-
-      <section class="detail-tabpanel" data-detail-panel="outreach" role="tabpanel" hidden>
-        <div class="detail-cols">
-          <div class="section-block">
-            <p class="section-title">Send a clarification request</p>
-            <form class="clarify-form" id="clarify-form">
-              <label class="clarify-label" for="clarify-note">Your note (what's going on, in your own words)</label>
-              <textarea id="clarify-note" rows="2" placeholder="e.g. Third missed promise this quarter, dispute still unresolved — need them to explain."></textarea>
-              <div class="clarify-actions-row">
-                <button type="button" class="btn btn-secondary" id="clarify-polish-btn">✨ Polish wording</button>
-                ${a.flags.length ? `<button type="button" class="btn btn-secondary" id="clarify-summarize-btn">📋 Summarize all flags</button>` : ""}
-                <span class="clarify-hint">Drafts a professional message below, grounded in this account's real flags — you still review it before sending.</span>
-              </div>
-              <label class="clarify-label" for="clarify-message">Message to send</label>
-              <textarea id="clarify-message" rows="4" placeholder="Write directly, or use Polish wording above to draft one."></textarea>
-              <div class="clarify-actions-row">
-                <button type="submit" class="btn btn-primary" id="clarify-send-btn">Send to borrower</button>
-                <span class="clarify-hint">Delivered over Telegram if linked; always logged either way.</span>
-              </div>
-              <p class="clarify-result" id="clarify-result" hidden></p>
-            </form>
-          </div>
-
-          <div>
-            <div class="section-block">
-              <p class="section-title">Telegram onboarding <span class="status-dot ${a.telegram_linked ? "on" : "off"}">${a.telegram_linked ? "Linked" : "Not linked"}</span></p>
-              <p class="section-subtitle">${
-                a.telegram_linked
-                  ? "This borrower has verified over Telegram — automated reminders actually reach them."
-                  : "Not linked yet — every automated reminder to this account is logged, but has nowhere to actually deliver to."
-              }</p>
-              <button type="button" class="btn ${a.telegram_linked ? "btn-secondary" : "btn-primary"}" id="telegram-invite-btn">
-                ${a.telegram_linked ? "Reset access key & get a new invite link" : "Get a Telegram invite link"}
-              </button>
-              <div id="telegram-invite-result"></div>
-            </div>
-
-            <div class="section-block">
-              <p class="section-title">Clarification history <span class="count">${a.clarification_requests.length}</span></p>
-              ${
-                hasUnresolvedClarifications
-                  ? `<button type="button" class="btn btn-secondary mark-resolved-btn" id="mark-clarifications-resolved-btn">✓ Mark all as resolved</button>`
-                  : ""
-              }
-              <div class="clarification-history">${clarificationHistoryHtml}</div>
-            </div>
           </div>
         </div>
       </section>
@@ -2015,15 +2137,23 @@ function renderDetail(a, documents, conversation = []) {
   wireDetailClose();
   wireDetailTabs();
   renderDocumentsList(documents);
-  wireEscalationActions($detailPanel, async () => {
-    const [fresh, freshDocuments, freshConversation] = await _loadDetailData(a.account_id);
-    renderDetail(fresh, freshDocuments, freshConversation);
-    // A full reload, not just the escalation queue -- approving/rejecting
-    // can change the account's own fields (e.g. months_remaining, EMI on
-    // an extend_tenure approval), and the portfolio grid card for this
-    // account needs to reflect that immediately, not wait for the next
-    // 30s auto-refresh.
-    loadAll();
+
+  // "Message the borrower", "Promise to pay", "Log a call": one at a time, each opened from the Cases toolbar.
+  $detailPanel.querySelectorAll("[data-compose]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const name = btn.dataset.compose;
+      const panel = $detailPanel.querySelector(`[data-compose-panel="${name}"]`);
+      const opening = panel.hidden;
+      $detailPanel.querySelectorAll("[data-compose-panel]").forEach((p) => { p.hidden = true; });
+      $detailPanel.querySelectorAll("[data-compose]").forEach((b) => b.setAttribute("aria-pressed", "false"));
+      panel.hidden = !opening;
+      btn.setAttribute("aria-pressed", String(opening));
+      if (opening) panel.querySelector("textarea, input, select")?.focus();
+    })
+  );
+  document.getElementById("history-more-btn")?.addEventListener("click", (e) => {
+    $detailPanel.querySelectorAll("[data-history-more]").forEach((row) => { row.hidden = false; });
+    e.currentTarget.remove();
   });
 
   const polishBtn = document.getElementById("clarify-polish-btn");
@@ -2093,21 +2223,6 @@ function renderDetail(a, documents, conversation = []) {
     }
   });
 
-  const markResolvedBtn = document.getElementById("mark-clarifications-resolved-btn");
-  markResolvedBtn?.addEventListener("click", async () => {
-    markResolvedBtn.disabled = true;
-    markResolvedBtn.textContent = "Marking…";
-    try {
-      await markClarificationsResolved(a.account_id);
-      toast("Clarification thread marked resolved.");
-      await refreshAfterAction();
-    } catch (err) {
-      toast(err.message, true);
-      markResolvedBtn.disabled = false;
-      markResolvedBtn.textContent = "✓ Mark all as resolved";
-    }
-  });
-
   const uploadForm = document.getElementById("upload-form");
   uploadForm.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -2137,10 +2252,9 @@ function renderDetail(a, documents, conversation = []) {
   });
 
   // A full reload (renderDetail + loadAll), not a targeted re-render, for
-  // every one of the three actions below -- each can change data shown
-  // elsewhere too (the account grid's EMI/flags after a payment, the
-  // Disputed filter count after a resolve), same reasoning as the
-  // escalation actions' own onDone callback above.
+  // the actions below -- each can change data shown elsewhere too (the
+  // account grid's EMI/flags after a payment, the inbox after a promise),
+  // same reasoning as afterCaseAction for the case cards.
   async function refreshAfterAction() {
     const [fresh, freshDocuments, freshConversation] = await _loadDetailData(a.account_id);
     renderDetail(fresh, freshDocuments, freshConversation);
@@ -2270,32 +2384,6 @@ function renderDetail(a, documents, conversation = []) {
 
   document.getElementById("call-log-dismiss-btn").addEventListener("click", refreshAfterAction);
 
-  $detailPanel.querySelectorAll(".resolve-dispute-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document.getElementById("resolve-dispute-row").classList.add("open");
-    });
-  });
-  $detailPanel.querySelectorAll(".confirm-resolve-dispute").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const note = document.getElementById("resolve-dispute-note").value.trim() || null;
-      btn.disabled = true;
-      btn.textContent = "Resolving…";
-      try {
-        const resolved = await resolveDispute(a.account_id, note);
-        toast(
-          resolved.borrower_notified === true
-            ? "Dispute resolved — borrower notified on Telegram."
-            : "Dispute resolved — no linked Telegram; the outcome is shown on the borrower's dashboard."
-        );
-        await refreshAfterAction();
-      } catch (err) {
-        toast(err.message, true);
-        btn.disabled = false;
-        btn.textContent = "Confirm resolve";
-      }
-    });
-  });
-
   const editAccountBtn = document.getElementById("edit-account-btn");
   const editAccountForm = document.getElementById("edit-account-form");
   editAccountBtn.addEventListener("click", () => {
@@ -2359,14 +2447,14 @@ async function loadAll() {
   // The escalation-rate figure is fetched alongside but never holds up the portfolio: accounts and escalations render
   // as soon as they arrive, and the rate's card fills in when its own request returns.
   const metricsRequest = getMetrics(state.sinceHours);
-  const [accounts, escalations] = await Promise.all([getAccounts(), getEscalations()]);
+  const [accounts, inbox] = await Promise.all([getAccounts(), getInbox()]);
   if (myGeneration !== loadGeneration) return; // superseded by a newer load -- discard
   state.accounts = accounts;
-  state.escalations = escalations;
+  state.inbox = inbox;
   renderKpis();
   renderFilterPills();
   renderAccountGrid();
-  renderEscalationList();
+  renderInbox();
   metricsRequest
     .then((metrics) => {
       if (myGeneration !== loadGeneration) return;

@@ -121,6 +121,8 @@ a.btn { text-decoration: none; text-align: center; }
 .btn-on-dark:hover { background: var(--accent-tint); }
 .btn-ghost-light { background: transparent; border-color: rgba(255, 255, 255, 0.3); color: #ffffff; }
 .btn-ghost-light:hover { background: rgba(255, 255, 255, 0.1); }
+.btn-ghost { background: transparent; border-color: transparent; color: var(--accent); }
+.btn-ghost:hover:not(:disabled) { background: var(--accent-dim); }
 .na-invite-link { margin-bottom: 8px; }
 
 /* ============================================================
@@ -394,6 +396,66 @@ a.btn { text-decoration: none; text-align: center; }
 }
 .reject-reason-row input:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
 
+/* One case = one conversation (inbox and the profile's Cases tab share this card). */
+.case-list { display: flex; flex-direction: column; gap: 10px; }
+.case-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 10px; min-width: 0;
+}
+.section-block .case-card { background: var(--surface-2); }
+.case-card.urgent { border-color: var(--danger); box-shadow: inset 3px 0 0 var(--danger); }
+.case-card[data-kind="payment_claim"] { box-shadow: inset 3px 0 0 var(--accent); }
+.case-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.case-title { font-family: var(--font-tight); font-weight: 700; font-size: 14.5px; color: var(--text-0); }
+.case-account {
+  border: none; background: none; padding: 0; font: inherit; font-size: 13px; font-weight: 600; color: var(--accent); cursor: pointer;
+}
+.case-account:hover { text-decoration: underline; }
+.case-age { margin-left: auto; font-size: 12px; color: var(--text-3); white-space: nowrap; }
+.case-words { font-size: 13.5px; color: var(--text-0); line-height: 1.55; overflow-wrap: anywhere; }
+.case-words-label { display: block; font-size: 11.5px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px; }
+.case-thread { display: flex; flex-direction: column; gap: 6px; }
+.case-earlier { margin: 0; font-size: 12px; color: var(--text-3); }
+.case-msg {
+  display: grid; grid-template-columns: 70px minmax(0, 1fr) auto; gap: 4px 10px; align-items: baseline;
+  padding: 8px 10px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.5;
+  background: var(--surface); border: 1px solid var(--border);
+}
+.case-msg.ops { background: var(--accent-tint); border-color: transparent; }
+.case-msg-who { font-size: 11.5px; font-weight: 700; color: var(--text-2); }
+.case-msg.ops .case-msg-who { color: var(--accent-strong); }
+.case-msg-text { color: var(--text-0); white-space: pre-wrap; overflow-wrap: anywhere; }
+.case-msg-meta { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+.case-outcome { font-size: 13px; color: var(--text-1); background: var(--surface-strong); border-radius: var(--radius-md); padding: 8px 10px; }
+.case-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.case-form { display: flex; flex-direction: column; gap: 8px; border-top: 1px dashed var(--border-strong); padding-top: 10px; }
+.case-form textarea, .case-note-input {
+  width: 100%; resize: vertical; background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md); padding: 8px 10px; color: var(--text-0); font: inherit; font-size: 13px; line-height: 1.5;
+}
+.case-form textarea:focus, .case-note-input:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
+.case-form .upload-row input[type="number"], .case-form .upload-row input[type="date"] { flex: 1 1 140px; }
+
+/* The profile's Cases tab: a toolbar for adding things, then open cases, then one history. */
+.cases-toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.cases-toolbar .btn[aria-pressed="true"] { background: var(--accent-tint); border-color: var(--accent); color: var(--accent-strong); }
+.history-list { display: flex; flex-direction: column; }
+.history-row { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.history-row:last-child { border-bottom: none; }
+.history-row .promise-dot { margin-top: 1px; }
+.promise-dot.info { background: var(--accent-tint); color: var(--accent-strong); }
+.history-info { flex: 1; min-width: 0; font-size: 13px; color: var(--text-1); line-height: 1.5; overflow-wrap: anywhere; }
+.history-sub { color: var(--text-2); font-size: 12.5px; margin-top: 2px; }
+.history-thread { margin-top: 6px; }
+.history-thread summary { cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--accent); }
+.history-thread .case-msg { margin-top: 6px; }
+.history-more-btn { margin-top: 10px; }
+.convo-details > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; }
+.convo-details > summary::-webkit-details-marker { display: none; }
+.convo-details > summary::before { content: "▸"; color: var(--text-3); transition: transform 0.15s var(--ease); }
+.convo-details[open] > summary::before { transform: rotate(90deg); }
+.convo-details[open] > summary { margin-bottom: 8px; }
+
 .status-pill, .kind-pill { font-size: 11.5px; font-weight: 600; padding: 3px 10px; border-radius: var(--radius-pill); }
 .status-pill { text-transform: capitalize; }
 .status-pill.queued_for_human { background: var(--warning-solid-dim); color: var(--warning); }
@@ -401,6 +463,8 @@ a.btn { text-decoration: none; text-align: center; }
 .status-pill.rejected { background: var(--danger-solid-dim); color: var(--danger); }
 .kind-pill { background: var(--surface-strong); color: var(--text-1); }
 .kind-pill.fraud { background: var(--danger); color: #ffffff; }
+.kind-pill.payment_claim { background: var(--accent-tint); color: var(--accent-strong); }
+.kind-pill.dispute { background: var(--warning-solid-dim); color: var(--warning); }
 .kind-pill.system { background: transparent; color: var(--text-2); border: 1px dashed var(--border-strong); }
 
 /* ============================================================
@@ -779,6 +843,8 @@ html:has(.detail-panel.open), html:has(.new-account-modal.open) { overflow: hidd
   .detail-panel { width: 100vw; height: 100vh; max-height: 100vh; border-radius: 0; }
   .na-grid, .na-review-grid { grid-template-columns: 1fr; }
   .escalation-card { flex-direction: column; }
+  .case-msg { grid-template-columns: minmax(0, 1fr); }
+  .case-age { margin-left: 0; }
   .stat-cluster { grid-template-columns: 1fr 1fr; }
 }
 

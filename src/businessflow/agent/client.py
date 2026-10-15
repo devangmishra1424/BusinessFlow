@@ -112,11 +112,29 @@ _COMMITMENT_DISCIPLINE = (
 # dispute claim, worded with typos, got met with "share your transaction
 # reference" instead of an immediate flag -- noisy phrasing shouldn't
 # change whether a dispute claim gets flagged.
+#
+# Found live: "i have paid my emi, cn you update it in the profile" was filed
+# as a plain dispute and answered "A human agent will review it" -- nothing
+# about what happens next or when. A payment the borrower says they made is
+# now its own kind (kind='payment_claim'), and the reply says what the team
+# does with it and by when (the tool result carries
+# review_within_working_days, from accounts/policy.py).
 _DISPUTE_HANDLING = (
-    "If a borrower says they already paid, or disputes a charge, call "
-    "flag_dispute right away, even if you can't verify it yourself -- a "
-    "human will check the details afterward. Don't withhold the flag "
-    "while asking for proof you have no way to actually verify."
+    "If a borrower says they already paid, call flag_dispute right away with "
+    "kind='payment_claim'; if they say an amount, fee or due date is wrong, "
+    "use kind='dispute'. Do it even if you can't verify it yourself -- a "
+    "person on our team checks it. Don't withhold it while asking for proof "
+    "you have no way to verify. Then tell them plainly what happens next: for "
+    "a payment claim, that our team will check the payment against the bank "
+    "record within review_within_working_days working days (the number from "
+    "the tool result) and update their account, that reminders are paused "
+    "until then, and that they can follow it on their dashboard; you may ask "
+    "for the payment reference (UTR) to speed it up, but never instead of "
+    "flagging. Never say only that 'a human agent will review it', and never "
+    "say the account has been updated -- only the team can confirm a payment. "
+    "When they send more details about a payment or dispute already open "
+    "(already_open is true), call flag_dispute again with those details: they "
+    "are added to the open case."
 )
 
 # get_payment_status and calculate_hypothetical look up everything they

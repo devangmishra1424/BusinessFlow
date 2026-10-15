@@ -34,9 +34,23 @@ from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
-from businessflow.accounts import store
+from businessflow.accounts import cases, store
 from businessflow.accounts.db import check_database, get_connection
-from businessflow.accounts.escalation_kinds import CALLBACK, CLOSURE, RESTRUCTURING, SYSTEM, classify_escalation
+from businessflow.accounts.dues import amount_due_now
+from businessflow.accounts.escalation_kinds import (
+    BROKEN_PROMISE_PATTERN_PREFIX,
+    CALLBACK,
+    CHRONIC_DELINQUENCY_REASON,
+    CLOSURE,
+    FRAUD,
+    GUARDRAIL_REASON_PREFIX,
+    OPS_CALL_NUDGE_PREFIX,
+    REQUEST,
+    RESTRUCTURING,
+    SYSTEM,
+    URGENCY_RANK,
+    classify_escalation,
+)
 from businessflow.accounts.models import Account
 from businessflow.channels.credentials import build_telegram_start_payload
 from businessflow.observability import metrics
@@ -187,6 +201,8 @@ class AccountSummaryOut(BaseModel):
     # actually connected, instead of it being invisible until someone
     # notices a due date came and went with no response.
     telegram_linked: bool
+    # What the borrower owes right now (accounts/dues.py) -- the figure a payment claim's "Confirm payment" starts from.
+    amount_due_now: float = 0.0
 
 
 class PaymentRecordOut(BaseModel):
@@ -204,6 +220,8 @@ class PromiseOut(BaseModel):
 
 
 class DisputeOut(BaseModel):
+    id: int | None = None
+    kind: str = "dispute"  # 'dispute' | 'payment_claim' (accounts/cases.py)
     reason: str
     status: str  # 'open' | 'resolved'
     opened_at: datetime
@@ -276,14 +294,20 @@ class RecordPaymentOut(BaseModel):
 
 
 class ResolveDisputeIn(BaseModel):
-    # Ops-entered free text on how/why this was resolved -- optional,
-    # since not every resolution needs one, but never lost when given.
+    # Ops-entered free text on how/why this was resolved -- optional for a
+    # dispute, since not every resolution needs one, but never lost when
+    # given. Required to close a payment claim without recording a payment:
+    # the borrower is owed the reason.
     resolution_note: str | None = None
+    # The case the operator is looking at (the case card always sends it): it
+    # must still be the open one, see store.resolve_dispute.
+    dispute_id: int | None = None
 
 
 class ResolveDisputeOut(BaseModel):
     account_id: str
     dispute_id: int
+    kind: str = "dispute"
     resolution_note: str | None = None
     borrower_notified: bool | None = None  # True = reached over Telegram; False = logged only (visible on their dashboard)
 
@@ -366,6 +390,75 @@ class ClarificationRequestOut(BaseModel):
 
 class EscalateToHumanIn(BaseModel):
     reason: str
+
+
+class CaseMessageOut(BaseModel):
+    author: str  # "borrower" | "ops"
+    message: str
+    created_at: datetime
+    delivered_via_telegram: bool = False
+
+
+class CaseOut(BaseModel):
+    """One case (accounts/cases.py) as ops works it: what the borrower said,
+    every message about it since, and how it ended -- the same thing the
+    borrower sees as one thread on their dashboard."""
+
+    case_ref: str  # "D-12" | "ESC-0012"
+    source: str  # "dispute" | "escalation"
+    kind: str  # payment_claim | dispute | fraud | request | restructuring | callback | closure | system
+    title: str
+    account_id: str
+    borrower_name: str | None = None
+    open: bool
+    status: str  # open | resolved | approved | rejected
+    opened_at: datetime
+    closed_at: datetime | None = None
+    borrower_words: str  # the dispute's reason, or the escalation's reason (written by the agent for the borrower)
+    proposed_changes: dict | None = None
+    outcome: str | None = None  # ops' note on how it ended
+    thread: list[CaseMessageOut] = []
+    can_reply: bool = True  # False for a system notice: the borrower never sees it, so a reply would go nowhere
+
+
+class CaseReplyIn(BaseModel):
+    message: str
+
+
+class CaseReplyOut(CaseMessageOut):
+    case_ref: str
+
+
+class ConfirmPaymentIn(BaseModel):
+    amount: float
+    # The day the borrower actually paid (decides on time or late) -- defaults to today if omitted.
+    payment_date: date | None = None
+    # Same as RecordPaymentIn: only needed when the amount is less than what is due this cycle.
+    apply_extra_to_next: bool | None = None
+    note: str | None = None  # optional, added to the message the borrower gets
+
+    @field_validator("amount")
+    @classmethod
+    def _validate_positive_amount(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("amount must be a positive amount")
+        return v
+
+
+class ConfirmPaymentOut(BaseModel):
+    case_ref: str
+    payment: RecordPaymentOut
+    borrower_notified: bool
+
+
+class AccountMessageOut(BaseModel):
+    """Something sent to the borrower that isn't about one case (a reminder, a
+    general message from ops) -- the profile's timeline lists these."""
+
+    message: str
+    kind: str  # message | decision | dispute | reminder
+    delivered_via_telegram: bool
+    created_at: datetime
 
 
 class AccountCreateIn(BaseModel):
@@ -479,6 +572,82 @@ class AccountDetailOut(AccountSummaryOut):
     escalations: list[EscalationOut]
     clarification_requests: list[ClarificationRequestOut]
     call_log: list[CallLogEntryOut]
+    # Every case on the account, open first (each with its thread), and everything else sent to the borrower -- the
+    # profile's Cases tab. disputes / escalations / clarification_requests above stay for API callers.
+    cases: list[CaseOut] = []
+    messages: list[AccountMessageOut] = []
+
+
+# Triage order for the inbox, lowest first: escalation_kinds.URGENCY_RANK, with a payment claim or dispute next to an
+# ordinary request (reminders are paused on the account while either is open, so neither should sit at the bottom).
+_CASE_URGENCY = {**URGENCY_RANK, cases.PAYMENT_CLAIM: 1, cases.DISPUTE: 1}
+
+_CASE_TITLES = {
+    cases.PAYMENT_CLAIM: "Says they already paid",
+    cases.DISPUTE: "Dispute",
+    FRAUD: "Identity / fraud claim",
+    RESTRUCTURING: "Asks for more time",
+    CALLBACK: "Asks to talk to a person",
+    CLOSURE: "Closure certificate",
+    REQUEST: "Request",
+}
+# A system notice says which pattern raised it, so the inbox can tell a broken-promise pattern from a guardrail block.
+_SYSTEM_TITLES = (
+    (BROKEN_PROMISE_PATTERN_PREFIX, "Broken promises"),
+    (CHRONIC_DELINQUENCY_REASON, "Chronically overdue"),
+    (GUARDRAIL_REASON_PREFIX, "Agent reply blocked"),
+    (OPS_CALL_NUDGE_PREFIX, "Couldn't reach by phone"),
+)
+# What a message from ops is about, in the borrower's words -- Telegram has no thread to show it in.
+_CASE_ABOUT = {
+    cases.PAYMENT_CLAIM: "the payment you reported",
+    cases.DISPUTE: "the issue you raised",
+    FRAUD: "your concern about this loan",
+    RESTRUCTURING: "your request for more time",
+    CALLBACK: "your request to talk to us",
+    CLOSURE: "your closure certificate",
+    REQUEST: "your request",
+}
+
+
+def _case_title(kind: str, reason: str) -> str:
+    if kind == SYSTEM:
+        return next((title for prefix, title in _SYSTEM_TITLES if (reason or "").startswith(prefix)), "System notice")
+    return _CASE_TITLES.get(kind, "Request")
+
+
+def _thread_out(thread: list[dict]) -> list[CaseMessageOut]:
+    return [CaseMessageOut(**{k: m[k] for k in ("author", "message", "created_at", "delivered_via_telegram")}) for m in thread]
+
+
+def _dispute_case(d: dict, account_id: str, borrower_name: str | None, threads: dict[str, list[dict]]) -> CaseOut:
+    case_ref = cases.dispute_case_ref(d["id"])
+    is_open = d["status"] == "open"
+    return CaseOut(
+        case_ref=case_ref, source="dispute", kind=d["kind"], title=_case_title(d["kind"], d["reason"]),
+        account_id=account_id, borrower_name=borrower_name, open=is_open, status="open" if is_open else "resolved",
+        opened_at=d["opened_at"], closed_at=d.get("resolved_at"), borrower_words=d["reason"],
+        outcome=d.get("resolution_note"), thread=_thread_out(threads.get(case_ref, [])),
+    )
+
+
+def _escalation_case(e, borrower_name: str | None, threads: dict[str, list[dict]]) -> CaseOut:
+    kind = classify_escalation(e.reason, e.proposed_changes)
+    is_open = e.resolved_at is None
+    return CaseOut(
+        case_ref=e.escalation_id, source="escalation", kind=kind, title=_case_title(kind, e.reason),
+        account_id=e.account_id, borrower_name=borrower_name, open=is_open,
+        status="open" if is_open else e.status, opened_at=e.created_at, closed_at=e.resolved_at,
+        borrower_words=e.reason, proposed_changes=e.proposed_changes, outcome=e.resolution_reason,
+        thread=_thread_out(threads.get(e.escalation_id, [])), can_reply=kind != SYSTEM,
+    )
+
+
+def _sorted_cases(items: list[CaseOut]) -> list[CaseOut]:
+    """Open cases first, most urgent then oldest; then closed ones, most recently closed first."""
+    open_cases = sorted((c for c in items if c.open), key=lambda c: (_CASE_URGENCY.get(c.kind, 1), c.opened_at))
+    closed = sorted((c for c in items if not c.open), key=lambda c: c.closed_at or c.opened_at, reverse=True)
+    return open_cases + closed
 
 
 def _summarize(account: Account, flags: list[Flag]) -> AccountSummaryOut:
@@ -493,6 +662,7 @@ def _summarize(account: Account, flags: list[Flag]) -> AccountSummaryOut:
         risk_tier=account.risk_tier,
         flags=[FlagOut(label=f.label, reason=f.reason) for f in flags],
         telegram_linked=account.telegram_chat_id is not None,
+        amount_due_now=amount_due_now(account, store.current_date()),
     )
 
 
@@ -588,6 +758,12 @@ def get_account(account_id: str):
         disputes = store.get_disputes_for_account(account_id, ex=conn)
         clarification_requests = store.get_clarification_requests(account_id, ex=conn)
         call_log = store.get_call_log(account_id, ex=conn)
+        threads = store.get_case_threads(account_id, ex=conn)
+        messages = store.get_borrower_messages(account_id, ex=conn)
+    case_list = _sorted_cases(
+        [_dispute_case(d, account_id, account.borrower_name, threads) for d in disputes]
+        + [_escalation_case(e, account.borrower_name, threads) for e in escalations]
+    )
     return AccountDetailOut(
         **summary.model_dump(),
         phone_number=account.phone_number,
@@ -616,6 +792,8 @@ def get_account(account_id: str):
         disputes=[DisputeOut(**d) for d in disputes],
         clarification_requests=[ClarificationRequestOut(**c) for c in clarification_requests],
         call_log=[CallLogEntryOut(**c) for c in call_log],
+        cases=case_list,
+        messages=[AccountMessageOut(**m) for m in messages],
     )
 
 
@@ -1073,19 +1251,30 @@ async def resolve_account_dispute(account_id: str, body: ResolveDisputeIn | None
     required."""
     if store.get_account(account_id) is None:
         raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
-    resolution_note = body.resolution_note if body is not None else None
+    resolution_note = ((body.resolution_note or "").strip() or None) if body is not None else None
+    dispute_id = body.dispute_id if body is not None else None
+    open_case = next((d for d in store.get_disputes_for_account(account_id) if d["status"] == "open"), None)
+    if open_case is not None and open_case["kind"] == cases.PAYMENT_CLAIM and not resolution_note:
+        # Closing a payment claim without recording the payment: the borrower is told why, so a note is required.
+        raise HTTPException(status_code=400, detail="say why the payment couldn't be confirmed -- the borrower is sent this note")
     try:
-        result = store.resolve_dispute(account_id, resolution_note=resolution_note)
+        result = store.resolve_dispute(account_id, resolution_note=resolution_note, dispute_id=dispute_id)
     except store.NoOpenDisputeError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
-    store.log_event(account_id, "tool_called", {"tool": "resolve_dispute", "arguments": {"account_id": account_id, "resolution_note": resolution_note}, "result": result})
+    store.log_event(account_id, "tool_called", {"tool": "resolve_dispute", "arguments": {"account_id": account_id, "resolution_note": resolution_note, "dispute_id": dispute_id}, "result": result})
     # Tell the borrower. Resolving used to be silent: the freeze lifted and the
     # banner vanished, but nothing said how it ended. Delivered over Telegram
-    # when linked, and always shown under "Messages from us" on their dashboard.
-    message = "Update on your dispute: our team has reviewed it and closed it."
-    if resolution_note:
-        message += f" Note from our team: {resolution_note}"
-    notified = await notify.notify_dispute_resolved(account_id, message)
+    # when linked, and always shown in that case's thread on their dashboard.
+    if result["kind"] == cases.PAYMENT_CLAIM:
+        message = (
+            "Update on the payment you reported: our team has closed it without recording a payment. "
+            f"Note from our team: {resolution_note} If you have paid, reply with the payment reference and we'll check again."
+        )
+    else:
+        message = "Update on your dispute: our team has reviewed it and closed it."
+        if resolution_note:
+            message += f" Note from our team: {resolution_note}"
+    notified = await notify.notify_dispute_resolved(account_id, message, case_ref=cases.dispute_case_ref(result["dispute_id"]))
     return ResolveDisputeOut(**result, borrower_notified=notified)
 
 
@@ -1127,6 +1316,98 @@ def list_open_escalations():
     """The human-handoff queue: every escalation still waiting on a
     person, oldest first."""
     return [_escalation_out(e) for e in store.list_open_escalations()]
+
+
+@app.get("/inbox", response_model=list[CaseOut], dependencies=[Depends(require_api_key)])
+def get_inbox():
+    """Everything open that a person has to deal with, in one list: payment
+    claims, disputes, requests for a person or for more time, closure
+    certificates, fraud claims and system notices (broken promises, chronic
+    delinquency) -- most urgent first, then oldest, each with the borrower's
+    own words and the messages since. Before, escalations had their own queue
+    and disputes had none (an operator found a dispute only by opening the
+    account), and a borrower's "I already paid" waited in neither."""
+    with get_connection().transaction() as conn:
+        escalations = store.list_open_escalations(ex=conn)
+        disputes = store.list_open_disputes(ex=conn)
+        names = store.borrower_names(sorted({e.account_id for e in escalations}), ex=conn)
+        refs = [e.escalation_id for e in escalations] + [cases.dispute_case_ref(d["id"]) for d in disputes]
+        threads = store.get_threads_for_cases(refs, ex=conn)
+    items = [_escalation_case(e, names.get(e.account_id), threads) for e in escalations]
+    items += [_dispute_case(d, d["account_id"], d["borrower_name"], threads) for d in disputes]
+    return _sorted_cases(items)
+
+
+def _case_or_404(account_id: str, case_ref: str) -> dict:
+    case = store.get_case(account_id, case_ref)
+    if case is None:
+        raise HTTPException(status_code=404, detail=f"no case {case_ref!r} on account_id={account_id!r}")
+    return case
+
+
+@app.post(
+    "/accounts/{account_id}/cases/{case_ref}/reply", response_model=CaseReplyOut, dependencies=[Depends(require_api_key)]
+)
+async def reply_to_case(account_id: str, case_ref: str, body: CaseReplyIn):
+    """A message from ops about one case: it appears in that case's thread on
+    the borrower's dashboard and on this one, and goes over Telegram when
+    linked (saying what it is about). Found live: ops could only send a
+    general "clarification request", unconnected to the dispute or request
+    it answered, and the borrower read it in a different panel from their
+    request. Works on a closed case too (a follow-up), not on a system
+    notice, which the borrower never sees."""
+    try:
+        message = validation.free_text(body.message, "message")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    case = _case_or_404(account_id, case_ref)
+    if case["kind"] == SYSTEM:
+        raise HTTPException(
+            status_code=400,
+            detail="a system notice isn't shown to the borrower -- send a general message from the profile instead",
+        )
+    notified = await notify.notify_case_message(
+        account_id, case_ref, message, about=_CASE_ABOUT.get(case["kind"], "your request"),
+        reply_in_chat=case["source"] == "dispute",
+    )
+    return CaseReplyOut(
+        case_ref=case_ref, author="ops", message=message, created_at=datetime.now(timezone.utc),
+        delivered_via_telegram=notified,
+    )
+
+
+@app.post(
+    "/accounts/{account_id}/cases/{case_ref}/confirm-payment",
+    response_model=ConfirmPaymentOut,
+    dependencies=[Depends(require_api_key)],
+)
+async def confirm_payment_claim(account_id: str, case_ref: str, body: ConfirmPaymentIn):
+    """The one right action on a payment claim: ops found the payment, so it is
+    recorded (store.record_payment's rules) and the claim closed, together,
+    and the borrower is told in the claim's thread. A second click, or a
+    colleague who got there first, gets 409 and records nothing twice."""
+    case = _case_or_404(account_id, case_ref)
+    if case["kind"] != cases.PAYMENT_CLAIM:
+        raise HTTPException(status_code=400, detail=f"{case_ref} is not a payment claim")
+    note = (body.note or "").strip() or None
+    _, dispute_id = cases.parse_case_ref(case_ref)
+    try:
+        result = store.confirm_payment_claim(
+            account_id, dispute_id, body.amount, payment_date=body.payment_date,
+            apply_extra_to_next=body.apply_extra_to_next, resolution_note=note or "Payment confirmed and recorded.",
+        )
+    except store.ExtraPaymentDecisionRequiredError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except store.NoOpenDisputeError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    payment = result["payment"]
+    store.log_event(account_id, "tool_called", {"tool": "confirm_payment_claim", "arguments": {"case_ref": case_ref, **body.model_dump(mode="json")}, "result": result})
+    paid_on = date.fromisoformat(payment["payment_date"]).strftime("%d %b %Y")
+    message = f"Good news: we've found your payment of ₹{payment['amount']:,.2f} from {paid_on} and recorded it on your account."
+    if note:
+        message += f" Note from our team: {note}"
+    notified = await notify.notify_dispute_resolved(account_id, message, case_ref=case_ref)
+    return ConfirmPaymentOut(case_ref=case_ref, payment=RecordPaymentOut(**payment), borrower_notified=notified)
 
 
 def _escalation_out(escalation, borrower_notified: bool | None = None) -> EscalationOut:
@@ -1213,7 +1494,9 @@ async def approve_escalation(escalation_id: str):
     message = _approval_message(kind, result, store.get_account(result["account_id"]))
     notified = None
     if message is not None:
-        notified = await notify.notify_restructuring_decision(result["account_id"], approved=True, message=message)
+        notified = await notify.notify_restructuring_decision(
+            result["account_id"], approved=True, message=message, case_ref=escalation_id
+        )
 
     escalation = store.get_escalation(escalation_id)
     return _escalation_out(escalation, borrower_notified=notified)
@@ -1241,7 +1524,9 @@ async def reject_escalation(escalation_id: str, body: EscalationRejectIn):
     message = _rejection_message(kind, result["reason"])
     notified = None
     if message is not None:
-        notified = await notify.notify_restructuring_decision(result["account_id"], approved=False, message=message)
+        notified = await notify.notify_restructuring_decision(
+            result["account_id"], approved=False, message=message, case_ref=escalation_id
+        )
 
     escalation = store.get_escalation(escalation_id)
     return _escalation_out(escalation, borrower_notified=notified)

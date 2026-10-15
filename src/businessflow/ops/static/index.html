@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/styles.css?v=20" />
+<link rel="stylesheet" href="/static/styles.css?v=21" />
 </head>
 <body>
 
@@ -42,9 +42,9 @@
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="8" height="8" rx="2" stroke="currentColor" stroke-width="2"/><rect x="13" y="3" width="8" height="5" rx="2" stroke="currentColor" stroke-width="2"/><rect x="13" y="12" width="8" height="9" rx="2" stroke="currentColor" stroke-width="2"/><rect x="3" y="15" width="8" height="6" rx="2" stroke="currentColor" stroke-width="2"/></svg>
         <span class="tab-label">Portfolio</span>
       </button>
-      <button class="tab" data-view="escalations">
+      <button class="tab" data-view="inbox">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M3 12h5l2 3h4l2-3h5" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M5.5 5h13l2.5 7v7a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-7l2.5-7Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
-        <span class="tab-label">Escalations</span><span class="tab-badge" id="escalation-count-badge" hidden>0</span>
+        <span class="tab-label">Inbox</span><span class="tab-badge" id="inbox-count-badge" hidden>0</span>
       </button>
     </nav>
     <div class="sidebar-footer">
@@ -98,19 +98,19 @@
     <p class="empty-state" id="account-empty" hidden>No accounts match this filter.</p>
   </main>
 
-  <main id="view-escalations" class="view" hidden>
+  <main id="view-inbox" class="view" hidden>
     <header class="page-head">
       <div class="page-head-text">
-        <h1>Escalation queue</h1>
-        <p>Everything still waiting on a human — most urgent first, then oldest.</p>
+        <h1>Inbox</h1>
+        <p>Every open case that needs a person — payment claims, disputes, requests and system notices — most urgent first, then oldest.</p>
       </div>
     </header>
     <div class="sla-buckets" id="sla-buckets"></div>
-    <section class="escalation-list" id="escalation-list"></section>
-    <div class="empty-state empty-state-card" id="escalation-empty" hidden>
+    <section class="case-list" id="inbox-list"></section>
+    <div class="empty-state empty-state-card" id="inbox-empty" hidden>
       <span class="empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="m5 12.5 4.5 4.5L19 7.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
       <p class="empty-title">All clear</p>
-      <p>The queue is empty — nothing waiting on a human right now.</p>
+      <p>The inbox is empty — nothing waiting on a person right now.</p>
     </div>
   </main>
 
@@ -231,6 +231,6 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="/static/app.js?v=22"></script>
+<script src="/static/app.js?v=23"></script>
 </body>
 </html>

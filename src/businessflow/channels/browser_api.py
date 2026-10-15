@@ -57,12 +57,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from businessflow.accounts import store
+from businessflow.accounts import cases
 from businessflow.accounts.db import check_database
 from businessflow.accounts.dues import late_fee_due
 from businessflow.accounts.escalation_kinds import (
     CALLBACK, CLOSURE, FRAUD, RESTRUCTURING, SYSTEM, classify_escalation,
 )
-from businessflow.accounts.policy import GRACE_PERIOD_DAYS
+from businessflow.accounts.policy import GRACE_PERIOD_DAYS, PAYMENT_CLAIM_REVIEW_WORKING_DAYS
 from businessflow.accounts.documents import list_documents_for_account, resolve_document_path
 from businessflow.accounts.models import Account
 from businessflow.agent.loop import (
@@ -82,6 +83,7 @@ from businessflow.channels.abilities import abilities_for, intro
 from businessflow.channels.credentials import looks_like_credentials, parse_credentials
 from businessflow.ops.flags import Flag, compute_flags
 from businessflow.rate_limit import RateLimiter
+from businessflow.tools import validation
 from businessflow.tools.account_tools import flag_dispute, get_payment_status
 from businessflow.tools.escalation_tools import escalate_to_human
 from businessflow.tools.payment_tools import generate_payment_link
@@ -213,15 +215,23 @@ class TimelineEntryOut(BaseModel):
     label: str
 
 
+class ThreadMessageOut(BaseModel):
+    author: str  # "borrower" (shown as "You") | "ops" (shown as "Our team")
+    message: str
+    created_at: datetime
+
+
 class RequestOut(BaseModel):
     """One thing the borrower asked for or raised, in the borrower's own
-    terms. Never the raw escalation reason: that is staff-facing text (and
-    for system-raised tickets -- a guardrail block, a chronic-delinquency
-    notice -- it was previously printed verbatim on the borrower's screen).
+    terms, as one conversation: what they said, every message about it
+    since, and how it ended (accounts/cases.py). Never the raw escalation
+    reason: that is staff-facing text (and for system-raised tickets -- a
+    guardrail block, a chronic-delinquency notice -- it was previously
+    printed verbatim on the borrower's screen).
     """
 
-    id: str
-    kind: str  # restructuring | closure | callback | request | fraud | dispute
+    id: str  # the case reference ("D-12", "ESC-0012") -- what a note is posted against
+    kind: str  # restructuring | closure | callback | request | fraud | dispute | payment_claim
     title: str
     detail: str | None = None
     status: str  # open | done | declined (css hook)
@@ -229,6 +239,8 @@ class RequestOut(BaseModel):
     outcome: str | None = None  # the human's own words on how it ended, when they gave any
     created_at: datetime
     resolved_at: datetime | None = None
+    thread: list[ThreadMessageOut] = []
+    can_reply: bool = False  # open: the borrower can add a note
 
 
 class DocumentOut(BaseModel):
@@ -243,6 +255,9 @@ class WarningOut(BaseModel):
 
 
 class MessageOut(BaseModel):
+    """Something we sent that isn't about one request (a reminder, a general
+    message from our team); a message about a request is in its thread."""
+
     message: str
     delivered_via_telegram: bool
     created_at: datetime
@@ -260,6 +275,15 @@ class DashboardResponse(BaseModel):
 
 class QuickActionDisputeRequest(BaseModel):
     reason: str
+
+
+class QuickActionPaymentClaimRequest(BaseModel):
+    # When and how they paid, in their own words (amount, date, UPI/UTR reference) -- what ops checks against.
+    details: str
+
+
+class CaseNoteRequest(BaseModel):
+    message: str
 
 
 class QuickActionAgentRequest(BaseModel):
@@ -379,7 +403,7 @@ def _build_emi_timeline(account: Account, days_past_due: int) -> list[dict]:
 # the output (days overdue, late fee amount, broken-promise count) is real,
 # taken from payment_status (itself get_payment_status's own real result) or
 # the flag -- never fabricated or estimated here.
-def _build_warnings(flags: list[Flag], payment_status: dict) -> list[dict]:
+def _build_warnings(flags: list[Flag], payment_status: dict, open_claim_kind: str | None = None) -> list[dict]:
     """Returns {label, text} per warning, not just text -- label is what
     the dashboard's own UI uses to decide which action(s) a warning can
     offer (see channels/static/app.js's WARNING_ACTIONS): "overdue" and
@@ -402,6 +426,11 @@ def _build_warnings(flags: list[Flag], payment_status: dict) -> list[dict]:
                 )
             else:
                 text = f"Your EMI is {days} days overdue."
+        elif flag.label == "disputed" and open_claim_kind == cases.PAYMENT_CLAIM:
+            text = (
+                f"We're checking the payment you reported, usually within {PAYMENT_CLAIM_REVIEW_WORKING_DAYS} "
+                "working days. Reminders are paused until then."
+            )
         elif flag.label == "disputed":
             text = "You have an open dispute — our team is reviewing it."
         elif flag.label == "broken_promises":
@@ -440,7 +469,14 @@ def _request_title(kind: str, proposed_changes: dict | None) -> tuple[str, str |
     return "Request to our team", None
 
 
-def _build_requests(escalations: list, disputes: list[dict]) -> list[dict]:
+def _thread(threads: dict[str, list[dict]], case_ref: str) -> list[dict]:
+    return [
+        {"author": m["author"], "message": m["message"], "created_at": m["created_at"]}
+        for m in threads.get(case_ref, [])
+    ]
+
+
+def _build_requests(escalations: list, disputes: list[dict], threads: dict[str, list[dict]] | None = None) -> list[dict]:
     """The borrower's own view of what they've asked for -- escalations the
     borrower (or the agent on their behalf) raised, plus their disputes --
     newest first. Tickets the system or staff raised (guardrail blocks,
@@ -449,7 +485,11 @@ def _build_requests(escalations: list, disputes: list[dict]) -> list[dict]:
     "Guardrail blocked a reply: amount(s) not from any real tool result ... [12500.0]"
     under "Your requests", and their actual dispute wasn't listed at all.
     Statuses are in borrower terms: an Approve on a plain hand-off just means
-    staff closed it, so it reads "Closed", not "Approved"."""
+    staff closed it, so it reads "Closed", not "Approved".
+
+    threads: {case_ref: messages} (store.get_case_threads) -- each request
+    carries its own messages, so our reply sits under what it answers."""
+    threads = threads or {}
     items = []
     for e in escalations:
         kind = classify_escalation(e.reason, e.proposed_changes)
@@ -466,17 +506,24 @@ def _build_requests(escalations: list, disputes: list[dict]) -> list[dict]:
             "id": e.escalation_id, "kind": kind, "title": title, "detail": detail,
             "status": status, "status_label": label, "outcome": e.resolution_reason,
             "created_at": e.created_at, "resolved_at": e.resolved_at,
+            "thread": _thread(threads, e.escalation_id), "can_reply": e.status == "queued_for_human",
         })
     for d in disputes:
         is_open = d["status"] == "open"
+        kind = d.get("kind") or cases.DISPUTE
+        case_ref = cases.dispute_case_ref(d["id"]) if d.get("id") is not None else f"dispute-{d['opened_at'].isoformat()}"
+        if kind == cases.PAYMENT_CLAIM:
+            title, open_label, closed_label = "Payment you reported", "Being checked", "Closed"
+        else:
+            title, open_label, closed_label = "Your question about a charge", "Under review", "Resolved"
         items.append({
-            "id": f"dispute-{d['opened_at'].isoformat()}", "kind": "dispute",
-            "title": "Your question about a charge",
+            "id": case_ref, "kind": kind, "title": title,
             "detail": (d["reason"] or "")[:200] or None,
             "status": "open" if is_open else "done",
-            "status_label": "Under review" if is_open else "Resolved",
+            "status_label": open_label if is_open else closed_label,
             "outcome": d.get("resolution_note"),
             "created_at": d["opened_at"], "resolved_at": d.get("resolved_at"),
+            "thread": _thread(threads, case_ref), "can_reply": is_open and d.get("id") is not None,
         })
     items.sort(key=lambda item: item["created_at"], reverse=True)
     return items
@@ -847,13 +894,15 @@ def get_dashboard_endpoint(conversation_id: str):
     flags = compute_flags(account)
     escalations = store.get_escalations_for_account(account_id)
     disputes = store.get_disputes_for_account(account_id)
+    threads = store.get_case_threads(account_id)
     documents = list_documents_for_account(account_id)
+    open_claim_kind = next((d["kind"] for d in disputes if d["status"] == "open"), None)
 
     return DashboardResponse(
         account=AccountSnapshotOut(**payment_status),
         timeline=[TimelineEntryOut(**entry) for entry in _build_emi_timeline(account, payment_status["days_past_due"])],
-        warnings=[WarningOut(**w) for w in _build_warnings(flags, payment_status)],
-        requests=[RequestOut(**r) for r in _build_requests(escalations, disputes)],
+        warnings=[WarningOut(**w) for w in _build_warnings(flags, payment_status, open_claim_kind)],
+        requests=[RequestOut(**r) for r in _build_requests(escalations, disputes, threads)],
         documents=[DocumentOut(**d) for d in documents],
         # Everything sent to this borrower -- staff messages, restructuring
         # decisions, dispute outcomes and reminders -- previously visible to
@@ -861,7 +910,8 @@ def get_dashboard_endpoint(conversation_id: str):
         # then, only clarification requests were ever shown here). The page
         # promises nothing sent to them is only visible on Telegram; this is
         # what makes that true, and makes this page a real channel for a
-        # borrower who never linked Telegram.
+        # borrower who never linked Telegram. A message about one request is
+        # in that request's thread instead (see store.get_borrower_messages).
         messages=[MessageOut(**m) for m in store.get_borrower_messages(account_id)],
     )
 
@@ -892,6 +942,50 @@ def quick_action_dispute_endpoint(conversation_id: str, req: QuickActionDisputeR
     result = flag_dispute(account_id, req.reason)
     _log_quick_action(account_id, "flag_dispute", {"account_id": account_id, "reason": req.reason}, result)
     return result
+
+
+@app.post("/conversations/{conversation_id}/quick-actions/payment-claim")
+def quick_action_payment_claim_endpoint(conversation_id: str, req: QuickActionPaymentClaimRequest) -> dict:
+    """"I've already paid": opens a payment claim (accounts/cases.py) for the
+    team to check against the bank record, or adds these details to the one
+    already open. Found live: this was a dispute ("Something looks wrong"),
+    and ops couldn't tell a payment to look for from a disagreement."""
+    account_id = _require_verified_account(conversation_id)
+    if not req.details.strip():
+        raise HTTPException(status_code=400, detail="tell us when and how you paid")
+    result = flag_dispute(account_id, req.details, kind=cases.PAYMENT_CLAIM)
+    _log_quick_action(
+        account_id, "flag_dispute", {"account_id": account_id, "reason": req.details, "kind": cases.PAYMENT_CLAIM}, result
+    )
+    return result
+
+
+# A borrower's notes on their own cases are stored and shown to ops, so a
+# runaway client can't fill the log: a few a minute is plenty for a person.
+_case_note_limiter = RateLimiter(max_requests=10, window_seconds=300)
+
+
+@app.post("/conversations/{conversation_id}/cases/{case_ref}/notes")
+def add_case_note_endpoint(conversation_id: str, case_ref: str, req: CaseNoteRequest) -> dict:
+    """The borrower adds to one of their own open requests (a payment
+    reference, an answer to our question): it appears in that request's
+    thread on their dashboard and on the ops dashboard. Only for a case on
+    this conversation's verified account, and only while it is open -- a
+    closed one says so (409) instead of taking a note nobody will read."""
+    account_id = _require_verified_account(conversation_id)
+    try:
+        message = validation.free_text(req.message, "message")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    case = store.get_case(account_id, case_ref)
+    if case is None or case["kind"] == SYSTEM:
+        raise HTTPException(status_code=404, detail=f"no request {case_ref!r} on this account")
+    if not case["open"]:
+        raise HTTPException(status_code=409, detail="this request is closed -- use Get help to raise something new")
+    if not _case_note_limiter.check(account_id):
+        raise HTTPException(status_code=429, detail="too many notes in a short time -- please wait a few minutes")
+    store.add_case_message(account_id, case_ref, "borrower", message)
+    return {"case_ref": case_ref, "author": "borrower", "message": message}
 
 
 _DEFAULT_AGENT_REASON = "Borrower requested a human agent from the dashboard"
