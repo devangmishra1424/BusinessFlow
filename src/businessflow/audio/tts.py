@@ -131,6 +131,7 @@ def prefetch_voices() -> None:
 # Piper hands back audio normalised to a peak of exactly 1.0 (full scale), which leaves no headroom: after the lossy
 # Opus step every voice reply goes through, the decoded waveform overshoots 1.0 on most clips (7 of 12 measured, up to
 # 1.009) and a player or a 16-bit conversion clips it. Peaks are kept at -1 dBFS. Only ever turned DOWN, never up.
+# -1 dBFS turned out not to be enough for Opus on its own: encode_ogg_opus limits further (_OPUS_PEAK_LIMIT).
 _PEAK_LIMIT = 0.891  # 10 ** (-1 / 20)
 
 
@@ -303,6 +304,15 @@ def speak_hindi(text: str) -> Speech:
 # a silently missing reply).
 _OPUS_SAMPLE_RATES = (8000, 12000, 16000, 24000, 48000)
 
+# Found in CI (2026-10-15, PR #18's run, a change that never touched audio): -1 dBFS was not enough headroom for Opus.
+# A Hindi clip limited to 0.891 decoded at 1.021, so that voice note would clip on playback. Measured on 470 Piper
+# clips: Opus alone raises the peak by up to 12.6% (the CI clip rose 14.6% in all), encode_ogg_opus's resample can
+# add up to 4.5% before it, and a player decoding at 48 kHz peaks up to 3.8% above the 24 kHz decode soundfile
+# gives -- by that measure 13 of the 470 (all Hindi) clipped on a phone at -1 dBFS. Limited to -2 dBFS AFTER the
+# resample, the loudest of the 470 decoded at 0.914 (about 0.95 at 48 kHz). Voice notes are about 1 dB quieter than
+# at -1 dBFS; agreed with the owner over -3 dBFS (2 dB quieter) and -1.5 dBFS (too little margin).
+_OPUS_PEAK_LIMIT = 0.794  # 10 ** (-2 / 20)
+
 
 def encode_ogg_opus(speech: Speech) -> bytes:
     """The one place a Speech becomes OGG/Opus bytes for every channel
@@ -310,12 +320,15 @@ def encode_ogg_opus(speech: Speech) -> bytes:
     directly and risking the crash above. Resamples up to the smallest
     Opus-supported rate that's still >= speech.sample_rate whenever the
     engine's native rate isn't already one of them -- never down, so this
-    never throws away resolution the model actually produced."""
+    never throws away resolution the model actually produced. Then turns
+    the peak down to _OPUS_PEAK_LIMIT (never up), so the decoded voice
+    note stays under full scale whatever level the Speech arrives at."""
     audio, sample_rate = speech.audio, speech.sample_rate
     if sample_rate not in _OPUS_SAMPLE_RATES:
         target_rate = min((r for r in _OPUS_SAMPLE_RATES if r >= sample_rate), default=48000)
         audio = torchaudio.functional.resample(audio, orig_freq=sample_rate, new_freq=target_rate)
         sample_rate = target_rate
+    audio = _limit_peak(audio, _OPUS_PEAK_LIMIT)
     buf = io.BytesIO()
     sf.write(buf, audio.numpy(), sample_rate, format="OGG", subtype="OPUS")
     return buf.getvalue()

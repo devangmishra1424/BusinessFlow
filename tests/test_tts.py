@@ -31,6 +31,7 @@ plausible shape" smoke-test level instead.
 """
 
 import io
+from pathlib import Path
 
 import pytest
 import soundfile as sf
@@ -341,9 +342,27 @@ def test_a_mixed_reply_stays_at_the_piper_rate_with_no_resampling(monkeypatch):
 # ---------------------------------------------------------------------------
 # Headroom. Found by tests/test_tts_benchmark.py's audio-hygiene criterion: Piper's output peaks at exactly 1.0, and
 # after Opus encoding 7 of 12 real clips decoded above 1.0 (a player or 16-bit conversion clips them).
+# Then found in CI (2026-10-15): at -1 dBFS a Hindi clip still decoded at 1.021, so encode_ogg_opus now limits to
+# -2 dBFS itself (see _OPUS_PEAK_LIMIT). soundfile decodes at 24 kHz; a player decoding at 48 kHz peaks up to 3.8%
+# higher (measured with libopus), so a voice note has to decode with that much room to spare, not just under 1.0.
 # ---------------------------------------------------------------------------
 
 from businessflow.audio.tts import _PEAK_LIMIT, _limit_peak  # noqa: E402
+
+_PLAYER_DECODE_ALLOWANCE = 1.04  # a 48 kHz player's peak over soundfile's 24 kHz one: up to 1.038 measured
+# The loudest of 470 real Piper Hindi replies (a benchmark sentence), saved at -1 dBFS as speak_hindi hands
+# it over. Before the fix it decoded at 1.004, and libopus at 48 kHz pinned it at full scale: an audible clip.
+_OVERSHOOT_CLIP = Path(__file__).parent / "fixtures" / "opus_overshoot_hindi.flac"
+
+
+def _decoded_peak(speech: Speech) -> float:
+    decoded, _ = sf.read(io.BytesIO(encode_ogg_opus(speech)), dtype="float32")  # float decode is not clipped to +-1
+    return float(abs(decoded).max())
+
+
+def _tone(peak: float, sample_rate: int = 22050, seconds: float = 1.0) -> Speech:
+    t = torch.arange(int(sample_rate * seconds)) / sample_rate
+    return Speech(audio=peak * torch.sin(2 * torch.pi * 1000 * t), sample_rate=sample_rate)
 
 
 def test_limit_peak_turns_a_full_scale_signal_down_to_minus_one_dbfs():
@@ -360,14 +379,32 @@ def test_limit_peak_never_turns_a_quiet_signal_up_and_leaves_empty_audio_alone()
     assert torch.equal(_limit_peak(torch.zeros(5)), torch.zeros(5))
 
 
+def test_the_real_clip_opus_pushed_over_full_scale_now_decodes_with_room_to_spare():
+    # Deterministic: the same audio every run, unlike a fresh synthesis (Piper's noise makes each one different).
+    audio, rate = sf.read(_OVERSHOOT_CLIP, dtype="float32")
+    audio = torch.from_numpy(audio)
+    speech = Speech(audio=audio * (_PEAK_LIMIT / float(audio.abs().max())), sample_rate=rate)
+    assert _decoded_peak(speech) * _PLAYER_DECODE_ALLOWANCE <= 1.0
+
+
+def test_encode_ogg_opus_keeps_headroom_even_for_a_full_scale_input():
+    # The encoder owns Opus's headroom, so a Speech that did not come through speak_* is safe too.
+    assert _decoded_peak(_tone(peak=1.0)) * _PLAYER_DECODE_ALLOWANCE <= 1.0
+
+
+def test_encode_ogg_opus_never_turns_a_quiet_clip_up():
+    assert _decoded_peak(_tone(peak=0.3)) == pytest.approx(0.3, rel=0.1)  # Opus's own error, not a gain change
+
+
 @_piper_skip
 def test_spoken_english_and_hindi_keep_headroom_and_survive_opus_without_clipping(monkeypatch):
+    # Fresh synthesis, so a different clip every run: at -1 dBFS this failed now and then (1.021 in CI). At -2 dBFS it
+    # would take Opus raising the peak by 21.1% to fail; the worst seen was 14.6% (that CI clip, resample included).
     monkeypatch.delenv("TTS_HINDI_ENGINE", raising=False)
     for speech in (speak_english("Your payment has gone through successfully. Thank you very much."),
                    speak_hindi("आपका भुगतान सफलतापूर्वक हो गया है। आपका बहुत धन्यवाद।")):
         assert float(speech.audio.abs().max()) <= _PEAK_LIMIT + 1e-6
-        decoded, _ = sf.read(io.BytesIO(encode_ogg_opus(speech)), dtype="float32")  # float decode is not clipped to +-1
-        assert float(abs(decoded).max()) <= 1.0
+        assert _decoded_peak(speech) * _PLAYER_DECODE_ALLOWANCE <= 1.0
 
 
 # ---------------------------------------------------------------------------
