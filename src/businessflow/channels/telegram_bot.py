@@ -546,7 +546,8 @@ async def _run_dispute(chat_id: int, args: list[str] | None) -> str:
     result = flag_dispute(account_id, reason)
     _log_tool_call(account_id, "flag_dispute", {"account_id": account_id, "reason": reason}, result)
     if result["already_open"]:
-        return "You already have a dispute open on this account -- a human will review it."
+        # flag_dispute added these words to the case already open, so say that -- not that nothing happened.
+        return "You already have an open case on this account -- I've added this to it, and our team will see it there."
     return (
         "Got it -- I've flagged this account for review. No further automated collection "
         "action will be taken until a human looks into it."

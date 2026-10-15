@@ -221,3 +221,99 @@ def test_get_borrower_messages_lists_everything_sent_to_the_borrower_newest_firs
     assert [m["kind"] for m in messages] == ["dispute", "decision", "reminder", "message"]
     assert [m["message"] for m in messages] == ["Dispute closed", "Approved", "Your EMI is due", "Please call us"]
     assert messages[1]["delivered_via_telegram"] is True and messages[0]["delivered_via_telegram"] is False
+
+
+# ---------------------------------------------------------------------------
+# One case, one conversation (accounts/cases.py)
+# ---------------------------------------------------------------------------
+
+
+def test_a_message_about_a_case_is_in_its_thread_not_in_the_general_messages(reseed_accounts):
+    store.log_event("BF-1001", "reminder_sent", {"kind": "due_now", "message": "Your EMI is due", "delivered_via_telegram": False})
+    store.log_event("BF-1001", "dispute_resolution_notified", {"case_ref": "D-1", "message": "Closed", "delivered_via_telegram": False})
+    store.add_case_message("BF-1001", "D-1", "borrower", "UTR 4123")
+
+    assert [m["message"] for m in store.get_borrower_messages("BF-1001")] == ["Your EMI is due"]
+    assert [(m["author"], m["message"]) for m in store.get_case_threads("BF-1001")["D-1"]] == [
+        ("ops", "Closed"), ("borrower", "UTR 4123"),
+    ]
+
+
+def test_add_case_message_refuses_an_unknown_author(reseed_accounts):
+    with pytest.raises(ValueError):
+        store.add_case_message("BF-1001", "D-1", "agent", "hello")
+
+
+def test_open_dispute_returns_the_case_already_open_instead_of_opening_a_second(reseed_accounts):
+    first = store.open_dispute("BF-1001", "Paid on the 3rd", "payment_claim")
+    second = store.open_dispute("BF-1001", "The fee is wrong", "dispute")
+
+    assert first["opened"] is True and second["opened"] is False
+    assert second["dispute_id"] == first["dispute_id"] and second["kind"] == "payment_claim"
+    assert second["reason"] == "Paid on the 3rd"
+
+
+def test_get_case_only_finds_a_case_on_the_given_account(reseed_accounts):
+    opened = store.open_dispute("BF-1001", "Paid on the 3rd", "payment_claim")
+    ref = f"D-{opened['dispute_id']}"
+
+    assert store.get_case("BF-1001", ref)["kind"] == "payment_claim"
+    assert store.get_case("BF-1001", ref)["open"] is True
+    assert store.get_case("BF-1002", ref) is None  # someone else's case is simply not found
+    assert store.get_case("BF-1001", "not-a-ref") is None
+
+
+def test_resolving_a_case_that_is_no_longer_the_open_one_changes_nothing(reseed_accounts):
+    opened = store.open_dispute("BF-1001", "The fee is wrong")
+
+    with pytest.raises(store.NoOpenDisputeError):
+        store.resolve_dispute("BF-1001", "note", dispute_id=opened["dispute_id"] + 1000)
+
+    assert store.get_case("BF-1001", f"D-{opened['dispute_id']}")["open"] is True
+    resolved = store.resolve_dispute("BF-1001", "Checked", dispute_id=opened["dispute_id"])
+    assert resolved["kind"] == "dispute" and store.get_account_or_raise("BF-1001").dispute_open is False
+
+
+def test_confirming_a_payment_claim_records_the_payment_and_closes_the_claim_together(reseed_accounts):
+    before = store.get_account_or_raise("BF-1001")
+    opened = store.open_dispute("BF-1001", "Paid on the 3rd", "payment_claim")
+
+    result = store.confirm_payment_claim("BF-1001", opened["dispute_id"], before.emi_amount, resolution_note="Found it")
+
+    after = store.get_account_or_raise("BF-1001")
+    assert result["payment"]["kind"] == "regular"
+    assert after.months_remaining == before.months_remaining - 1 and after.dispute_open is False
+    assert store.get_case("BF-1001", f"D-{opened['dispute_id']}")["open"] is False
+
+    # A second confirm (a double click, or a colleague) records nothing twice.
+    with pytest.raises(store.NoOpenDisputeError):
+        store.confirm_payment_claim("BF-1001", opened["dispute_id"], before.emi_amount)
+    assert len(store.get_account_or_raise("BF-1001").payment_history) == len(after.payment_history)
+
+
+def test_a_dispute_cannot_be_confirmed_as_a_payment(reseed_accounts):
+    opened = store.open_dispute("BF-1001", "The fee is wrong", "dispute")
+
+    with pytest.raises(ValueError, match="not a payment claim"):
+        store.confirm_payment_claim("BF-1001", opened["dispute_id"], 100.0)
+    assert store.get_case("BF-1001", f"D-{opened['dispute_id']}")["open"] is True
+
+
+def test_a_short_confirmed_payment_needs_the_credit_decision_and_rolls_back_without_it(reseed_accounts):
+    opened = store.open_dispute("BF-1001", "Paid part of it", "payment_claim")
+    payments_before = len(store.get_account_or_raise("BF-1001").payment_history)
+
+    with pytest.raises(store.ExtraPaymentDecisionRequiredError):
+        store.confirm_payment_claim("BF-1001", opened["dispute_id"], 1.0)
+
+    assert store.get_case("BF-1001", f"D-{opened['dispute_id']}")["open"] is True  # nothing half-done
+    assert len(store.get_account_or_raise("BF-1001").payment_history) == payments_before
+
+
+def test_the_inbox_reads_list_open_claims_with_the_borrowers_name(reseed_accounts):
+    opened = store.open_dispute("BF-1001", "Paid on the 3rd", "payment_claim")
+
+    rows = {r["id"]: r for r in store.list_open_disputes()}
+
+    assert rows[opened["dispute_id"]]["kind"] == "payment_claim"
+    assert rows[opened["dispute_id"]]["borrower_name"] == store.get_account_or_raise("BF-1001").borrower_name

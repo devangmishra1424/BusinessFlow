@@ -28,6 +28,16 @@ BROKEN_PROMISES_BEFORE_MANDATORY_ESCALATION = 2
 # a normal payment delay.
 MANDATORY_ESCALATION_DAYS_PAST_DUE = 14
 
+# How soon the team checks a payment a borrower says they already made
+# (a payment claim, accounts/cases.py) against the bank record -- the
+# figure the agent and the dashboard quote when they say when it will be
+# checked. Found live: "I have paid my EMI, can you update it" got only
+# "A human agent will review it", with no idea of when. An ASSUMED,
+# illustrative default like LATE_FEE_FLAT_AMOUNT below, not a researched
+# figure; a real lender should set it to its own service level.
+# dispute_handling.md states the same number.
+PAYMENT_CLAIM_REVIEW_WORKING_DAYS = 2
+
 MAX_RESTRUCTURING_EXTENSION_MONTHS = 3
 
 # A restructured/partial payment can't be proposed below this fraction of the

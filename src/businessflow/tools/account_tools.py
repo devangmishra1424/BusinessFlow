@@ -1,10 +1,16 @@
 """Tools that read or record facts against a borrower's account."""
 
 from datetime import date
+from typing import Literal
 
-from businessflow.accounts import store
+from businessflow.accounts import cases, store
 from businessflow.accounts.dues import amount_due_now
-from businessflow.accounts.policy import GRACE_PERIOD_DAYS, LATE_FEE_FLAT_AMOUNT, PROMISE_TOLERANCE_DAYS
+from businessflow.accounts.policy import (
+    GRACE_PERIOD_DAYS,
+    LATE_FEE_FLAT_AMOUNT,
+    PAYMENT_CLAIM_REVIEW_WORKING_DAYS,
+    PROMISE_TOLERANCE_DAYS,
+)
 from businessflow.tools import validation
 from businessflow.tools.server import mcp
 
@@ -166,19 +172,39 @@ def log_promise_to_pay(account_id: str, promised_date: str, promised_amount: flo
 
 @mcp.tool(
     description=(
-        "Open a dispute flag on the account so no further automated collection action is "
-        "taken on it until a human reviews the reason given."
+        "Record something a borrower raised about their account for a person on our team to check; "
+        "automated reminders pause until it is closed. kind='payment_claim' when they say they ALREADY "
+        f"PAID (an EMI, a late fee, any amount) and it isn't showing: the team checks the bank record within "
+        f"{PAYMENT_CLAIM_REVIEW_WORKING_DAYS} working days and records the payment. kind='dispute' when they "
+        "say an amount, fee or due date is wrong. reason is the borrower's own words, with any amount, date, "
+        "payment method or reference they gave. Only one can be open at a time: if one already is, this adds "
+        "their new words to it, so call it again when they send more details (a UTR, a date)."
     )
 )
-def flag_dispute(account_id: str, reason: str) -> dict:
-    """Open a dispute flag on the account so no further automated collection
-    action is taken on it until a human reviews the reason given."""
+def flag_dispute(account_id: str, reason: str, kind: Literal["dispute", "payment_claim"] = "dispute") -> dict:
+    """Opens a dispute or a payment claim (accounts/cases.py), or adds the
+    borrower's words to the one already open. Found live: "I have paid my
+    EMI, can you update it in the profile" was filed as a dispute and
+    answered "A human agent will review it" -- nobody could tell a payment to
+    look for from a disagreement, and the borrower wasn't told when."""
     store.get_account_or_raise(account_id)  # raises if the account doesn't exist
     reason = validation.free_text(reason, "reason")
-    newly_opened = store.open_dispute(account_id, reason)
-    return {
+    if kind not in cases.DISPUTE_KINDS:
+        raise ValueError(f"kind must be one of {cases.DISPUTE_KINDS}, got {kind!r}")
+    case = store.open_dispute(account_id, reason, kind)
+    case_ref = cases.dispute_case_ref(case["dispute_id"])
+    if not case["opened"] and reason != case.get("reason"):
+        # More from the borrower about the open case (a reference, a date): kept in its thread, where ops reads it.
+        # The same words again (a retry) are not added twice.
+        store.add_case_message(account_id, case_ref, "borrower", reason)
+    result = {
         "account_id": account_id,
         "dispute_open": True,
         "reason": reason,
-        "already_open": not newly_opened,  # True if the account already had a dispute open
+        "already_open": not case["opened"],  # True if one was already open; reason was added to it
+        "kind": case["kind"],  # of the case now open -- the existing one's when already_open
+        "case_ref": case_ref,
     }
+    if case["kind"] == cases.PAYMENT_CLAIM:
+        result["review_within_working_days"] = PAYMENT_CLAIM_REVIEW_WORKING_DAYS
+    return result

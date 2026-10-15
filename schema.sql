@@ -90,6 +90,11 @@ create table disputes (
     id               bigint primary key generated always as identity,
     account_id       text not null references accounts(account_id),
     reason           text not null,
+    -- 'dispute': the borrower says an amount, fee or due date is wrong.
+    -- 'payment_claim': the borrower says they already paid -- ops checks the
+    -- bank record, then confirms it (records the payment) or closes it.
+    -- Added by migrations/2026-10-15_dispute_kind.sql.
+    kind             text not null default 'dispute' check (kind in ('dispute', 'payment_claim')),
     status           text not null default 'open',
     opened_at        timestamptz not null default now(),
     resolved_at      timestamptz,

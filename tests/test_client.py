@@ -103,6 +103,16 @@ def test_prompt_escalates_fraud_or_identity_claims_as_more_urgent_than_a_routine
     assert "ask them for 'proof'" in prompt
 
 
+def test_prompt_files_already_paid_as_a_payment_claim_and_says_when_it_will_be_checked():
+    # Found live: "i have paid my emi, cn you update it in the profile" was filed as a plain dispute and answered
+    # "A human agent will review it" -- no idea what happens next or when.
+    prompt = build_system_prompt(language="en")
+    assert "kind='payment_claim'" in prompt
+    assert "review_within_working_days" in prompt
+    assert "Never say only that 'a human agent will review it'" in prompt
+    assert "never say the account has been updated" in prompt
+
+
 def test_prompt_refuses_to_fabricate_a_due_date_change_and_offers_escalation_instead():
     # This agent has no mechanism to actually move a due date -- it's tied
     # to the NACH mandate with the borrower's bank, not something this

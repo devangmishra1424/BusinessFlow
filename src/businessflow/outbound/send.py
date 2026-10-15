@@ -87,12 +87,17 @@ async def _deliver_and_log(
     payment_url: str | None = None,
     payment_amount: float | None = None,
     with_actions: bool = False,
+    telegram_text: str | None = None,
 ) -> bool:
+    """telegram_text, when given, is what Telegram shows instead of message -- for a message that needs context
+    there (which case it is about) that the dashboard already gives by showing it inside that case."""
     account = store.get_account(account_id)
     delivered = False
     if account and account.telegram_chat_id:
         actions = action_rows(account_id, account.language_preference) if with_actions else None
-        delivered = await _send_telegram_message(account.telegram_chat_id, message, payment_url, payment_amount, actions)
+        delivered = await _send_telegram_message(
+            account.telegram_chat_id, telegram_text or message, payment_url, payment_amount, actions
+        )
 
     store.log_event(account_id, event_type, {**extra_details, "message": message, "delivered_via_telegram": delivered})
     return delivered
@@ -114,21 +119,44 @@ def send_reminder(
     )
 
 
-async def notify_restructuring_decision(account_id: str, approved: bool, message: str) -> bool:
+async def notify_restructuring_decision(account_id: str, approved: bool, message: str, case_ref: str | None = None) -> bool:
     """Called from ops/api.py right after a human approves or rejects a
     restructuring request. Returns True if the borrower was actually
-    reached over Telegram."""
-    return await _deliver_and_log(account_id, message, "restructuring_decision_notified", {"approved": approved})
+    reached over Telegram. case_ref (the escalation id) puts the message in
+    that request's thread on the borrower's dashboard."""
+    details = {"approved": approved, **({"case_ref": case_ref} if case_ref else {})}
+    return await _deliver_and_log(account_id, message, "restructuring_decision_notified", details)
 
 
-async def notify_dispute_resolved(account_id: str, message: str) -> bool:
+async def notify_case_message(account_id: str, case_ref: str, message: str, about: str, reply_in_chat: bool) -> bool:
+    """A message from ops about one case (accounts/cases.py) -- shown in that
+    case's thread on both dashboards, and sent over Telegram when linked,
+    prefixed with what it is about (`about`, e.g. "the payment you
+    reported"), since a Telegram chat has no thread to put it in. Returns True
+    if the borrower was actually reached over Telegram.
+
+    reply_in_chat: whether a reply typed in the Telegram chat reaches this
+    case. True for a dispute or payment claim (the agent adds the borrower's
+    further details to the open one, see flag_dispute); False for an
+    escalation, where only the dashboard's reply box does -- so the footer
+    never points the borrower somewhere their reply would get lost."""
+    footer = "You can reply here, or on your dashboard." if reply_in_chat else "You can reply on your dashboard, under Requests & messages."
+    telegram_text = f"Our team, about {about}:\n{message}\n\n{footer}"
+    return await _deliver_and_log(
+        account_id, message, "case_message", {"case_ref": case_ref, "author": "ops"}, telegram_text=telegram_text
+    )
+
+
+async def notify_dispute_resolved(account_id: str, message: str, case_ref: str | None = None) -> bool:
     """Called from ops/api.py right after staff resolve a dispute -- the
     borrower's account stopped being frozen and their banner disappeared, but
     nothing ever told them the outcome. Same real-or-logged delivery as every
-    other notification here; the dashboard's "Messages from us" shows it
+    other notification here; the dashboard's "Requests & messages" shows it
     either way. Returns True if the borrower was actually reached over
-    Telegram."""
-    return await _deliver_and_log(account_id, message, "dispute_resolution_notified", {})
+    Telegram. case_ref puts it in that case's thread."""
+    return await _deliver_and_log(
+        account_id, message, "dispute_resolution_notified", {"case_ref": case_ref} if case_ref else {}
+    )
 
 
 async def notify_clarification_request(account_id: str, message: str) -> bool:

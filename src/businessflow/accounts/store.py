@@ -20,8 +20,10 @@ from datetime import date, datetime, timedelta, timezone
 
 import psycopg
 
+from businessflow.accounts import cases
 from businessflow.accounts.db import get_connection
 from businessflow.accounts.dues import late_fee_due
+from businessflow.accounts.escalation_kinds import classify_escalation
 from businessflow.accounts.models import Account, Escalation, PaymentRecord, PromiseToPay
 from businessflow.accounts.policy import PAYMENT_TOKEN_TTL_HOURS, PROMISE_TOLERANCE_DAYS
 
@@ -305,32 +307,61 @@ def resolve_matured_promises() -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def open_dispute(account_id: str, reason: str) -> bool:
-    """Returns True if this call actually opened a new dispute, False if
-    the account already had one open -- flagging an already-disputed
-    account is a no-op, not a second dispute-log entry. Same
-    check-then-act caveat as add_promise above."""
-    conn = get_connection()
-    row = conn.execute("select dispute_open from accounts where account_id = %s", (account_id,)).fetchone()
-    if row and row["dispute_open"]:
-        return False
-    conn.execute("update accounts set dispute_open = true, updated_at = now() where account_id = %s", (account_id,))
-    conn.execute("insert into disputes (account_id, reason) values (%s, %s)", (account_id, reason))
-    return True
+def open_dispute(account_id: str, reason: str, kind: str = cases.DISPUTE) -> dict:
+    """Opens a dispute, or a payment claim (kind="payment_claim": the
+    borrower says they already paid), and pauses automated reminders
+    (accounts.dispute_open) until a person closes it.
+
+    At most one is open at a time: if one already is, nothing new opens
+    and the open one is returned -- the caller adds the borrower's new
+    words to it as a message (see tools/account_tools.py's flag_dispute),
+    rather than dropping them as this used to.
+
+    Returns {"opened": bool, "dispute_id": int, "kind": str, "reason": str}
+    -- all of the case now open (the existing one when opened is
+    False). The account row is locked for the check and the insert, so two
+    claims arriving together can't both open one."""
+    if kind not in cases.DISPUTE_KINDS:
+        raise ValueError(f"kind must be one of {cases.DISPUTE_KINDS}, got {kind!r}")
+    with get_connection().transaction() as tx:
+        account = tx.execute("select dispute_open from accounts where account_id = %s for update", (account_id,)).fetchone()
+        if account is None:
+            raise ValueError(f"No account found for account_id={account_id!r}")
+        if account["dispute_open"]:
+            existing = tx.execute(
+                "select id, kind, reason from disputes where account_id = %s and status = 'open' order by opened_at desc limit 1",
+                (account_id,),
+            ).fetchone()
+            if existing is not None:
+                return {"opened": False, "dispute_id": existing["id"], "kind": existing["kind"], "reason": existing["reason"]}
+            # dispute_open without an open row: the flag is stale (set before disputes rows existed). Open a real
+            # one below rather than reporting a case that doesn't exist.
+            logger.warning("open_dispute: account_id=%s had dispute_open set but no open dispute row; opening one", account_id)
+        tx.execute("update accounts set dispute_open = true, updated_at = now() where account_id = %s", (account_id,))
+        row = tx.execute(
+            "insert into disputes (account_id, reason, kind) values (%s, %s, %s) returning id",
+            (account_id, reason, kind),
+        ).fetchone()
+        return {"opened": True, "dispute_id": row["id"], "kind": kind, "reason": reason}
 
 
 def get_disputes_for_account(account_id: str, ex=None) -> list[dict]:
-    """Every dispute ever opened on this account, newest first -- the
-    real reason text a borrower (or a warning's "Contest" action) gave,
-    which flags.py's own "disputed" flag never carries (it's a fixed
-    generic string, not this). Ops has had no way to see WHY an account
-    is disputed without a direct database query until this existed."""
+    """Every dispute and payment claim ever opened on this account, newest
+    first -- the real reason text a borrower gave, which flags.py's own
+    "disputed" flag never carries (it's a fixed generic string, not this).
+    Ops has had no way to see WHY an account is disputed without a direct
+    database query until this existed."""
     rows = (ex or get_connection()).execute(
-        "select reason, status, opened_at, resolved_at, resolution_note from disputes "
+        "select id, kind, reason, status, opened_at, resolved_at, resolution_note from disputes "
         "where account_id = %s order by opened_at desc",
         (account_id,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def _flag_reason(kind: str, reason: str) -> str:
+    # A payment claim says what to check, not just that something is disputed.
+    return f"Says they already paid: {reason}" if kind == cases.PAYMENT_CLAIM else reason
 
 
 def get_latest_open_dispute_reason(account_id: str, ex=None) -> str | None:
@@ -339,10 +370,10 @@ def get_latest_open_dispute_reason(account_id: str, ex=None) -> str | None:
     unresolved dispute" string, so an ops operator glancing at the flags
     list sees the actual claim, not just that one exists."""
     row = (ex or get_connection()).execute(
-        "select reason from disputes where account_id = %s and status = 'open' order by opened_at desc limit 1",
+        "select kind, reason from disputes where account_id = %s and status = 'open' order by opened_at desc limit 1",
         (account_id,),
     ).fetchone()
-    return row["reason"] if row else None
+    return _flag_reason(row["kind"], row["reason"]) if row else None
 
 
 def latest_open_dispute_reasons(account_ids: list[str]) -> dict[str, str]:
@@ -351,18 +382,77 @@ def latest_open_dispute_reasons(account_ids: list[str]) -> dict[str, str]:
     if not account_ids:
         return {}
     rows = get_connection().execute(
-        "select distinct on (account_id) account_id, reason from disputes "
+        "select distinct on (account_id) account_id, kind, reason from disputes "
         "where account_id = any(%s) and status = 'open' order by account_id, opened_at desc",
         (list(account_ids),),
     ).fetchall()
-    return {r["account_id"]: r["reason"] for r in rows}
+    return {r["account_id"]: _flag_reason(r["kind"], r["reason"]) for r in rows}
+
+
+_MAX_OPEN_DISPUTES = 200  # an explicit bound for the ops inbox, far above any real queue here
+
+
+def list_open_disputes(ex=None) -> list[dict]:
+    """Every open dispute and payment claim across all accounts, oldest
+    first, with the borrower's name -- the ops inbox's half that isn't an
+    escalation. Bounded."""
+    rows = (ex or get_connection()).execute(
+        "select d.id, d.account_id, d.kind, d.reason, d.opened_at, a.borrower_name from disputes d "
+        "join accounts a on a.account_id = d.account_id where d.status = 'open' order by d.opened_at limit %s",
+        (_MAX_OPEN_DISPUTES,),
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 class NoOpenDisputeError(ValueError):
     pass
 
 
-def resolve_dispute(account_id: str, resolution_note: str | None = None) -> dict:
+def get_dispute(dispute_id: int, ex=None) -> dict | None:
+    row = (ex or get_connection()).execute(
+        "select id, account_id, kind, reason, status, opened_at, resolved_at, resolution_note from disputes where id = %s",
+        (dispute_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def confirm_payment_claim(
+    account_id: str,
+    dispute_id: int,
+    amount: float,
+    payment_date: date | None = None,
+    apply_extra_to_next: bool | None = None,
+    resolution_note: str | None = None,
+) -> dict:
+    """Ops found the payment a borrower reported: records it (record_payment's
+    rules, see there) and closes the claim, in one transaction -- the payment
+    can't land without the claim closing, or the claim close without the
+    payment. Raises NoOpenDisputeError when that claim isn't open any more (a
+    second click, or a colleague got there first), so the payment is never
+    recorded twice, and ValueError when the case isn't a payment claim on this
+    account. Returns {"payment": <record_payment's dict>, "dispute_id": ...}."""
+    with get_connection().transaction() as tx:
+        _lock_account(tx, account_id)  # account first, as everywhere else, then the claim
+        claim = tx.execute(
+            "select id, kind, status from disputes where id = %s and account_id = %s for update",
+            (dispute_id, account_id),
+        ).fetchone()
+        if claim is None:
+            raise ValueError(f"no case D-{dispute_id} on account_id={account_id!r}")
+        if claim["kind"] != cases.PAYMENT_CLAIM:
+            raise ValueError(f"case D-{dispute_id} is a {claim['kind']}, not a payment claim")
+        if claim["status"] != "open":
+            raise NoOpenDisputeError(f"case D-{dispute_id} is already closed")
+        payment = _record_payment_in(tx, account_id, amount, payment_date, apply_extra_to_next, None)
+        tx.execute(
+            "update disputes set status = 'resolved', resolved_at = now(), resolution_note = %s where id = %s",
+            (resolution_note, dispute_id),
+        )
+        tx.execute("update accounts set dispute_open = false, updated_at = now() where account_id = %s", (account_id,))
+    return {"payment": payment, "dispute_id": dispute_id, "kind": cases.PAYMENT_CLAIM, "resolution_note": resolution_note}
+
+
+def resolve_dispute(account_id: str, resolution_note: str | None = None, dispute_id: int | None = None) -> dict:
     """Closes this account's currently open dispute -- open_dispute's own
     docstring guarantees there's ever at most one open at a time (a second
     open_dispute call while one's already open is a no-op), so this
@@ -382,21 +472,29 @@ def resolve_dispute(account_id: str, resolution_note: str | None = None) -> dict
 
     Raises rather than silently no-op'ing when there's nothing open to
     resolve -- an operator clicking "Resolve" on an account that's
-    already clean almost certainly means they're looking at stale data."""
-    conn = get_connection()
-    row = conn.execute(
-        "select id from disputes where account_id = %s and status = 'open' order by opened_at desc limit 1",
-        (account_id,),
-    ).fetchone()
-    if row is None:
-        raise NoOpenDisputeError(f"account_id={account_id!r} has no open dispute to resolve")
+    already clean almost certainly means they're looking at stale data.
 
-    conn.execute(
-        "update disputes set status = 'resolved', resolved_at = now(), resolution_note = %s where id = %s",
-        (resolution_note, row["id"]),
-    )
-    conn.execute("update accounts set dispute_open = false, updated_at = now() where account_id = %s", (account_id,))
-    return {"account_id": account_id, "dispute_id": row["id"], "resolution_note": resolution_note}
+    dispute_id, when given (the ops case card always sends it), must be
+    the open one: an operator closing case D-12 must not close a different
+    case that opened since they loaded the page."""
+    with get_connection().transaction() as tx:
+        # The account row first, then the dispute: the same order as open_dispute and confirm_payment_claim, so two of
+        # them on one account wait for each other instead of deadlocking.
+        tx.execute("select 1 from accounts where account_id = %s for update", (account_id,))
+        row = tx.execute(
+            "select id, kind from disputes where account_id = %s and status = 'open' order by opened_at desc limit 1 for update",
+            (account_id,),
+        ).fetchone()
+        if row is None or (dispute_id is not None and row["id"] != dispute_id):
+            which = f"case D-{dispute_id}" if dispute_id is not None else "a dispute"
+            raise NoOpenDisputeError(f"account_id={account_id!r} has no open {which} to resolve")
+
+        tx.execute(
+            "update disputes set status = 'resolved', resolved_at = now(), resolution_note = %s where id = %s",
+            (resolution_note, row["id"]),
+        )
+        tx.execute("update accounts set dispute_open = false, updated_at = now() where account_id = %s", (account_id,))
+    return {"account_id": account_id, "dispute_id": row["id"], "kind": row["kind"], "resolution_note": resolution_note}
 
 
 _CALL_LOG_OUTCOMES = ("reached", "no_answer", "voicemail", "wrong_number")
@@ -944,10 +1042,10 @@ def get_escalation(escalation_id: str) -> Escalation | None:
     return _row_to_escalation(row) if row else None
 
 
-def list_open_escalations() -> list[Escalation]:
+def list_open_escalations(ex=None) -> list[Escalation]:
     """The ops queue: every escalation still waiting on a human, oldest
     first -- the order a human should actually work through them in."""
-    rows = get_connection().execute(
+    rows = (ex or get_connection()).execute(
         f"select {_ESCALATION_COLUMNS} from escalations where status = 'queued_for_human' order by created_at",
     ).fetchall()
     return [_row_to_escalation(r) for r in rows]
@@ -1017,13 +1115,18 @@ _BORROWER_MESSAGE_KINDS = {
 _MAX_BORROWER_MESSAGES = 50  # an explicit bound on an otherwise unbounded history
 
 
-def get_borrower_messages(account_id: str) -> list[dict]:
-    """Messages sent to this borrower, newest first, bounded. Each is
-    {message, delivered_via_telegram, created_at, kind} with kind one of
-    message | decision | dispute | reminder."""
-    rows = get_connection().execute(
+def get_borrower_messages(account_id: str, ex=None) -> list[dict]:
+    """Messages sent to this borrower that don't belong to a case, newest
+    first, bounded. Each is {message, delivered_via_telegram, created_at,
+    kind} with kind one of message | decision | dispute | reminder.
+
+    A message about a case (it carries a case_ref, see accounts/cases.py)
+    is shown in that case's own thread instead -- listing it here too was
+    how the borrower ended up reading our reply in one panel and their
+    request in another."""
+    rows = (ex or get_connection()).execute(
         "select event_type, details, created_at from events where account_id = %s and event_type = any(%s) "
-        "order by created_at desc limit %s",
+        "and details->>'case_ref' is null order by created_at desc limit %s",
         (account_id, list(_BORROWER_MESSAGE_KINDS), _MAX_BORROWER_MESSAGES),
     ).fetchall()
     return [
@@ -1036,6 +1139,88 @@ def get_borrower_messages(account_id: str) -> list[dict]:
         for r in rows
         if r["details"].get("message")
     ]
+
+
+_MAX_THREAD_EVENTS = 500  # an explicit bound: a few hundred messages is far beyond any real case history here
+
+
+def add_case_message(account_id: str, case_ref: str, author: str, message: str, delivered_via_telegram: bool = False) -> None:
+    """Appends one message to a case's thread. The caller has already checked
+    the case belongs to this account (case_belongs_to_account); a message ops
+    sends over Telegram goes through outbound/send.py's notify_case_message,
+    which logs it with the same shape."""
+    if author not in cases.AUTHORS:
+        raise ValueError(f"author must be one of {cases.AUTHORS}, got {author!r}")
+    log_event(account_id, cases.CASE_MESSAGE_EVENT, {
+        "case_ref": case_ref, "author": author, "message": message, "delivered_via_telegram": delivered_via_telegram,
+    })
+
+
+def get_case_threads(account_id: str, ex=None) -> dict[str, list[dict]]:
+    """{case_ref: [message, ...]} for every case on this account, each thread
+    oldest first (see accounts/cases.py). Bounded to the newest
+    _MAX_THREAD_EVENTS messages."""
+    rows = (ex or get_connection()).execute(
+        "select event_type, details, created_at from events where account_id = %s and event_type = any(%s) "
+        "and details->>'case_ref' is not null order by created_at desc limit %s",
+        (account_id, list(cases.THREAD_EVENT_TYPES), _MAX_THREAD_EVENTS),
+    ).fetchall()
+    return cases.group_threads([dict(r) for r in rows])
+
+
+def get_threads_for_cases(case_refs: list[str], ex=None) -> dict[str, list[dict]]:
+    """get_case_threads for given cases across accounts, in one query -- the
+    ops inbox, which shows each open case's latest messages."""
+    if not case_refs:
+        return {}
+    rows = (ex or get_connection()).execute(
+        "select event_type, details, created_at from events where event_type = any(%s) "
+        "and details->>'case_ref' = any(%s) order by created_at desc limit %s",
+        (list(cases.THREAD_EVENT_TYPES), list(case_refs), _MAX_THREAD_EVENTS),
+    ).fetchall()
+    return cases.group_threads([dict(r) for r in rows])
+
+
+def borrower_names(account_ids: list[str], ex=None) -> dict[str, str]:
+    """{account_id: borrower_name} for the given accounts, in one query."""
+    if not account_ids:
+        return {}
+    rows = (ex or get_connection()).execute(
+        "select account_id, borrower_name from accounts where account_id = any(%s)", (list(account_ids),)
+    ).fetchall()
+    return {r["account_id"]: r["borrower_name"] for r in rows}
+
+
+def get_case(account_id: str, case_ref: str, ex=None) -> dict | None:
+    """The case case_ref names, when it is a case on THIS account, else None
+    -- the check every endpoint taking a case_ref from a request makes before
+    acting, so a reference to another account's case is simply not found.
+
+    {case_ref, source ("dispute" | "escalation"), kind (a dispute kind, or an
+    escalation kind from escalation_kinds.classify_escalation), open (bool),
+    reason}."""
+    parsed = cases.parse_case_ref(case_ref)
+    if parsed is None:
+        return None
+    source, key = parsed
+    conn = ex or get_connection()
+    if source == "dispute":
+        row = conn.execute(
+            "select kind, status, reason from disputes where id = %s and account_id = %s", (key, account_id)
+        ).fetchone()
+        if row is None:
+            return None
+        return {"case_ref": case_ref, "source": source, "kind": row["kind"], "open": row["status"] == "open", "reason": row["reason"]}
+    row = conn.execute(
+        "select reason, proposed_changes, resolved_at from escalations where escalation_id = %s and account_id = %s",
+        (key, account_id),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "case_ref": case_ref, "source": source, "kind": classify_escalation(row["reason"], row["proposed_changes"]),
+        "open": row["resolved_at"] is None, "reason": row["reason"],
+    }
 
 
 def mark_clarifications_resolved(account_id: str) -> None:

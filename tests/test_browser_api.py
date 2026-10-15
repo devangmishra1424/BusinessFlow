@@ -1164,3 +1164,83 @@ def test_the_chat_api_prefetches_the_hindi_voice_when_it_starts(monkeypatch):
     monkeypatch.setattr(browser_api, "prefetch_voices", lambda: calls.append("prefetch"))
     with TestClient(app):
         assert calls == ["prefetch"]
+
+
+# ---------------------------------------------------------------------------
+# One case, one conversation: "I've already paid", and notes on a request
+# ---------------------------------------------------------------------------
+
+
+@_pg_skip
+def test_ive_already_paid_opens_a_payment_claim_and_says_when_it_will_be_checked(reseed_accounts):
+    conversation_id = _start_verified_conversation("BF-1001", "482913")
+
+    response = client.post(
+        f"/conversations/{conversation_id}/quick-actions/payment-claim", json={"details": "12,500 by UPI on the 3rd"}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["kind"] == "payment_claim" and body["review_within_working_days"] >= 1
+    dashboard = client.get(f"/conversations/{conversation_id}/dashboard").json()
+    claim = next(r for r in dashboard["requests"] if r["id"] == body["case_ref"])
+    assert claim["title"] == "Payment you reported" and claim["can_reply"] is True
+    assert any("checking the payment you reported" in w["text"] for w in dashboard["warnings"])
+
+
+@_pg_skip
+def test_ive_already_paid_needs_some_details(reseed_accounts):
+    conversation_id = _start_verified_conversation("BF-1001", "482913")
+
+    response = client.post(f"/conversations/{conversation_id}/quick-actions/payment-claim", json={"details": "  "})
+
+    assert response.status_code == 400
+
+
+@_pg_skip
+def test_a_note_on_an_open_request_appears_in_its_thread(reseed_accounts):
+    conversation_id = _start_verified_conversation("BF-1001", "482913")
+    ref = client.post(
+        f"/conversations/{conversation_id}/quick-actions/payment-claim", json={"details": "Paid on the 3rd"}
+    ).json()["case_ref"]
+
+    response = client.post(f"/conversations/{conversation_id}/cases/{ref}/notes", json={"message": "UTR 412345678901"})
+
+    assert response.status_code == 200
+    dashboard = client.get(f"/conversations/{conversation_id}/dashboard").json()
+    claim = next(r for r in dashboard["requests"] if r["id"] == ref)
+    assert [(m["author"], m["message"]) for m in claim["thread"]] == [("borrower", "UTR 412345678901")]
+
+
+@_pg_skip
+def test_a_note_cannot_be_added_to_another_accounts_request(reseed_accounts):
+    from businessflow.tools.account_tools import flag_dispute
+
+    others = flag_dispute("BF-1002", "Paid on the 3rd", kind="payment_claim")["case_ref"]
+    conversation_id = _start_verified_conversation("BF-1001", "482913")
+
+    response = client.post(f"/conversations/{conversation_id}/cases/{others}/notes", json={"message": "hello"})
+
+    assert response.status_code == 404
+
+
+@_pg_skip
+def test_a_note_on_a_closed_request_is_refused(reseed_accounts):
+    conversation_id = _start_verified_conversation("BF-1001", "482913")
+    ref = client.post(
+        f"/conversations/{conversation_id}/quick-actions/dispute", json={"reason": "The fee is wrong"}
+    ).json()["case_ref"]
+    store.resolve_dispute("BF-1001", "Checked")
+
+    response = client.post(f"/conversations/{conversation_id}/cases/{ref}/notes", json={"message": "one more thing"})
+
+    assert response.status_code == 409
+
+
+@_pg_skip
+def test_notes_require_a_verified_conversation():
+    start = client.post("/conversations", json={"language": "en"})
+
+    response = client.post(f"/conversations/{start.json()['conversation_id']}/cases/D-1/notes", json={"message": "hi"})
+
+    assert response.status_code == 403

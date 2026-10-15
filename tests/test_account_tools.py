@@ -149,15 +149,47 @@ def test_log_promise_to_pay_raises_on_unknown_account(reseed_accounts):
 
 
 def test_flag_dispute_opens_a_real_dispute(reseed_accounts):
-    result = flag_dispute(account_id="BF-1001", reason="Already paid via UPI, not reflected")
+    result = flag_dispute(account_id="BF-1001", reason="The late fee was added although I paid on time")
 
-    assert result == {
+    assert {k: result[k] for k in ("account_id", "dispute_open", "reason", "already_open", "kind")} == {
         "account_id": "BF-1001",
         "dispute_open": True,
-        "reason": "Already paid via UPI, not reflected",
+        "reason": "The late fee was added although I paid on time",
         "already_open": False,
+        "kind": "dispute",
     }
+    assert result["case_ref"].startswith("D-")
+    assert "review_within_working_days" not in result  # only a payment claim promises a check by a date
     assert store.get_account_or_raise("BF-1001").dispute_open is True
+
+
+def test_a_payment_claim_is_its_own_kind_and_says_when_it_will_be_checked(reseed_accounts):
+    from businessflow.accounts.policy import PAYMENT_CLAIM_REVIEW_WORKING_DAYS
+
+    result = flag_dispute(account_id="BF-1001", reason="Paid 12,500 by UPI on the 3rd", kind="payment_claim")
+
+    assert result["kind"] == "payment_claim" and result["already_open"] is False
+    assert result["review_within_working_days"] == PAYMENT_CLAIM_REVIEW_WORKING_DAYS
+    row = store.get_connection().execute(
+        "select kind, reason from disputes where account_id = %s and status = 'open'", ("BF-1001",)
+    ).fetchone()
+    assert (row["kind"], row["reason"]) == ("payment_claim", "Paid 12,500 by UPI on the 3rd")
+
+
+def test_more_details_on_an_open_claim_are_added_to_it_not_dropped(reseed_accounts):
+    first = flag_dispute(account_id="BF-1001", reason="Paid by UPI on the 3rd", kind="payment_claim")
+    second = flag_dispute(account_id="BF-1001", reason="UTR 412345678901", kind="payment_claim")
+
+    assert second["already_open"] is True and second["case_ref"] == first["case_ref"]
+    thread = store.get_case_threads("BF-1001")[first["case_ref"]]
+    assert [(m["author"], m["message"]) for m in thread] == [("borrower", "UTR 412345678901")]
+    rows = store.get_connection().execute("select id from disputes where account_id = %s", ("BF-1001",)).fetchall()
+    assert len(rows) == 1
+
+
+def test_flag_dispute_refuses_an_unknown_kind(reseed_accounts):
+    with pytest.raises(ValueError, match="kind must be one of"):
+        flag_dispute(account_id="BF-1001", reason="anything", kind="refund")
 
 
 def test_flag_dispute_raises_on_unknown_account(reseed_accounts):
@@ -177,6 +209,8 @@ def test_flag_dispute_is_idempotent_against_a_repeat_call(reseed_accounts):
         "select id from disputes where account_id = %s", ("BF-1001",)
     ).fetchall()
     assert len(rows) == 1
+    # A retry with the same words is not added to the case as a second message either.
+    assert store.get_case_threads("BF-1001").get(result["case_ref"], []) == []
 
 
 def test_get_payment_history_returns_real_seeded_records_most_recent_first(reseed_accounts):

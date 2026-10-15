@@ -39,9 +39,12 @@ class FakeStore:
     def current_date(self):
         return TODAY
 
-    def open_dispute(self, account_id, reason):
+    def open_dispute(self, account_id, reason, kind="dispute"):
         self.disputes.append(reason)
-        return True
+        return {"opened": True, "dispute_id": len(self.disputes), "kind": kind, "reason": reason}
+
+    def add_case_message(self, account_id, case_ref, author, message):
+        raise AssertionError("a newly opened case gets no extra message")
 
     def create_escalation(self, account_id, reason, **kwargs):
         self.escalations.append(reason)
@@ -117,6 +120,13 @@ def test_a_reason_is_capped_cleaned_and_never_empty(store, tool):
     for bad in ("", "   \n ", "\x00\x01", None, 5):
         with pytest.raises(ValueError):
             tool("BF-1", bad)
+
+
+@pytest.mark.parametrize("kind", ["refund", "", None, "DISPUTE", "payment claim"])
+def test_a_dispute_kind_is_one_of_the_two_known_kinds(store, kind):
+    with pytest.raises(ValueError):
+        account_tools.flag_dispute("BF-1", "I already paid", kind=kind)
+    assert store.disputes == []
 
 
 @pytest.mark.parametrize("expression", ["1e308 * 1e308", "(" * 5000 + "1" + ")" * 5000, "9" * 300, "__import__('os')", "2 ** 9 ** 9", None])
