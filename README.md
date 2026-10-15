@@ -390,31 +390,45 @@ worse than one that lists them:
   Telegram is covered by tests that drive the handlers with minimal stand-ins for the message and query objects. The web page was
   exercised in a browser, with the assistant's reply stubbed so no model quota was spent. Tests: `tests/test_abilities.py` (17),
   `tests/test_telegram_abilities.py` (19), four `abilities` endpoint tests in `tests/test_browser_api.py`.
-- **Voice on the ops dashboard.** A microphone and a question box at the bottom right of the ops dashboard (also over an
-  open profile, so "her" and "this account" mean the profile on screen). Ask about the portfolio, the inbox, the escalation
-  rate or one borrower, or say what to do: record a payment, confirm a payment claim, close a case, log a promise or a call,
-  message a borrower or a group, approve or reject a request, hand an account to a person, send reminders, fix contact
-  details. One model call (`ops/voice.py`, `OPS_VOICE_MODEL`, a different model from the borrower chat's so they never
-  share a daily Groq allowance) picks one of 22 abilities from a fixed menu and fills in the details; it sees no account
-  data. The answer is written by code from the same data the cards show (`ops/voice_reply.py`) and spoken in the chat's
-  English Piper voice. An action becomes a confirmation card -- what will happen, what was heard, what the borrower will be
-  sent -- and only the operator's Confirm click sends it, through the same endpoint the dashboard's own form uses; no voice
+- **Voice on the ops dashboard.** A microphone, a question box and a menu button at the bottom right of the ops
+  dashboard (also over an open profile, so "her" and "this account" mean the profile on screen). English or Hindi.
+  - *Ask* about the portfolio, the inbox, the escalation rate or one borrower. An answer is a short spoken line plus rows
+    on screen you can tap (a borrower opens their profile, a figure opens its list, a phone number dials) and the next
+    steps that make sense from there.
+  - *Work through* a queue, one item at a time (`ops/voice_workflows.py`): **Start my day** (calls to make, the inbox by
+    kind, payment claims, cases waiting over 3 days, broken promises); the **call list** (overdue borrowers, most overdue
+    first; an account with an open dispute or payment claim is left out, as its reminders are); **work the inbox** (or
+    only payment claims). Each step reads its item fresh and offers the actions that fit it -- for a call, the outcomes
+    ("no answer", "reached, she'll pay 8,000 by Friday" logs the call and the promise from one card); for a payment claim,
+    confirm it, ask for the UTR reference (the case card's own wording), or close it; for a request for more time, approve
+    or reject. Confirming an action on the item moves the run on; "next", "skip", "back", "stop" work by voice or button.
+    A case a colleague closed meanwhile is passed over, never acted on twice. The run lives in the browser tab.
+  - *Do* one thing: record a payment, confirm a payment claim, close a case, log a promise or a call, message a borrower
+    or a group, approve or reject a request, hand an account to a person, send reminders, fix contact details.
+
+  One model call (`ops/voice.py`, `OPS_VOICE_MODEL`, a different model from the borrower chat's so they never share a
+  daily Groq allowance) picks one of 26 abilities from a fixed menu and fills in the details; it sees no account data.
+  Answers are written by code from the same data the cards show (`ops/voice_reply.py`) and spoken in the chat's English
+  Piper voice. An action becomes a confirmation card -- what will happen, what was heard, what the borrower will be sent
+  -- and only the operator's Confirm click sends it, through the same endpoints the dashboard's own forms use; no voice
   endpoint writes anything. An amount, a phone number, or a figure in a message the model drafted must be found in what
-  the operator actually said (`ops/spoken_numbers.py`: "12,500", "twelve and a half thousand", "1.2 lakh", ...) or the
-  card is not shown; "the full amount" comes from the database. Two close names are asked about, never guessed. Speech
-  runs on the VM: the ops service sends the recording to the chat service over loopback (`ops/speech_client.py`), which
-  already holds Whisper and Piper, instead of loading a second copy (+125 MB for Whisper, measured; +138 MB for Piper);
-  that internal endpoint needs the ops key and refuses anything that came through the public proxy. English only; one
-  request at a time (no follow-ups beyond what is on screen); no spoken "yes" -- Confirm is a click. Picking the ability,
-  measured on 38 typical requests with the real model (`python -m eval.ops_voice_benchmark`): right ability and details
-  37 of 38 (95% interval 87-100%), no figure invented in either request that had none, median 1.3 s per request, about
-  2,450 tokens each (so roughly 80 requests a day on a free-tier allowance of 200k tokens). The same sentence can get a
-  different reading on a second try (seen once: "can't help" then "record a payment", which then asked "which
-  account?"). **Not verified:** a real microphone in a real browser (the page was exercised with typed requests and the
-  repository's recorded test clip, through real Whisper and Piper), the timings on the VM's 2 vCPUs (on the development
-  machine: about 1 s to transcribe a 5 s question, 3 s the first time, which loads Whisper), and the chat service's port on
-  the VM (`CHAT_INTERNAL_URL`; if it is wrong, voice says it is unavailable and nothing else is affected). Tests:
-  `tests/test_ops_voice.py`, `tests/test_ops_voice_api.py`, `tests/test_spoken_numbers.py`.
+  the operator actually said (`ops/spoken_numbers.py`: "12,500", "twelve and a half thousand", "1.2 lakh", "साढ़े बारह
+  हज़ार", "१२५००", ...) or the card is not shown; "the full amount" comes from the database. Hindi number words outside
+  one to twenty and the round tens and fives (तेईस, say) are not read, so such a figure is asked for again. Two close
+  names are asked about, never guessed. Where the model's reading was found wrong, code corrects it rather than the
+  prompt: confirming a claim nobody filed becomes recording a payment; "close it" on a request closes the request.
+  Speech runs on the VM: the ops service sends the recording to the chat service over loopback (`ops/speech_client.py`),
+  which already holds Whisper and Piper, instead of loading a second copy (+125 MB for Whisper, measured; +138 MB for
+  Piper); that internal endpoint needs the ops key and refuses anything that came through the public proxy (checked live:
+  403). Replies are in English; no spoken "yes" -- Confirm is a click. Picking the ability, with the real model
+  (`python -m eval.ops_voice_benchmark`): 37 of 38 single requests (95% interval 87-100%; measured before the workflow
+  abilities were added to the menu, not yet re-run) and 16 of 16 workflow, in-run and Hindi requests (81-100%), no
+  figure invented, median 1.3-1.4 s, about 2,800 tokens a request with the 26-ability menu (measured: 2,796 in, 28 out;
+  roughly 70 a day on a free-tier allowance of 200k). The same sentence can get a different reading on a second try. **Verified live (2026-10-15):** the
+  microphone and the spoken reply on the deployed dashboard, a Hindi question understood. **Not verified:** the
+  workflows on the live dashboard (exercised in a preview with made-up accounts, the real model, real Whisper and Piper,
+  and Confirm requests recorded instead of sent); exact timings on the VM. Tests: `tests/test_ops_voice.py`,
+  `tests/test_ops_voice_workflows.py`, `tests/test_ops_voice_api.py`, `tests/test_spoken_numbers.py`.
 - A production-grade frontend design pass beyond the current functional
   dashboards, and horizontal scaling, are out of scope for a project at
   this size. (End-to-end latency IS measured, see `eval.latency_benchmark`

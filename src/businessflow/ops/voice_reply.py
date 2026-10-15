@@ -12,6 +12,7 @@ validates it, guards against duplicates and tells the borrower.
 import difflib
 import re
 from datetime import date, datetime, timezone
+from types import SimpleNamespace
 from typing import Literal, Protocol
 
 from pydantic import BaseModel
@@ -81,15 +82,26 @@ class DetailOut(BaseModel):
     value: str
 
 
+class RequestOut(BaseModel):
+    """One more request a card sends after its main one, in order (a call log, then the promise made on that call)."""
+
+    label: str
+    method: Literal["POST", "PATCH"]
+    path: str
+    body: dict | None = None
+
+
 class ProposalOut(BaseModel):
     action: str
     title: str
     details: list[DetailOut]
     borrower_told: str | None = None  # what the borrower is sent, word for word (with a note, before it)
     warnings: list[str] = []
+    account_id: str | None = None  # whose account it changes: in a call list or inbox run, confirming it moves on
     method: Literal["POST", "PATCH"]
     path: str
     body: dict | None = None
+    then: list[RequestOut] = []
     editable: str | None = None  # a body field (a message or note) the operator may reword before confirming
     editable_label: str | None = None
     editable_required: bool = False  # Confirm stays off while the editable field is blank
@@ -104,13 +116,61 @@ class ChoiceOut(BaseModel):
     arguments: dict
 
 
+class RowOut(BaseModel):
+    """One line of an answer on screen -- a borrower, a case, a figure. Tapping it runs `tool` with `arguments`
+    (without the model), opens `account_id` on `tab`, or follows `href` (a tel: link, so a phone can dial)."""
+
+    label: str
+    detail: str | None = None  # a second, quieter line
+    value: str | None = None  # the figure, on the right
+    tone: Literal["danger", "warn", "ok"] | None = None
+    account_id: str | None = None
+    tab: Literal["overview", "cases", "payments", "documents"] | None = None
+    tool: str | None = None
+    arguments: dict | None = None
+    href: str | None = None
+
+
+class SuggestionOut(BaseModel):
+    """A next step offered with an answer. With `tool`: tapping runs it at once, without the model (a question, a
+    workflow, or an action that then shows its card). With `prompt`: tapping puts the words in the box to finish --
+    for anything that needs a figure or a message only the operator can give."""
+
+    label: str
+    tool: str | None = None
+    arguments: dict | None = None
+    prompt: str | None = None
+    group: str | None = None  # the help menu's sections
+
+
+class WorkflowItemOut(BaseModel):
+    key: str  # an account ID (call list) or a case reference (inbox)
+    label: str
+    arguments: dict  # the arguments of this item's step
+
+
+class WorkflowOut(BaseModel):
+    """A guided run through a queue, one item at a time (voice_workflows.py). The page keeps it, asks for each step
+    with step_tool, and moves on when an action on the current item is confirmed or the operator says next/skip."""
+
+    kind: Literal["call_list", "inbox"]
+    title: str
+    step_tool: Literal["call_step", "case_step"]
+    items: list[WorkflowItemOut]
+
+
 class VoiceReplyOut(BaseModel):
     heard: str | None = None
     kind: Literal["answer", "proposal", "clarify"]
-    say: str
+    say: str  # spoken, and shown as the answer's first line: kept short; the detail is in rows
+    title: str | None = None
+    rows: list[RowOut] = []
+    suggestions: list[SuggestionOut] = []
     screen: ScreenOut | None = None
     proposal: ProposalOut | None = None
     choices: list[ChoiceOut] = []
+    workflow: WorkflowOut | None = None  # set when a workflow starts
+    workflow_command: Literal["next", "skip", "previous", "stop", "repeat"] | None = None
 
 
 # --- wording --------------------------------------------------------------------------------------------------------
@@ -269,15 +329,57 @@ def _portfolio_overview(data: DashboardData) -> VoiceReplyOut:
     )
     parts.append(f"{_n(len(inbox), 'open case')} waiting on a person." if inbox else "The inbox is clear.")
     parts.append(f"Risk mix: {_risk_mix(accounts)}.")
-    return _answer(" ".join(parts), screen)
+    reply = _answer(" ".join(parts), screen)
+    reply.title = "Portfolio"
+    reply.rows = [
+        _group_row("Overdue", accounts, "overdue", f"{inr(_overdue_rupees(accounts), whole=True)} in EMIs at risk", "danger"),
+        RowOut(label="Open cases", value=str(len(inbox)), detail="waiting on a person", tone="warn" if inbox else "ok",
+               tool="show_inbox", arguments={}),
+        _group_row("Disputed", accounts, "disputed", "reminders paused while open", "warn"),
+        _group_row("Broken promises", accounts, "broken_promises", "at or over the escalation threshold", "warn"),
+        _group_row("Not on Telegram", accounts, "not_on_telegram", "reached on their dashboard only", None),
+        RowOut(label="Risk mix", value=_risk_mix(accounts).replace(" risk", ""), tool="show_accounts",
+               arguments={"sort": "highest_risk"}),
+    ]
+    reply.suggestions = [_START_MY_DAY, _CALL_LIST, _WORK_INBOX]
+    return reply
+
+
+def _in_group(account: dict, group: str) -> bool:
+    if group == "all":
+        return True
+    if group == "not_on_telegram":
+        return not account["telegram_linked"]
+    return group in _flags(account)
+
+
+def _group_row(label: str, accounts: list[dict], group: str, detail: str, tone: str | None) -> RowOut:
+    count = sum(_in_group(a, group) for a in accounts)
+    return RowOut(label=label, value=str(count), detail=detail, tone=tone if count else "ok",
+                  tool="show_accounts", arguments={"group": group})
+
+
+def _account_row(a: dict, sort: str) -> RowOut:
+    overdue = "overdue" in _flags(a)
+    if sort == "highest_risk":
+        value = f"{a['risk_tier']} risk"
+    elif overdue:
+        value = f"{_n(a['days_past_due'], 'day')} · {inr(a['amount_due_now'], whole=True)} due"
+    else:
+        value = "up to date"
+    others = [f.replace("_", " ") for f in _flags(a) if f != "overdue"]
+    detail = " · ".join([a["account_id"], a["business_name"], *others])
+    return RowOut(label=a["borrower_name"], detail=detail, value=value, account_id=a["account_id"], tab="overview",
+                  tone="danger" if overdue else ("warn" if others else None))
+
+
+_MAX_ROWS = 10
 
 
 def _show_accounts(args, data: DashboardData) -> VoiceReplyOut:
     accounts = data.accounts()
     group = args.group
-    chosen = [a for a in accounts if group == "all" or (
-        not a["telegram_linked"] if group == "not_on_telegram" else group in _flags(a)
-    )]
+    chosen = [a for a in accounts if _in_group(a, group)]
     if args.search:
         q = args.search.lower()
         chosen = [a for a in chosen if q in a["borrower_name"].lower() or q in a["business_name"].lower() or q in a["account_id"].lower()]
@@ -298,7 +400,25 @@ def _show_accounts(args, data: DashboardData) -> VoiceReplyOut:
         parts.append(f"Risk mix: {_risk_mix(chosen)}. Highest: {_list([a['borrower_name'] + ' (' + a['risk_tier'] + ')' for a in top])}.")
     else:
         parts.append(f"{'First' if len(chosen) > 3 else 'They are'}: {_list([a['borrower_name'] for a in top])}.")
-    return _answer(" ".join(parts), screen)
+    reply = _answer(" ".join(parts), screen)
+    reply.title = label[0].upper() + label[1:] + matching
+    reply.rows = [_account_row(a, args.sort) for a in chosen[:_MAX_ROWS]]
+    if len(chosen) > _MAX_ROWS:
+        reply.rows.append(RowOut(label=f"and {len(chosen) - _MAX_ROWS} more", detail="all of them are in the list on screen"))
+    if group in ("overdue", "broken_promises"):
+        reply.suggestions.append(SuggestionOut(label="Start the call list", tool="start_call_list", arguments={"group": group}))
+        reply.suggestions.append(SuggestionOut(label=f"Send reminders to all {len(chosen)}", tool="send_reminders",
+                                               arguments={"group": group}))
+    if group != "all":
+        reply.suggestions.append(SuggestionOut(label="Message all of them…", prompt=f"message all {label}: "))
+    return reply
+
+
+def _case_row(c: dict, now: datetime) -> RowOut:
+    stale = (now - c["opened_at"]).total_seconds() > _SOON_ENOUGH_DAYS * 86400
+    return RowOut(label=c.get("borrower_name") or c["account_id"], detail=f"{c['title']} · {c['case_ref']}",
+                  value=f"open {_age(c['opened_at'], now)}", tone="danger" if stale else "warn",
+                  account_id=c["account_id"], tab="cases")
 
 
 def _show_inbox(args, data: DashboardData, now: datetime) -> VoiceReplyOut:
@@ -309,22 +429,32 @@ def _show_inbox(args, data: DashboardData, now: datetime) -> VoiceReplyOut:
         if not inbox:
             return _answer(f"No open {plural}.", screen)
         named = [f"{c.get('borrower_name') or c['account_id']}, open {_age(c['opened_at'], now)}" for c in inbox[:3]]
-        return _answer(f"{_n(len(inbox), 'open ' + singular, 'open ' + plural)}: {'; '.join(named)}.", screen)
-    if not inbox:
-        return _answer("The inbox is clear: nothing is waiting on a person.", screen)
-    by_kind: dict[str, int] = {}
-    for c in inbox:
-        by_kind[c["kind"]] = by_kind.get(c["kind"], 0) + 1
-    counted = [_n(n, *CASE_KIND_LABELS.get(kind, (kind, kind + "s"))) for kind, n in by_kind.items()]
-    oldest = min(inbox, key=lambda c: c["opened_at"])
-    stale = sum((now - c["opened_at"]).total_seconds() > _SOON_ENOUGH_DAYS * 86400 for c in inbox)
-    parts = [f"{_n(len(inbox), 'open case')}: {_list(counted)}."]
-    parts.append(f"Most urgent: {inbox[0].get('borrower_name') or inbox[0]['account_id']}, {inbox[0]['title'].lower()}.")
-    if oldest is not inbox[0]:
-        parts.append(f"Oldest: {oldest.get('borrower_name') or oldest['account_id']}, open {_age(oldest['opened_at'], now)}.")
-    if stale:
-        parts.append(f"{_n(stale, 'case has', 'cases have')} waited more than 3 days.")
-    return _answer(" ".join(parts), screen)
+        reply = _answer(f"{_n(len(inbox), 'open ' + singular, 'open ' + plural)}: {'; '.join(named)}.", screen)
+        reply.title = f"Open {plural}"
+    else:
+        if not inbox:
+            return _answer("The inbox is clear: nothing is waiting on a person.", screen)
+        by_kind: dict[str, int] = {}
+        for c in inbox:
+            by_kind[c["kind"]] = by_kind.get(c["kind"], 0) + 1
+        counted = [_n(n, *CASE_KIND_LABELS.get(kind, (kind, kind + "s"))) for kind, n in by_kind.items()]
+        oldest = min(inbox, key=lambda c: c["opened_at"])
+        stale = sum((now - c["opened_at"]).total_seconds() > _SOON_ENOUGH_DAYS * 86400 for c in inbox)
+        parts = [f"{_n(len(inbox), 'open case')}: {_list(counted)}."]
+        parts.append(f"Most urgent: {inbox[0].get('borrower_name') or inbox[0]['account_id']}, {inbox[0]['title'].lower()}.")
+        if oldest is not inbox[0]:
+            parts.append(f"Oldest: {oldest.get('borrower_name') or oldest['account_id']}, open {_age(oldest['opened_at'], now)}.")
+        if stale:
+            parts.append(f"{_n(stale, 'case has', 'cases have')} waited more than 3 days.")
+        reply = _answer(" ".join(parts), screen)
+        reply.title = "Inbox, most urgent first"
+    reply.rows = [_case_row(c, now) for c in inbox[:_MAX_ROWS]]
+    if len(inbox) > _MAX_ROWS:
+        reply.rows.append(RowOut(label=f"and {len(inbox) - _MAX_ROWS} more", detail="all of them are in the inbox on screen"))
+    reply.suggestions.append(SuggestionOut(label="Work through them", tool="start_inbox", arguments={"kind": args.kind}))
+    if args.kind == "any" and any(c["kind"] == cases.PAYMENT_CLAIM for c in inbox):
+        reply.suggestions.append(SuggestionOut(label="Only payment claims", tool="start_inbox", arguments={"kind": cases.PAYMENT_CLAIM}))
+    return reply
 
 
 def _escalation_rate(args, data: DashboardData) -> VoiceReplyOut:
@@ -333,12 +463,71 @@ def _escalation_rate(args, data: DashboardData) -> VoiceReplyOut:
     calls = metrics["event_counts"].get("tool_called", 0)
     screen = ScreenOut(view="overview", since_hours=hours)
     if not calls:
-        return _answer(f"No AI assistant activity in the last {_WINDOW_WORDS[args.window]}.", screen)
-    rate = round(metrics["escalation_rate"] * 100)
-    return _answer(
-        f"In the last {_WINDOW_WORDS[args.window]}, {rate}% of the AI assistant's {_n(calls, 'tool call')} "
-        "were handed to a person.", screen,
-    )
+        reply = _answer(f"No AI assistant activity in the last {_WINDOW_WORDS[args.window]}.", screen)
+    else:
+        rate = round(metrics["escalation_rate"] * 100)
+        reply = _answer(
+            f"In the last {_WINDOW_WORDS[args.window]}, {rate}% of the AI assistant's {_n(calls, 'tool call')} "
+            "were handed to a person.", screen,
+        )
+    reply.suggestions = [
+        SuggestionOut(label=f"Last {_WINDOW_WORDS[w]}", tool="escalation_rate", arguments={"window": w})
+        for w in _WINDOW_HOURS if w != args.window
+    ]
+    return reply
+
+
+def _when(value) -> date:
+    return value.date() if isinstance(value, datetime) else date.fromisoformat(str(value)[:10])
+
+
+def _phone_row(a: dict) -> RowOut:
+    return RowOut(label="Phone", value=a["phone_number"], href=f"tel:{a['phone_number']}",
+                  detail=f"prefers {_LANGUAGES.get(a['language_preference'], a['language_preference'])}"
+                  + ("" if a["telegram_linked"] else " · not on Telegram"))
+
+
+def _open_promises(a: dict, today: date) -> list[dict]:
+    return [p for p in a.get("promises", []) if p["kept"] is None and _when(p["promised_date"]) >= today]
+
+
+def _status_rows(a: dict, today: date) -> list[RowOut]:
+    """An account at a glance: what a collector needs before picking up the phone or answering a case."""
+    rows = [
+        RowOut(label="Due now", value=inr(a["amount_due_now"]) if a["amount_due_now"] > 0 else "nothing",
+               detail=f"EMI {inr(a['emi_amount'])}", tone="danger" if a["days_past_due"] > 0 else "ok"),
+        RowOut(label="Days past due" if a["days_past_due"] > 0 else "Next EMI",
+               value=str(a["days_past_due"]) if a["days_past_due"] > 0 else _day(_when(a["emi_due_date"]), today),
+               tone="danger" if "overdue" in _flags(a) else None),
+        _phone_row(a),
+    ]
+    calls = a.get("call_log", [])
+    rows.append(RowOut(
+        label="Last call", value=_CALL_OUTCOMES.get(calls[0]["outcome"], calls[0]["outcome"]) if calls else "none logged",
+        detail=_day(_when(calls[0]["created_at"]), today) if calls else None, account_id=a["account_id"], tab="cases",
+    ))
+    promises = a.get("promises", [])
+    if promises:
+        pending = _open_promises(a, today)
+        broken = sum(p["kept"] is False for p in promises)
+        value = f"{inr(pending[0]['promised_amount'])} by {_day(_when(pending[0]['promised_date']), today)}" if pending else "none open"
+        rows.append(RowOut(label="Promises", value=value, detail=f"{broken} broken" if broken else None,
+                           tone="warn" if broken else None, account_id=a["account_id"], tab="cases"))
+    open_cases = [c for c in a.get("cases", []) if c["open"]]
+    if open_cases:
+        rows.append(RowOut(label="Open cases", value=str(len(open_cases)), detail=_list([c["title"] for c in open_cases]),
+                           tone="warn", account_id=a["account_id"], tab="cases"))
+    return rows
+
+
+def _account_suggestions(a: dict) -> list[SuggestionOut]:
+    name = a["borrower_name"]
+    return [
+        SuggestionOut(label="Record a payment…", prompt=f"record a payment from {name} of ₹"),
+        SuggestionOut(label="Log a call…", prompt=f"called {name}, "),
+        SuggestionOut(label="Message them…", prompt=f"send {name} a message: "),
+        SuggestionOut(label="Payment history", tool="account_details", arguments={"account": a["account_id"], "topic": "payments"}),
+    ]
 
 
 def _account_details(args, account: dict, data: DashboardData, today: date) -> VoiceReplyOut:
@@ -347,93 +536,133 @@ def _account_details(args, account: dict, data: DashboardData, today: date) -> V
     head = f"{a['borrower_name']}, {a['account_id']}:"
     open_cases = [c for c in a.get("cases", []) if c["open"]]
     topic = args.topic
+    rows: list[RowOut] = []
     if topic == "summary":
         status = (f"{_n(a['days_past_due'], 'day')} past due" if a["days_past_due"] > 0
-                  else f"up to date, next EMI {_day(date.fromisoformat(str(a['emi_due_date'])), today)}")
+                  else f"up to date, next EMI {_day(_when(a['emi_due_date']), today)}")
         parts = [status, f"{inr(a['amount_due_now'])} due now" if a["amount_due_now"] > 0 else "nothing due now"]
         if open_cases:
             parts.append(_n(len(open_cases), "open case"))
         worries = [f["label"].replace("_", " ") for f in a["flags"] if f["label"] != "overdue"]
         if worries:
             parts.append("flagged " + _list(worries))
-        return _answer(f"{head} {_list(parts)}.", screen)
-    if topic == "dues":
+        say, rows = f"{head} {_list(parts)}.", _status_rows(a, today)
+    elif topic == "dues":
         this_cycle = round(a["emi_amount"] - a["pending_emi_credit"], 2)
         fee = round(a["amount_due_now"] - this_cycle, 2) if a["amount_due_now"] > this_cycle else 0
         due = f"{inr(a['amount_due_now'])} due now" + (f", including a {inr(fee)} late fee" if fee > 0 else "")
         if a["amount_due_now"] <= 0:
             due = "nothing due now"
-        when = date.fromisoformat(str(a["emi_due_date"]))
         late = f", {_n(a['days_past_due'], 'day')} past due" if a["days_past_due"] > 0 else ""
-        return _answer(f"{head} {due}. EMI {inr(a['emi_amount'])}, due {_day(when, today)}{late}.", screen)
-    if topic == "payments":
+        say = f"{head} {due}. EMI {inr(a['emi_amount'])}, due {_day(_when(a['emi_due_date']), today)}{late}."
+        rows = [RowOut(label="EMI this cycle", value=inr(this_cycle), detail="after credit" if a["pending_emi_credit"] else None)]
+        if fee > 0:
+            rows.append(RowOut(label="Late fee", value=inr(fee), tone="danger"))
+        rows.append(RowOut(label="Due now", value=inr(a["amount_due_now"]), tone="danger" if a["amount_due_now"] > 0 else "ok"))
+    elif topic == "payments":
         history = a.get("payment_history", [])
         if not history:
-            return _answer(f"{head} no payments on record yet.", screen)
-        last = history[-1]
-        on_time = sum(p["on_time"] for p in history)
-        return _answer(
-            f"{head} {_n(len(history), 'payment')} on record, {on_time} on time. Last: {inr(last['amount'])}, "
-            f"{_day(date.fromisoformat(str(last['date'])), today)}.", screen,
-        )
-    if topic == "promises":
+            say = f"{head} no payments on record yet."
+        else:
+            last = history[-1]
+            on_time = sum(p["on_time"] for p in history)
+            say = (f"{head} {_n(len(history), 'payment')} on record, {on_time} on time. Last: {inr(last['amount'])}, "
+                   f"{_day(_when(last['date']), today)}.")
+            rows = [RowOut(label=_day(_when(p["date"]), today), value=inr(p["amount"]), detail="on time" if p["on_time"] else "late",
+                           tone="ok" if p["on_time"] else "warn") for p in reversed(history[-_MAX_ROWS:])]
+    elif topic == "promises":
         promises = a.get("promises", [])
         if not promises:
-            return _answer(f"{head} no promises to pay on record.", screen)
-        kept = sum(p["kept"] is True for p in promises)
-        broken = sum(p["kept"] is False for p in promises)
-        pending = len(promises) - kept - broken
-        latest = max(promises, key=lambda p: str(p["made_on"]))
-        return _answer(
-            f"{head} {_n(len(promises), 'promise')}: {kept} kept, {broken} broken, {pending} still open. Latest: "
-            f"{inr(latest['promised_amount'])} by {_day(date.fromisoformat(str(latest['promised_date'])), today)}.", screen,
-        )
-    if topic == "cases":
-        if not open_cases:
-            return _answer(f"{head} no open cases.", screen)
-        return _answer(f"{head} {_n(len(open_cases), 'open case')}: {_list([c['title'] for c in open_cases])}.", screen)
-    if topic == "calls":
+            say = f"{head} no promises to pay on record."
+        else:
+            kept = sum(p["kept"] is True for p in promises)
+            broken = sum(p["kept"] is False for p in promises)
+            pending = len(promises) - kept - broken
+            latest = max(promises, key=lambda p: str(p["made_on"]))
+            say = (f"{head} {_n(len(promises), 'promise')}: {kept} kept, {broken} broken, {pending} still open. Latest: "
+                   f"{inr(latest['promised_amount'])} by {_day(_when(latest['promised_date']), today)}.")
+            rows = [RowOut(label=f"{inr(p['promised_amount'])} by {_day(_when(p['promised_date']), today)}",
+                           value={True: "kept", False: "broken", None: "open"}[p["kept"]],
+                           tone={True: "ok", False: "danger", None: "warn"}[p["kept"]])
+                    for p in sorted(promises, key=lambda p: str(p["promised_date"]), reverse=True)[:_MAX_ROWS]]
+    elif topic == "cases":
+        say = f"{head} no open cases." if not open_cases else f"{head} {_n(len(open_cases), 'open case')}: {_list([c['title'] for c in open_cases])}."
+        rows = [RowOut(label=c["title"], detail=f"{c['case_ref']} · “{c['borrower_words'][:90]}”", tone="warn",
+                       account_id=a["account_id"], tab="cases") for c in open_cases]
+    elif topic == "calls":
         calls = a.get("call_log", [])
         if not calls:
-            return _answer(f"{head} no calls logged.", screen)
-        last = calls[0]  # newest first (store.get_call_log)
-        when = _day(last["created_at"].date() if isinstance(last["created_at"], datetime) else date.fromisoformat(str(last["created_at"])[:10]), today)
-        return _answer(f"{head} {_n(len(calls), 'call')} logged. Last, {when}: {_CALL_OUTCOMES.get(last['outcome'], last['outcome'])}.", screen)
-    if topic == "contact":
+            say = f"{head} no calls logged."
+        else:
+            last = calls[0]  # newest first (store.get_call_log)
+            say = f"{head} {_n(len(calls), 'call')} logged. Last, {_day(_when(last['created_at']), today)}: {_CALL_OUTCOMES.get(last['outcome'], last['outcome'])}."
+            rows = [RowOut(label=_day(_when(c["created_at"]), today), value=_CALL_OUTCOMES.get(c["outcome"], c["outcome"]),
+                           detail=c.get("note") or None) for c in calls[:_MAX_ROWS]]
+    elif topic == "contact":
         telegram = "linked to Telegram" if a["telegram_linked"] else "not linked to Telegram"
-        return _answer(f"{head} phone {a['phone_number']}, prefers {_LANGUAGES.get(a['language_preference'], a['language_preference'])}, {telegram}.", screen)
-    if topic == "loan":
+        say = f"{head} phone {a['phone_number']}, prefers {_LANGUAGES.get(a['language_preference'], a['language_preference'])}, {telegram}."
+        rows = [_phone_row(a)]
+    elif topic == "loan":
         nach = "NACH mandate active" if a["nach_mandate_active"] else "no active NACH mandate"
-        return _answer(
-            f"{head} {a['loan_type']}, {inr(a['principal_amount'])} principal, EMI {inr(a['emi_amount'])}, "
-            f"{a['months_remaining']} of {a['tenure_months']} months left, {nach}.", screen,
-        )
-    if topic == "documents":
+        say = (f"{head} {a['loan_type']}, {inr(a['principal_amount'])} principal, EMI {inr(a['emi_amount'])}, "
+               f"{a['months_remaining']} of {a['tenure_months']} months left, {nach}.")
+        rows = [RowOut(label="Principal", value=inr(a["principal_amount"])), RowOut(label="EMI", value=inr(a["emi_amount"])),
+                RowOut(label="Months left", value=f"{a['months_remaining']} of {a['tenure_months']}"),
+                RowOut(label="NACH mandate", value="active" if a["nach_mandate_active"] else "inactive",
+                       tone=None if a["nach_mandate_active"] else "warn")]
+    elif topic == "documents":
         documents = data.documents(a["account_id"])
-        if not documents:
-            return _answer(f"{head} no documents uploaded.", screen)
-        return _answer(f"{head} {_n(len(documents), 'document')}: {_list([d['filename'] for d in documents[:3]])}.", screen)
-    entries = data.conversation(a["account_id"])  # "conversation"
-    said = [e for e in entries if e["event_type"] in ("user_message", "assistant_message")]
-    if not said:
-        return _answer(f"{head} no conversation with the AI assistant yet.", screen)
-    last = said[-1]["created_at"]
-    last_day = last.date() if isinstance(last, datetime) else date.fromisoformat(str(last)[:10])
-    return _answer(f"{head} {_n(len(said), 'message')} with the AI assistant, the last {_day(last_day, today)}.", screen)
+        say = f"{head} no documents uploaded." if not documents else f"{head} {_n(len(documents), 'document')}: {_list([d['filename'] for d in documents[:3]])}."
+        rows = [RowOut(label=d["filename"], detail=_day(_when(d["uploaded_at"]), today), account_id=a["account_id"], tab="documents")
+                for d in documents[:_MAX_ROWS]]
+    else:  # "conversation"
+        said = [e for e in data.conversation(a["account_id"]) if e["event_type"] in ("user_message", "assistant_message")]
+        if not said:
+            say = f"{head} no conversation with the AI assistant yet."
+        else:
+            say = f"{head} {_n(len(said), 'message')} with the AI assistant, the last {_day(_when(said[-1]['created_at']), today)}."
+    reply = _answer(say, screen)
+    reply.title = f"{a['borrower_name']} · {a['account_id']}"
+    reply.rows = rows
+    reply.suggestions = _account_suggestions(a)
+    return reply
 
 
-_HELP = (
-    "Ask me about the portfolio, the inbox, the escalation rate or any borrower: what they owe, payments, promises, "
-    "cases, calls or documents. I can also record a payment, confirm a payment claim, close a case, log a promise or "
-    "a call, message a borrower or a group, approve or reject a request, hand an account to a person, send reminders "
-    "or fix contact details -- and I always ask you to confirm before changing anything."
-)
+# The help menu, in sections. Questions and workflows run at once; an action that needs a figure or words only the
+# operator can give fills the box instead, to be finished and sent.
+_START_MY_DAY = SuggestionOut(label="Start my day", tool="daily_briefing", arguments={}, group="Start here")
+_CALL_LIST = SuggestionOut(label="Call list", tool="start_call_list", arguments={}, group="Work through")
+_WORK_INBOX = SuggestionOut(label="Work the inbox", tool="start_inbox", arguments={}, group="Work through")
+_MENU = [
+    _START_MY_DAY,
+    _CALL_LIST,
+    _WORK_INBOX,
+    SuggestionOut(label="Review payment claims", tool="start_inbox", arguments={"kind": cases.PAYMENT_CLAIM}, group="Work through"),
+    SuggestionOut(label="Portfolio overview", tool="portfolio_overview", arguments={}, group="Ask"),
+    SuggestionOut(label="Who's overdue?", tool="show_accounts", arguments={"group": "overdue"}, group="Ask"),
+    SuggestionOut(label="What's in the inbox?", tool="show_inbox", arguments={}, group="Ask"),
+    SuggestionOut(label="Escalation rate this week", tool="escalation_rate", arguments={"window": "7d"}, group="Ask"),
+    SuggestionOut(label="Who isn't on Telegram?", tool="show_accounts", arguments={"group": "not_on_telegram"}, group="Ask"),
+    SuggestionOut(label="Record a payment…", prompt="record a payment from  of ₹", group="Do (you confirm each)"),
+    SuggestionOut(label="Log a promise…", prompt="log a promise from  to pay ₹ by ", group="Do (you confirm each)"),
+    SuggestionOut(label="Message a borrower…", prompt="send  a message: ", group="Do (you confirm each)"),
+    SuggestionOut(label="Send reminders to overdue", tool="send_reminders", arguments={"group": "overdue"}, group="Do (you confirm each)"),
+]
+
+
+def _help() -> VoiceReplyOut:
+    reply = _answer("Here's what I can do. Tap one, or just ask, in English or Hindi. I always ask before changing anything.")
+    reply.title = "What I can do"
+    reply.suggestions = list(_MENU)
+    return reply
 
 
 # --- actions --------------------------------------------------------------------------------------------------------
 
 def _proposal(say: str, proposal: ProposalOut, screen: ScreenOut | None) -> VoiceReplyOut:
     prompt = " First choose whether to credit it toward the next EMI, then press Confirm." if proposal.credit_choice else " Press Confirm to go ahead."
+    if proposal.account_id is None and screen is not None:
+        proposal.account_id = screen.account_id
     return VoiceReplyOut(kind="proposal", say=say + prompt, proposal=proposal, screen=screen)
 
 
@@ -577,6 +806,14 @@ def _confirm_payment_claim(args, plan, account, heard, today, data) -> VoiceRepl
 
 
 def _close_case(args, plan, account, heard, data) -> VoiceReplyOut:
+    if not _open_cases(account, source="dispute") and _open_cases(account, source="escalation"):
+        # Found in the preview: "I called her back, close it" on a call-back request (an inbox run) was read as closing
+        # a dispute she doesn't have. A request is closed by approving it, so that is the card. Closing a request sends
+        # its standard message, so a note said with it is not sent, and the card says so rather than dropping it quietly.
+        reply = _decide_request(args, plan, account, heard, data, approved=True)
+        if reply.proposal is not None and args.note:
+            reply.proposal.warnings.append(f"Your note (“{args.note}”) isn't sent with this; reply on the case to add it.")
+        return reply
     case = _pick_case(_open_cases(account, source="dispute"), args, plan, account,
                       f"{account['borrower_name']} has no open dispute or payment claim.")
     _check_drafted(args.note, heard, "note")
@@ -622,16 +859,32 @@ def _log_promise(args, account, heard, today) -> VoiceReplyOut:
     )
 
 
-def _log_call(args, account, heard) -> VoiceReplyOut:
+def _log_call(args, account, heard, today) -> VoiceReplyOut:
+    """One card for one call. A promise made on it ("reached, she'll pay 8,000 by Friday") goes on the same card, as
+    a second request sent after the call log -- the same two forms the profile has, in that order."""
     _check_drafted(args.note, heard, "note")
     outcome = _CALL_OUTCOMES[args.outcome]
+    details = [DetailOut(label="Borrower", value=_who(account)), DetailOut(label="Outcome", value=outcome)]
+    then: list[RequestOut] = []
+    if args.promised_amount is not None or args.promised_full_amount or args.promised_date is not None:
+        promised = SimpleNamespace(amount=args.promised_amount, full_amount_due=args.promised_full_amount)
+        amount = _amount(promised, account, heard, "did they promise")
+        if args.promised_date is None:
+            raise _Unresolved(_clarify("By what date did they promise to pay?"))
+        if args.promised_date < today:
+            raise _Unresolved(_clarify(f"{_day(args.promised_date, today)} has already passed. By what date did they promise to pay?"))
+        details.append(DetailOut(label="Promise", value=f"{inr(amount)} by {_day(args.promised_date, today)}"))
+        then.append(RequestOut(
+            label="Log the promise", method="POST", path=f"/accounts/{account['account_id']}/promises",
+            body={"promised_date": args.promised_date.isoformat(), "promised_amount": amount},
+        ))
+    promise_words = f", and a promise of {details[-1].value}" if then else ""
     return _proposal(
-        f"Log a call to {_who(account)}: {outcome}?",
+        f"Log a call to {_who(account)}: {outcome}{promise_words}?",
         ProposalOut(
-            action="log_call", title="Log a call",
-            details=[DetailOut(label="Borrower", value=_who(account)), DetailOut(label="Outcome", value=outcome)],
+            action="log_call", title="Log a call and a promise" if then else "Log a call", details=details,
             method="POST", path=f"/accounts/{account['account_id']}/call-log",
-            body={"outcome": args.outcome, "note": args.note}, editable="note", editable_label="Note (optional)",
+            body={"outcome": args.outcome, "note": args.note}, then=then, editable="note", editable_label="Note (optional)",
         ),
         ScreenOut(account_id=account["account_id"], tab="cases"),
     )
@@ -704,16 +957,19 @@ def _decide_request(args, plan, account, heard, data, approved: bool) -> VoiceRe
                       f"{account['borrower_name']} has no open request to {'approve' if approved else 'reject'}.")
     reason = None if approved else args.reason
     _check_drafted(reason, heard, "reason")
-    verb = "Approve" if approved else "Reject"
+    # "Approve" is what it means for more time or a closure certificate; for anything else approving just closes it
+    # (ops/api.py approve_escalation), so the card says Close -- "Approve Asha's asks to talk to a person?" said nothing.
+    verb = "Reject" if not approved else "Approve" if case["kind"] in ("restructuring", "closure") else "Close"
+    what = CASE_KIND_LABELS.get(case["kind"], ("request",))[0]
     details = [DetailOut(label="Borrower", value=_who(account)), DetailOut(label="Request", value=f"{case['title']} ({case['case_ref']})")]
     terms = case.get("proposed_changes") or {}
     if terms.get("type") == "extend_tenure":
         details.append(DetailOut(label="Terms", value=f"+{terms['extra_months']} months, new EMI {inr(float(terms['new_emi_amount']))} over {terms['new_months_remaining']} months"))
     told = data.decision_message(case, account, approved, None)
     return _proposal(
-        f"{verb} {account['borrower_name']}'s {case['title'].lower()}?",
+        f"{verb} {account['borrower_name']}'s {what}?",
         ProposalOut(
-            action="approve_request" if approved else "reject_request", title=f"{verb} a request", details=details,
+            action="approve_request" if approved else "reject_request", title=f"{verb} a {what}", details=details,
             borrower_told=told, warnings=[] if told else ["This is an internal notice: the borrower is not told anything."],
             method="POST", path=f"/escalations/{case['case_ref']}/{'approve' if approved else 'reject'}",
             body=None if approved else {"reason": reason},
@@ -808,11 +1064,18 @@ def _mark_messages_handled(account) -> VoiceReplyOut:
 
 # --- entry ----------------------------------------------------------------------------------------------------------
 
-def respond(plan: Plan, heard: str, data: DashboardData, screen_account_id: str | None, today: date, now: datetime | None = None) -> VoiceReplyOut:
+def respond(
+    plan: Plan, heard: str, data: DashboardData, screen_account_id: str | None, today: date, now: datetime | None = None,
+    *, screen_case: str | None = None, workflow: str | None = None,
+) -> VoiceReplyOut:
     """The reply to one understood request. heard is what the operator said (or typed): an amount, phone number or
-    figure in a drafted message must be found in it."""
+    figure in a drafted message must be found in it. screen_case is the case on screen in an inbox run, which "approve
+    it" means when the account has more than one open; workflow is the kind of run in progress, if any."""
     now = now or datetime.now(timezone.utc)
     args, tool = plan.args, plan.tool
+    if screen_case and "case" in type(args).model_fields and args.case is None:
+        args = args.model_copy(update={"case": screen_case})
+        plan = Plan(tool=tool, args=args)
     try:
         if tool == "portfolio_overview":
             reply = _portfolio_overview(data)
@@ -830,7 +1093,9 @@ def respond(plan: Plan, heard: str, data: DashboardData, screen_account_id: str 
                                        ScreenOut(view="overview", open_form="new_account")),
             }[args.page]
         elif tool == "help":
-            reply = _answer(_HELP)
+            reply = _help()
+        elif tool in voice_workflows.TOOLS:
+            reply = voice_workflows.respond(plan, data, today, now, workflow)
         elif tool == "cannot_help":
             reply = _clarify("Sorry, I can't do that from here. Ask “what can you do?” to hear what I can.")
         elif tool == "message_group":
@@ -845,7 +1110,7 @@ def respond(plan: Plan, heard: str, data: DashboardData, screen_account_id: str 
                 "confirm_payment_claim": lambda: _confirm_payment_claim(args, plan, account, heard, today, data),
                 "close_case": lambda: _close_case(args, plan, account, heard, data),
                 "log_promise": lambda: _log_promise(args, account, heard, today),
-                "log_call": lambda: _log_call(args, account, heard),
+                "log_call": lambda: _log_call(args, account, heard, today),
                 "message_borrower": lambda: _message_borrower(args, account, heard),
                 "reply_to_case": lambda: _reply_to_case(args, plan, account, heard),
                 "approve_request": lambda: _decide_request(args, plan, account, heard, data, approved=True),
@@ -858,3 +1123,8 @@ def respond(plan: Plan, heard: str, data: DashboardData, screen_account_id: str 
         reply = e.reply
     reply.heard = heard
     return reply
+
+
+# At the end: voice_workflows builds its steps from this module's helpers and models, so it can only be imported once
+# they exist. respond() above reaches it through this name at call time.
+from businessflow.ops import voice_workflows  # noqa: E402

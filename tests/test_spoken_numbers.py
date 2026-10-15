@@ -43,6 +43,27 @@ def test_an_amount_that_was_not_said_is_not_found(said, amount):
     assert not was_said(amount, said)
 
 
+@pytest.mark.parametrize("said, amount", [
+    ("फातिमा से बारह हज़ार पाँच सौ रिकॉर्ड करो", 12500),
+    ("साढ़े बारह हज़ार", 12500),  # 12.5 thousand
+    ("डेढ़ लाख", 150000),
+    ("ढाई लाख", 250000),
+    ("सवा लाख", 125000),
+    ("१२५०० जमा किया", 12500),  # Devanagari digits
+    ("12 हज़ार दिए", 12000),
+    ("पच्चीस हजार", 25000),  # हजार without the nukta
+    ("saade 12 hazaar", 12500),
+])
+def test_amounts_said_in_hindi_are_found(said, amount):
+    assert was_said(amount, said)
+
+
+def test_a_hindi_number_word_outside_the_list_is_not_guessed():
+    # तेईस (23) is not read: the amount is asked for again rather than matched to something else
+    assert not was_said(23000, "तेईस हज़ार")
+    assert not was_said(1000, "तेईस हज़ार")
+
+
 def test_a_figure_the_model_added_to_a_drafted_message_is_reported():
     said = "tell her we got her payment and someone will call her"
     drafted = "We have received your payment of ₹5,000 and one of our team will call you within two days."

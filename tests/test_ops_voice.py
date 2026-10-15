@@ -159,7 +159,14 @@ def test_details_the_model_leaves_blank_count_as_not_said():
 
 
 def test_every_menu_entry_has_an_argument_model_and_the_other_way_round():
-    assert {t["function"]["name"] for t in voice.MENU} == set(voice.ARGS)
+    # A workflow's steps are asked for by the page, never offered to the model.
+    assert {t["function"]["name"] for t in voice.MENU} == set(voice.ARGS) - voice.PAGE_ONLY_TOOLS
+
+
+def test_the_model_cannot_pick_a_step_only_the_page_asks_for(monkeypatch):
+    monkeypatch.setattr(voice, "_create_completion", lambda **kw: _completion("call_step", json.dumps({"account": "BF-1001"})))
+    with pytest.raises(NotUnderstood):
+        voice.understand("next borrower", TODAY, "the call list")
 
 
 # --- answers --------------------------------------------------------------------------------------------------------

@@ -264,9 +264,11 @@ function lock(message) {
   state.apiKey = "";
   localStorage.removeItem("bf_ops_key");
   stopAutoRefresh();
-  // A locked dashboard keeps no microphone open and no answer on screen.
+  // A locked dashboard keeps no microphone open, no answer on screen and no run in progress.
   stopVoiceRecording();
   closeVoiceReply();
+  voice.workflow = null;
+  renderVoiceWorkflowBar();
   $shell.hidden = true;
   $unlockScreen.hidden = false;
   $unlockInput.value = "";
@@ -2495,6 +2497,8 @@ const $voiceReply = document.getElementById("voice-reply");
 const $voiceListening = document.getElementById("voice-listening");
 const $voiceTimer = document.getElementById("voice-timer");
 const $voiceSound = document.getElementById("voice-sound");
+const $voiceRun = document.getElementById("voice-run");
+const $voiceMenu = document.getElementById("voice-menu");
 
 const VOICE_MAX_RECORDING_MS = 30000; // the server's limit for one question
 const VOICE_SOUND_PREF_KEY = "bf_ops_voice_sound"; // on/off only -- no data
@@ -2515,6 +2519,9 @@ const voice = {
   audio: null, // the reply being spoken, if any
   audioUrl: null,
   soundOn: true,
+  // A guided run in progress (call list, inbox): {kind, title, stepTool, items, index, done, skipped}. Kept here, in
+  // this tab, not on the server: it is one operator's, and each step is read fresh from the server anyway.
+  workflow: null,
 };
 try {
   voice.soundOn = localStorage.getItem(VOICE_SOUND_PREF_KEY) !== "off";
@@ -2540,7 +2547,15 @@ $voiceSound.addEventListener("click", () => {
 });
 
 function voiceScreen() {
-  return { view: state.view, account_id: state.detailAccountId };
+  const run = voice.workflow;
+  const item = run ? run.items[run.index] : null;
+  return {
+    view: state.view,
+    account_id: state.detailAccountId,
+    workflow: item
+      ? { kind: run.kind, position: run.index + 1, total: run.items.length, case_ref: run.kind === "inbox" ? item.key : null }
+      : null,
+  };
 }
 
 function setVoiceBusy(busy) {
@@ -2567,16 +2582,21 @@ async function voiceRequest(path, payload, thinking) {
   stopVoicePlayback();
   setVoiceBusy(true);
   showVoiceThinking(thinking);
+  let command = null;
   try {
     const reply = await api(path, payload);
+    if (reply.workflow) startVoiceWorkflow(reply.workflow);
     renderVoiceReply(reply);
     applyVoiceScreen(reply.screen);
-    speakVoiceReply(reply.say);
+    command = reply.workflow_command;
+    // "Next" says nothing itself: the next step speaks. "Stop" is said by the run's summary.
+    if (!command) speakVoiceReply(reply.say);
   } catch (err) {
     renderVoiceError(err);
   } finally {
     setVoiceBusy(false);
   }
+  if (command) runWorkflowCommand(command);
 }
 
 function askVoiceText(text) {
@@ -2605,6 +2625,18 @@ function runVoiceChoice(choice, heard) {
     "Checking…",
   );
 }
+
+// A suggestion that needs a figure or words only the operator has puts its sentence in the box instead of sending it;
+// the cursor goes where the missing part is (a double space marks it) or at the end.
+function fillVoicePrompt(text) {
+  $voiceInput.value = text;
+  $voiceInput.focus();
+  const gap = text.indexOf("  ");
+  const at = gap >= 0 ? gap + 1 : text.length;
+  $voiceInput.setSelectionRange(at, at);
+}
+
+$voiceMenu.addEventListener("click", () => runVoiceChoice({ tool: "help", arguments: {} }, ""));
 
 $voiceForm.addEventListener("submit", (e) => {
   e.preventDefault();
@@ -2659,7 +2691,100 @@ function applyVoiceScreen(screen) {
   }
 }
 
+// --- guided runs (ops/voice_workflows.py) ---
+function startVoiceWorkflow(w) {
+  voice.workflow = { kind: w.kind, title: w.title, stepTool: w.step_tool, items: w.items, index: 0, done: 0, skipped: 0 };
+  renderVoiceWorkflowBar();
+}
+
+function renderVoiceWorkflowBar() {
+  const run = voice.workflow;
+  $voiceRun.hidden = !run;
+  if (!run) {
+    $voiceRun.innerHTML = "";
+    return;
+  }
+  const item = run.items[run.index];
+  $voiceRun.innerHTML = `
+    <span class="voice-run-title">${escapeHtml(run.title)}</span>
+    <span class="voice-run-pos">${run.index + 1} of ${run.items.length}</span>
+    <span class="voice-run-item">${escapeHtml(item ? item.label : "")}</span>
+    <button type="button" class="btn btn-secondary voice-run-btn" data-run="skip">Skip</button>
+    <button type="button" class="btn btn-secondary voice-run-btn" data-run="stop">Stop</button>`;
+}
+
+$voiceRun.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-run]");
+  if (btn && !voice.busy) runWorkflowCommand(btn.dataset.run);
+});
+
+function runVoiceStep() {
+  const run = voice.workflow;
+  renderVoiceWorkflowBar();
+  return runVoiceChoice({ tool: run.stepTool, arguments: run.items[run.index].arguments }, "");
+}
+
+function runWorkflowCommand(command) {
+  const run = voice.workflow;
+  if (!run) return;
+  if (command === "stop") return finishVoiceWorkflow(true);
+  if (command === "repeat") return runVoiceStep();
+  if (command === "previous") {
+    run.index = Math.max(0, run.index - 1);
+    return runVoiceStep();
+  }
+  if (command === "skip") run.skipped += 1;
+  run.index += 1; // next or skip
+  if (run.index >= run.items.length) return finishVoiceWorkflow(false);
+  return runVoiceStep();
+}
+
+function finishVoiceWorkflow(stopped) {
+  const run = voice.workflow;
+  voice.workflow = null;
+  renderVoiceWorkflowBar();
+  const noun = run.kind === "call_list" ? "borrower" : "case";
+  const total = run.items.length;
+  const say =
+    `${run.title} ${stopped ? "stopped" : "done"}: ${run.done} of ${total} ${noun}${total === 1 ? "" : "s"} dealt with` +
+    (run.skipped ? `, ${run.skipped} skipped.` : ".");
+  renderVoiceReply({
+    kind: "answer", heard: null, title: null, say, rows: [], choices: [], proposal: null,
+    suggestions: [{ label: "Start my day", tool: "daily_briefing", arguments: {} }],
+  });
+  speakVoiceReply(say);
+}
+
 // --- the reply card ---
+function voiceRowHtml(r, i) {
+  const href = r.href && r.href.startsWith("tel:") ? r.href : null; // the server only ever sends tel: links
+  const clickable = !href && (r.tool || r.account_id);
+  const tag = href ? "a" : clickable ? "button" : "div";
+  const attrs = href ? `href="${escapeHtml(href)}"` : clickable ? `type="button" data-voice-row="${i}"` : "";
+  return `<li><${tag} class="voice-row ${r.tone ? `tone-${r.tone}` : ""} ${href || clickable ? "clickable" : ""}" ${attrs}>
+      <span class="voice-row-main"><span class="voice-row-label">${escapeHtml(r.label)}</span>${
+        r.detail ? `<span class="voice-row-detail">${escapeHtml(r.detail)}</span>` : ""
+      }</span>${r.value ? `<span class="voice-row-value">${escapeHtml(r.value)}</span>` : ""}
+    </${tag}></li>`;
+}
+
+function voiceSuggestionsHtml(list) {
+  if (!list.length) return "";
+  const groups = [];
+  list.forEach((sug, i) => {
+    let group = groups.find((g) => g.name === (sug.group || ""));
+    if (!group) groups.push((group = { name: sug.group || "", items: [] }));
+    group.items.push([sug, i]);
+  });
+  return `<div class="voice-suggestions">${groups
+    .map(
+      (g) => `${g.name ? `<p class="voice-group">${escapeHtml(g.name)}</p>` : ""}<div class="voice-chips">${g.items
+        .map(([sug, i]) => `<button type="button" class="voice-chip ${sug.prompt ? "prompt" : ""}" data-voice-suggestion="${i}">${escapeHtml(sug.label)}</button>`)
+        .join("")}</div>`,
+    )
+    .join("")}</div>`;
+}
+
 function voiceHeardHtml(reply) {
   return reply.heard ? `<p class="voice-heard">Heard: <q>${escapeHtml(reply.heard)}</q></p>` : `<p class="voice-heard"></p>`;
 }
@@ -2669,14 +2794,33 @@ function renderVoiceReply(reply) {
   const choices = (reply.choices || [])
     .map((c, i) => `<button type="button" class="btn btn-secondary" data-voice-choice="${i}">${escapeHtml(c.label)}</button>`)
     .join("");
+  const rows = (reply.rows || []).map(voiceRowHtml).join("");
   $voiceReply.innerHTML = `
     <div class="voice-reply-top">${voiceHeardHtml(reply)}${DETAIL_CLOSE_HTML.replace('class="detail-close"', 'class="detail-close voice-reply-close"')}</div>
+    ${reply.title ? `<p class="voice-title">${escapeHtml(reply.title)}</p>` : ""}
     <p class="voice-say ${reply.kind === "clarify" ? "clarify" : ""}">${escapeHtml(reply.say)}</p>
+    ${rows ? `<ul class="voice-rows">${rows}</ul>` : ""}
     ${choices ? `<div class="voice-choices">${choices}</div>` : ""}
-    ${reply.proposal ? voiceProposalHtml(reply.proposal) : ""}`;
+    ${reply.proposal ? voiceProposalHtml(reply.proposal) : ""}
+    ${voiceSuggestionsHtml(reply.suggestions || [])}`;
   $voiceReply.querySelector(".voice-reply-close").addEventListener("click", closeVoiceReply);
   $voiceReply.querySelectorAll("[data-voice-choice]").forEach((btn) =>
     btn.addEventListener("click", () => runVoiceChoice(reply.choices[Number(btn.dataset.voiceChoice)], reply.heard)),
+  );
+  // A row opens what it is about: the question it stands for, or the borrower's profile.
+  $voiceReply.querySelectorAll("[data-voice-row]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const row = reply.rows[Number(btn.dataset.voiceRow)];
+      if (row.tool) runVoiceChoice({ tool: row.tool, arguments: row.arguments || {} }, "");
+      else applyVoiceScreen({ account_id: row.account_id, tab: row.tab || "overview" });
+    }),
+  );
+  $voiceReply.querySelectorAll("[data-voice-suggestion]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const sug = reply.suggestions[Number(btn.dataset.voiceSuggestion)];
+      if (sug.prompt) fillVoicePrompt(sug.prompt);
+      else runVoiceChoice({ tool: sug.tool, arguments: sug.arguments || {} }, "");
+    }),
   );
   if (reply.proposal) wireVoiceProposal(reply.proposal);
 }
@@ -2755,9 +2899,32 @@ function wireVoiceProposal(p) {
         method: p.method,
         ...(body ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}),
       });
+      // Then the card's follow-up requests, in order (a promise made on the call just logged). One failing stops the
+      // rest and says which: what was done before it stays done, as with the profile's own forms.
+      let followUpError = null;
+      for (const req of p.then || []) {
+        try {
+          await api(req.path, {
+            method: req.method,
+            ...(req.body ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(req.body) } : {}),
+          });
+        } catch (err) {
+          followUpError = `${req.label} failed: ${err instanceof ApiError ? err.message : "couldn't reach the dashboard"}. The rest was done; add it from the profile.`;
+          break;
+        }
+      }
       const done = voiceDoneText(p, result);
-      card.innerHTML = `<p class="voice-done">${escapeHtml(done)}</p>`;
-      toast(done);
+      card.innerHTML = `<p class="voice-done">${escapeHtml(done)}</p>${followUpError ? `<p class="voice-error">${escapeHtml(followUpError)}</p>` : ""}`;
+      toast(followUpError || done, Boolean(followUpError));
+      // In a call list or inbox run, an action on the item on screen moves the run on to the next one.
+      const run = voice.workflow;
+      const item = run ? run.items[run.index] : null;
+      if (item && !followUpError && p.account_id && item.arguments.account === p.account_id) {
+        run.done += 1;
+        loadAll().catch(() => {}); // the dashboard behind catches up; the next step reads its own data fresh
+        runWorkflowCommand("next");
+        return;
+      }
       speakVoiceReply("Done.");
       if (state.detailAccountId) {
         const [fresh, freshDocuments, freshConversation] = await _loadDetailData(state.detailAccountId);
@@ -2782,7 +2949,13 @@ function voiceDoneText(p, result) {
 }
 
 // --- spoken replies ---
+// Each reply's speech belongs to one generation; stopping or starting another moves the generation on. Found in the
+// preview: tapping on before a reply had finished loading or playing cut it off, and the cut-off playback was then
+// reported on the NEXT card as "spoken reply unavailable". A superseded reply now just goes quiet.
+let speechGeneration = 0;
+
 function stopVoicePlayback() {
+  speechGeneration += 1;
   if (voice.audio) voice.audio.pause();
   if (voice.audioUrl) URL.revokeObjectURL(voice.audioUrl);
   voice.audio = null;
@@ -2792,6 +2965,7 @@ function stopVoicePlayback() {
 async function speakVoiceReply(text) {
   if (!voice.soundOn || !text) return;
   stopVoicePlayback();
+  const mine = speechGeneration;
   try {
     const res = await fetch("/voice/speak", {
       method: "POST",
@@ -2799,12 +2973,15 @@ async function speakVoiceReply(text) {
       body: JSON.stringify({ text: text.slice(0, 400) }),
     });
     if (!res.ok) throw new Error(`speak failed (${res.status})`);
-    const url = URL.createObjectURL(await res.blob());
+    const blob = await res.blob();
+    if (mine !== speechGeneration) return; // a newer reply, or a stop, came while this loaded
+    const url = URL.createObjectURL(blob);
     voice.audioUrl = url;
     voice.audio = new Audio(url);
     voice.audio.addEventListener("ended", stopVoicePlayback);
     await voice.audio.play();
   } catch (err) {
+    if (mine !== speechGeneration) return; // cut short on purpose, not a failure
     // The answer is already on screen; only its sound is missing. Said in the card, never a blocking error.
     console.warn("ops voice: the spoken reply could not be played", err);
     if (!$voiceReply.hidden && !$voiceReply.querySelector("[data-voice-silent]")) {
