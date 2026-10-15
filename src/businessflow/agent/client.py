@@ -134,7 +134,10 @@ _DISPUTE_HANDLING = (
     "say the account has been updated -- only the team can confirm a payment. "
     "When they send more details about a payment or dispute already open "
     "(already_open is true), call flag_dispute again with those details: they "
-    "are added to the open case."
+    "are added to the open case. Before filing a payment claim, call "
+    "get_payment_status (and get_payment_history if useful) in the same turn: "
+    "if the payment they mean is already recorded and nothing is overdue, tell "
+    "them so plainly instead of filing a claim."
 )
 
 # get_payment_status and calculate_hypothetical look up everything they
@@ -143,11 +146,24 @@ _DISPUTE_HANDLING = (
 # eval/tool_calling_benchmark.py: on some runs, a plain "what would a
 # settlement cost me" got met with "tell me your remaining balance"
 # instead of just calling the tool, which already knows it.
+#
+# Found live: after a borrower paid through the link the agent had just
+# sent, "what is my payment history, and do I have any dues right now?" got
+# the payment history plus the PRE-payment status ("21 days past due,
+# ₹35,500 due today") -- reused from earlier in the conversation. A payment
+# can land at any moment (the link opens in another tab), so what is due is
+# looked up again every time it is asked, and checked before a payment
+# claim. agent/loop.py also tells the model when a payment landed.
 _READ_ONLY_TOOLS = (
     "get_payment_status and calculate_hypothetical need only account_id "
     "-- call them directly to answer a status or 'what if' question, "
     "never ask the borrower to state a balance or figure the tool "
-    "already looks up itself."
+    "already looks up itself. Whenever the borrower asks what they owe, "
+    "whether anything is due or overdue, their balance or their due date, "
+    "call get_payment_status again in that turn, even if you looked it up "
+    "earlier in the conversation: a payment through a link you sent can "
+    "land at any moment, and you are not told when. A payment history "
+    "alone does not say what is due now."
 )
 
 # Found live via the Telegram channel (not an eval scenario): a single,

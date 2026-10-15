@@ -45,3 +45,61 @@ test("an empty or missing reply renders as nothing, not 'undefined'", () => {
   assert.equal(formatReply(""), "");
   assert.equal(formatReply(undefined), "");
 });
+
+// ---- links and tables (found live: a payment link shown as "[Pay ₹35,500 now](https://...token...)", and a payment
+// history shown as rows of pipes and dashes) ------------------------------------------------------------------------------
+
+const PAY_URL = "https://businessflowai.duckdns.org/pay/Ybc3vjppZwZ-3jHsrxfyNDJz0kwkMakL";
+
+test("a payment link is a 'Pay' button with the link's own words, opening in a new tab", () => {
+  const html = formatReply(`Sure. Here’s a link for the ₹35,500 due today.\n[Pay ₹35,500 now](${PAY_URL})`);
+  assert.equal(
+    html,
+    `Sure. Here’s a link for the ₹35,500 due today.\n<a class="chat-pay-btn" href="${PAY_URL}" target="_blank" rel="noopener noreferrer">Pay ₹35,500 now</a>`
+  );
+  assert.ok(!html.includes("]("), html);
+});
+
+test("a bare payment URL is a button too; other URLs are links, without the sentence's full stop", () => {
+  assert.equal(
+    formatReply(`Pay here: ${PAY_URL}.`),
+    `Pay here: <a class="chat-pay-btn" href="${PAY_URL}" target="_blank" rel="noopener noreferrer">Open the payment page</a>.`
+  );
+  assert.equal(
+    formatReply("See https://example.com/a_b_c?x=1&y=2."),
+    'See <a class="chat-link" href="https://example.com/a_b_c?x=1&amp;y=2" target="_blank" rel="noopener noreferrer">https://example.com/a_b_c?x=1&amp;y=2</a>.'
+  );
+});
+
+test("only http(s) is ever linked, and a quote in a URL cannot reach the markup", () => {
+  assert.equal(formatReply("[x](javascript:alert(1))"), "[x](javascript:alert(1))");
+  const html = formatReply('[y](https://a.b/" onclick="z)');
+  assert.ok(!/onclick="/.test(html), html);
+  assert.ok(html.includes('href="https://a.b/"') && html.includes("&quot; onclick=&quot;z)"), html);
+});
+
+const TABLE_REPLY =
+  "Here’s your recent payment record:\n\n" +
+  "| Date | Amount | On‑time? | Type |\n" +
+  "|------|--------|----------|------|\n" +
+  "| 15 Oct 2026 | ₹35,500 | No | **Regular** EMI |\n" +
+  "| 25 Jul 2026 | ₹35,000 | Yes | Regular EMI |\n\n" +
+  "You’ve already paid the October EMI.";
+
+test("a markdown table is a real table, its cells formatted, with no blank lines around it", () => {
+  const html = formatReply(TABLE_REPLY);
+  assert.ok(!html.includes("|"), html);
+  assert.ok(html.startsWith('Here’s your recent payment record:<div class="chat-table-wrap"><table class="chat-table">'), html);
+  assert.ok(html.includes("<thead><tr><th>Date</th><th>Amount</th><th>On‑time?</th><th>Type</th></tr></thead>"), html);
+  assert.ok(html.includes("<tr><td>15 Oct 2026</td><td>₹35,500</td><td>No</td><td><strong>Regular</strong> EMI</td></tr>"), html);
+  assert.ok(html.endsWith("</table></div>You’ve already paid the October EMI."), html);
+  assert.ok(!/<table[\s\S]*\n[\s\S]*<\/table>/.test(html), "no newline inside the table (the bubble is pre-wrap)");
+});
+
+test("a table with a missing cell, and text that only looks like a table, are handled", () => {
+  const html = formatReply("| A | B |\n|---|---|\n| 1 |\n");
+  assert.ok(html.includes("<tr><td>1</td><td></td></tr>"), html);
+  for (const text of ["a | b", "---", "| just one |\n|---|", "2 | 3 and 4 | 5"]) {
+    assert.ok(!formatReply(text).includes("<table"), text);
+  }
+});

@@ -515,6 +515,39 @@ def start_conversation_with_recap(language: str = "en", account_id: str | None =
     return conversation
 
 
+_STATUS_TOOL = "get_payment_status"
+
+
+def _account_change_note(conversation: list[dict], account_id: str | None) -> dict | None:
+    """A system note for this turn when the account changed after the agent last looked it up, so it looks again
+    instead of answering from figures that are no longer true; None when nothing changed.
+
+    Only when this conversation holds a looked-up status to go stale (no database round trip otherwise). Found live: a
+    borrower paid through the link the agent had just sent, asked "do I have any dues right now?", and got the
+    pre-payment "21 days past due" back -- the agent had fetched only the payment history and reused its earlier
+    status. The prompt also says to re-check (agent/client.py's _READ_ONLY_TOOLS); this does not rely on it.
+
+    No amounts in the note: the reply's figures must come from a tool result (guardrail/grounding.py)."""
+    if account_id is None or not any(name == _STATUS_TOOL for name, _ in extract_new_tool_calls(conversation, 0)):
+        return None
+    changed = store.changes_since_last_status_check(account_id)
+    what = []
+    if changed["payments"]:
+        what.append("a payment was recorded" if changed["payments"] == 1 else f"{changed['payments']} payments were recorded")
+    if changed["restructurings"]:
+        what.append("a restructuring was approved, changing the EMI or term")
+    if not what:
+        return None
+    return {
+        "role": "system",
+        "content": (
+            f"Account update since you last called {_STATUS_TOOL}: {' and '.join(what)}. Every figure you looked up "
+            "earlier in this conversation (amount due, due date, days overdue, late fee, balance) may now be wrong. "
+            f"Call {_STATUS_TOOL} again before saying anything about what is due or the balance."
+        ),
+    }
+
+
 def run_turn_with_memory(conversation: list[dict], account_id: str | None) -> tuple[list[dict], str]:
     """Like run_turn, but also persists this turn to cross-session memory
     so a future conversation with this account can recap it, AND enforces
@@ -528,7 +561,14 @@ def run_turn_with_memory(conversation: list[dict], account_id: str | None) -> tu
     timestamp it *later* than the tool call it prompted, scrambling the
     recap's chronological order."""
     conversation_memory.log_turn(account_id, "user", conversation[-1]["content"])
+    # For this turn only: _trim_to_recent_turns keeps every system message forever, and once the agent has looked
+    # again the note is no longer true.
+    note = _account_change_note(conversation, account_id)
+    if note is not None:
+        conversation.insert(len(conversation) - 1, note)
     conversation, reply = run_turn(conversation, verified_account_id=account_id, anonymous=account_id is None)
+    if note is not None:
+        conversation = [m for m in conversation if m is not note]
     conversation_memory.log_turn(account_id, "assistant", reply)
     return conversation, reply
 

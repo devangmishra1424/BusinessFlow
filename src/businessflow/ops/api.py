@@ -1266,10 +1266,9 @@ async def resolve_account_dispute(account_id: str, body: ResolveDisputeIn | None
     # banner vanished, but nothing said how it ended. Delivered over Telegram
     # when linked, and always shown in that case's thread on their dashboard.
     if result["kind"] == cases.PAYMENT_CLAIM:
-        message = (
-            "Update on the payment you reported: our team has closed it without recording a payment. "
-            f"Note from our team: {resolution_note} If you have paid, reply with the payment reference and we'll check again."
-        )
+        # Neutral: closing a claim without recording a payment can mean "not found" or "already recorded" (found
+        # live: a claim filed for a payment that had landed minutes earlier). The note says which.
+        message = f"Update on the payment you reported: our team has checked it and closed it. Note from our team: {resolution_note}"
     else:
         message = "Update on your dispute: our team has reviewed it and closed it."
         if resolution_note:

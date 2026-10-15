@@ -640,6 +640,21 @@ button, input, select, textarea { font-family: inherit; }
 /* The agent's light markdown, rendered by richtext.js */
 .msg-bubble strong { font-weight: 650; }
 .msg-bubble code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.92em; padding: 1px 5px; border-radius: 5px; background: rgba(127, 127, 127, 0.14); }
+/* Links and tables in a reply (static/richtext.js). A payment link is a button; a table scrolls sideways on a phone. */
+.msg-bubble a.chat-link { color: var(--accent-strong); text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
+.msg-bubble a.chat-pay-btn {
+  display: inline-flex; align-items: center; gap: 8px; margin: 8px 0 2px; padding: 9px 18px; border-radius: var(--radius-pill);
+  background: var(--accent); color: var(--on-accent); font-weight: 650; text-decoration: none; white-space: nowrap;
+}
+.msg-bubble a.chat-pay-btn:hover { background: var(--accent-hover); }
+.msg-bubble a.chat-pay-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.msg-bubble a.chat-pay-btn::after { content: "\2197"; font-weight: 400; opacity: 0.85; }
+.msg-bubble .chat-table-wrap { overflow-x: auto; margin: 8px 0; max-width: 100%; border: 1px solid var(--border); border-radius: 10px; }
+.msg-bubble .chat-table { border-collapse: collapse; font-size: 13px; line-height: 1.4; width: max-content; min-width: 100%; }
+/* The bubble breaks long words anywhere; a table cell must not ("₹35,50|0"): it keeps its line and the table scrolls. */
+.msg-bubble .chat-table th, .msg-bubble .chat-table td { padding: 6px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border); white-space: nowrap; word-break: normal; overflow-wrap: normal; }
+.msg-bubble .chat-table th { font-size: 12px; font-weight: 650; color: var(--text-2); background: var(--surface-2); white-space: nowrap; }
+.msg-bubble .chat-table tbody tr:last-child td { border-bottom: none; }
 .msg-row.user .msg-bubble-row { flex-direction: row-reverse; }
 .speak-btn {
   flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--border);
