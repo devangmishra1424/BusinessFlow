@@ -24,7 +24,9 @@ PRE-REGISTERED PASS CRITERIA (written before any result was seen; the report pri
   C4 audio hygiene   new_piper: no clipped clip (peak >= 0.999), no clip whose Opus-decoded peak exceeds 1.0 (what a listener's
                      player receives), and a standard deviation of loudness across clips <= 3.0 dB. (The first run failed the
                      peak test on every Piper clip: Piper normalises to exactly 1.0 and 7 of 12 clips decoded above 1.0 after
-                     Opus. The product was fixed with -1 dBFS headroom; the Opus check was then added; the criterion was not relaxed.)
+                     Opus. The product was fixed with -1 dBFS headroom; the Opus check was then added; the criterion was not relaxed.
+                     12 clips proved too few: a later CI run caught one at 1.021, and 470 clips showed about 3% clip on a
+                     48 kHz player, so encode_ogg_opus now limits to -2 dBFS before Opus -- see _OPUS_PEAK_LIMIT in tts.py.)
   C5 resources       new_piper: speed (real-time factor) <= new_mms; memory growth after the first synthesis <= new_mms.
   C6 leakage         digits left in the text sent to the Hindi voice: 0 for the new verbalizer, and fewer silently dropped
                      tokens (digit runs + Latin words) than the old verbalizer.
