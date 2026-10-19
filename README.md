@@ -26,7 +26,7 @@ real payment recording, a real Telegram bot, real evals.
 
 **Voice AI, in Indian languages, trained not just prompted.** A Whisper ASR
 model fine-tuned specifically for Hindi-English code-switched speech, WER-
-benchmarked against the base model (`eval/asr_wer.py`) rather than assumed
+benchmarked against the base model (`eval/wer_benchmark.py`) rather than assumed
 better -- plus a VAD stage (Silero) ahead of it and TTS on the way out (Piper
 for English, Piper's `hi_IN` voice for Hindi with Meta MMS as the fallback). Every model in the pipeline runs int8-quantized
 ONNX, chosen deliberately for the RAM/latency envelope a real voice turn

@@ -4,7 +4,7 @@ faster-whisper      # ASR, int8 CPU (size decided by the small-vs-base test, see
 onnxruntime==1.29.0
 
 # --- Reasoning ---
-groq                # Agent LLM (Llama-3.1-8B), the one deliberate API call
+groq                # Groq client for the agent LLM (openai/gpt-oss-20b, see agent/client.py), the one deliberate API call
 
 # --- RAG ---
 # Vector store is pgvector on the same Supabase Postgres project as
