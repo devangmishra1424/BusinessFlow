@@ -885,15 +885,58 @@ def reject_restructuring(escalation_id: str, reason: str | None) -> dict:
     return {"escalation_id": escalation_id, "account_id": row["account_id"], "reason": reason}
 
 
-def set_telegram_chat_id(account_id: str, chat_id: int) -> None:
+def set_telegram_chat_id(account_id: str, chat_id: int) -> dict:
     """Records the Telegram chat this account most recently verified
     from -- called once, right after a successful credential check in
     channels/telegram_bot.py's handle_incoming_message. Last-verified-
-    chat-wins by design (see the column's comment in schema.sql)."""
-    get_connection().execute(
-        "update accounts set telegram_chat_id = %s, updated_at = now() where account_id = %s",
-        (chat_id, account_id),
-    )
+    chat-wins by design (see the column's comment in schema.sql).
+
+    One chat can hold several loans (a shop owner with two loans uses one Telegram): verifying another account adds it
+    to the chat, and telegram_linked_at marks it the chat's active loan (touch_telegram_active when the borrower
+    switches). An account has one chat: verified from a new chat, it leaves the old one. Returns {"previous_chat_id":
+    the chat it was linked to before, if a different one (it no longer gets this loan's messages -- the caller tells
+    it), "loans_in_chat": every account now linked to this chat, active first}."""
+    with get_connection().transaction() as tx:
+        row = tx.execute("select telegram_chat_id from accounts where account_id = %s for update", (account_id,)).fetchone()
+        previous = row["telegram_chat_id"] if row else None
+        tx.execute(
+            "update accounts set telegram_chat_id = %s, telegram_linked_at = now(), updated_at = now() where account_id = %s",
+            (chat_id, account_id),
+        )
+    return {"previous_chat_id": previous if previous not in (None, chat_id) else None,
+            "loans_in_chat": [a.account_id for a in get_accounts_by_telegram_chat_id(chat_id)]}
+
+
+def touch_telegram_active(account_id: str, chat_id: int) -> bool:
+    """Makes a loan already linked to this chat its active one (the borrower switched with /loans), so a restart resumes
+    it. False if the account is not linked to this chat -- switching never links anything."""
+    row = get_connection().execute(
+        "update accounts set telegram_linked_at = now() where account_id = %s and telegram_chat_id = %s returning 1",
+        (account_id, chat_id),
+    ).fetchone()
+    return row is not None
+
+
+def get_accounts_by_telegram_chat_id(chat_id: int) -> list[Account]:
+    """Every loan linked to this chat, the active one (most recently verified or switched to) first."""
+    rows = get_connection().execute(
+        "select * from accounts where telegram_chat_id = %s order by telegram_linked_at desc nulls last, account_id",
+        (chat_id,),
+    ).fetchall()
+    return [_row_to_account(r) for r in rows]
+
+
+def unlink_telegram(account_id: str) -> int | None:
+    """Ops removes an account's Telegram link (a lost phone, a tester done testing): nothing more is pushed to that
+    chat, and it must verify with the access key again. Returns the chat that was linked, or None."""
+    row = get_connection().execute(
+        "update accounts a set telegram_chat_id = null, updated_at = now() from (select telegram_chat_id as old "
+        "from accounts where account_id = %s for update) p where a.account_id = %s returning p.old",
+        (account_id, account_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"No account found for account_id={account_id!r}")
+    return row["old"]
 
 
 def get_account_by_telegram_chat_id(chat_id: int) -> Account | None:
@@ -909,8 +952,8 @@ def get_account_by_telegram_chat_id(chat_id: int) -> Account | None:
     whatever chat_id it currently holds with no further re-verification --
     this just extends that same, already-accepted trust to resuming a
     text conversation instead of only outbound pushes."""
-    row = get_connection().execute("select * from accounts where telegram_chat_id = %s", (chat_id,)).fetchone()
-    return _row_to_account(row) if row else None
+    loans = get_accounts_by_telegram_chat_id(chat_id)
+    return loans[0] if loans else None  # the active loan, when the chat holds several
 
 
 # ---------------------------------------------------------------------------------------------------------------------

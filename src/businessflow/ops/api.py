@@ -834,6 +834,29 @@ def create_account(body: AccountCreateIn):
     )
 
 
+class UnlinkTelegramOut(BaseModel):
+    account_id: str
+    was_linked: bool
+    chat_told: bool
+
+
+@app.post("/accounts/{account_id}/telegram/unlink", response_model=UnlinkTelegramOut, dependencies=[Depends(require_api_key)])
+async def unlink_account_telegram(account_id: str):
+    """Removes the account's Telegram link: nothing more is pushed to that chat, and it has to verify again with the
+    access key (reset the key too if the phone is lost). The chat is told. 404 for an unknown account."""
+    try:
+        old_chat = store.unlink_telegram(account_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    told = False
+    if old_chat is not None:
+        store.log_event(account_id, "telegram_unlinked", {"reason": "ops"})
+        told = await notify.notify_telegram_chat(
+            old_chat, f"This chat is no longer linked to account {account_id}. To use it here again, send your account "
+                      "ID and access key.")
+    return UnlinkTelegramOut(account_id=account_id, was_linked=old_chat is not None, chat_told=told)
+
+
 @app.post(
     "/accounts/{account_id}/reset-access-key",
     response_model=ResetAccessKeyOut,

@@ -80,6 +80,7 @@ from businessflow.channels.credentials import looks_like_credentials, parse_cred
 from businessflow.channels.reminder_actions import run_action as run_reminder_action
 from businessflow.markup import markdown_to_telegram_html, strip_markdown
 from businessflow.observability import trace
+from businessflow.outbound.send import notify_telegram_chat
 from businessflow.tools.account_tools import flag_dispute, get_payment_history, get_payment_status
 from businessflow.tools.escalation_tools import escalate_to_human, request_closure_certificate
 from businessflow.tools.payment_tools import generate_payment_link
@@ -140,6 +141,40 @@ def _get_session_lock(chat_id: int) -> asyncio.Lock:
     return lock
 
 
+def _tell_previous_chat(account_id: str, previous_chat_id: int | None) -> None:
+    """The account was just verified from a new chat: the chat it was linked to stops getting its messages, so it is
+    told why (and what to do if it was not them), and its in-memory session for that account is closed. Runs in the
+    worker thread handle_incoming_message is called on, so it has its own event loop for the one send."""
+    if previous_chat_id is None:
+        return
+    store.log_event(account_id, "telegram_relinked", {"previous_chat_linked": True})
+    old = _sessions.get(previous_chat_id)
+    if old and old.get("account_id") == account_id:
+        _sessions.pop(previous_chat_id, None)
+    text = (f"Account {account_id} was just verified from a different Telegram chat, so its messages will go there "
+            "from now on. If that wasn't you, contact your lender to reset your access key.")
+    if not asyncio.run(notify_telegram_chat(previous_chat_id, text)):
+        logger.warning("could not tell chat %s that account %s moved to another chat", previous_chat_id, account_id)
+
+
+def switch_loan(chat_id: int, account_id: str) -> str:
+    """/loans: makes another loan already linked to this chat the one the conversation is about. Never links anything --
+    a loan not in this chat needs its account ID and access key."""
+    if not store.touch_telegram_active(account_id, chat_id):
+        return f"{account_id} isn't linked to this chat -- send its account ID and access key to add it."
+    language = _language_for(chat_id, account_id)
+    _sessions[chat_id] = {"account_id": account_id, "language": language,
+                          "messages": start_conversation_with_recap(language, account_id)}
+    store.log_event(account_id, "telegram_loan_switched", {})
+    return f"Switched to {account_id}. What can I help you with?"
+
+
+def loans_in_chat(chat_id: int) -> tuple[str | None, list]:
+    """(the active loan, every loan linked to this chat) for /loans."""
+    loans = store.get_accounts_by_telegram_chat_id(chat_id)
+    return _verified_account_id(chat_id), loans
+
+
 def handle_incoming_message(chat_id: int, text: str) -> str:
     """All routing logic for a plain-text turn, decoupled from
     python-telegram-bot's types so it's testable with plain (int, str)
@@ -172,9 +207,11 @@ def handle_incoming_message(chat_id: int, text: str) -> str:
     # make a payment of ₹892,160?"). Caught here, before it ever reaches
     # run_turn_with_memory, same as the real verification branch below.
     if session is not None and session.get("account_id") is not None and looks_like_credentials(text):
-        return f"You're already verified as account {session['account_id']} -- what can I help you with?"
+        if parse_credentials(text)[0] == session["account_id"]:
+            return f"You're already verified as account {session['account_id']} -- what can I help you with?"
+        # Another loan's credentials in an already-verified chat: verified below and added to this chat (/loans).
 
-    if session is None or session.get("account_id") is None:
+    if session is None or session.get("account_id") is None or looks_like_credentials(text):
         if looks_like_credentials(text):
             account_id, access_key = parse_credentials(text)
             language = _language_for(chat_id, account_id)
@@ -193,7 +230,13 @@ def handle_incoming_message(chat_id: int, text: str) -> str:
             # request) can reach this borrower even after this in-memory
             # session is long gone. Last-verified-chat-wins, same as the
             # column's comment in schema.sql.
-            store.set_telegram_chat_id(account_id, chat_id)
+            link = store.set_telegram_chat_id(account_id, chat_id)
+            _tell_previous_chat(account_id, link["previous_chat_id"])
+            loans = link["loans_in_chat"]
+            if len(loans) > 1:
+                return (f"Verified -- I've pulled up account {account_id}. This chat now has {len(loans)} loans "
+                        f"({', '.join(loans)}); messages about each say which loan, and /loans switches between them. "
+                        "What can I help you with?")
             return f"Verified -- I've pulled up account {account_id}. What can I help you with?"
 
         if session is None:
@@ -394,6 +437,24 @@ async def on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Tap an option below, or send /menu for quick actions.",
         reply_markup=await _abilities_markup(chat_id),
     )
+
+
+async def on_loans(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Lists the loans linked to this chat, with a button to switch to each; /loans <account id> switches directly."""
+    chat_id = update.effective_chat.id
+    if context.args:
+        await update.message.reply_text(await asyncio.to_thread(switch_loan, chat_id, context.args[0].upper()))
+        return
+    active, loans = await asyncio.to_thread(loans_in_chat, chat_id)
+    if not loans:
+        await update.message.reply_text("No loan is linked to this chat yet -- send your account ID and access key.")
+        return
+    lines = [f"{'▶' if a.account_id == active else '•'} {a.account_id} -- {a.business_name}" for a in loans]
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(f"Switch to {a.account_id}", callback_data=f"loan:{a.account_id}")]
+                                     for a in loans if a.account_id != active])
+    note = "\n\nTo add another loan, send its account ID and access key." if len(loans) == 1 else ""
+    await update.message.reply_text("Loans in this chat:\n" + "\n".join(lines) + note,
+                                    reply_markup=keyboard if keyboard.inline_keyboard else None)
 
 
 async def on_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -730,6 +791,10 @@ async def on_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await _drop_action_buttons(query)
         return
 
+    if data.startswith("loan:"):
+        await query.message.reply_text(await asyncio.to_thread(switch_loan, chat_id, data.split(":", 1)[1]))
+        return
+
     if data.startswith("ab:"):
         await _run_ability_tap(query, context, chat_id, data.split(":", 1)[1])
         return
@@ -943,6 +1008,7 @@ async def _register_commands(application: Application) -> None:
         [
             ("start", "Begin or verify your account"),
             ("status", "Check your EMI, due date, and balance"),
+            ("loans", "Your loans in this chat -- switch between them"),
             ("history", "See your recent payments"),
             ("pay", "Pay what's due (or /pay <amount>)"),
             ("dispute", "Flag a dispute -- /dispute <what happened>"),
@@ -993,6 +1059,7 @@ def main() -> None:
     application.add_handler(CommandHandler("voice", on_voice_toggle))
     application.add_handler(CommandHandler("menu", on_menu))
     application.add_handler(CommandHandler("help", on_help))
+    application.add_handler(CommandHandler("loans", on_loans))
     application.add_handler(CallbackQueryHandler(on_callback_query))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_message))
     application.add_handler(MessageHandler(filters.VOICE, on_voice_message))
