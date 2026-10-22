@@ -373,6 +373,131 @@ function setView(view) {
 }
 
 /* ============================================================
+   Living demo -- GET /demo, POST /demo/reset
+   ============================================================ */
+async function initDemoReset() {
+  const $btn = document.getElementById("demo-reset-btn");
+  try {
+    const status = await api("/demo");
+    $btn.hidden = !status.enabled;
+  } catch (err) {
+    console.warn("ops: demo status could not be loaded; the reset button stays hidden", err);
+    return;
+  }
+  $btn.onclick = async () => {
+    const ok = window.confirm(
+      "Put the demo borrowers back to their starting story?\n\nPayments, promises, late fees, cases and messages on the demo accounts are replaced, with dates counted from today. Accounts you opened yourself are not touched."
+    );
+    if (!ok) return;
+    $btn.disabled = true;
+    try {
+      await api("/demo/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: "reset" }) });
+      toast("The demo is back to its starting story.");
+      await loadAll();
+    } catch (err) {
+      toast(err.message, true);
+    } finally {
+      $btn.disabled = false;
+    }
+  };
+}
+
+/* ============================================================
+   Loan-book import -- POST /loan-book (ops/loan_book.py): check, then open; access keys shown once
+   ============================================================ */
+(function initLoanBook() {
+  const $panel = document.getElementById("loan-book-panel");
+  const $file = document.getElementById("loan-book-file");
+  const $check = document.getElementById("loan-book-check");
+  const $import = document.getElementById("loan-book-import");
+  const $result = document.getElementById("loan-book-result");
+  document.getElementById("loan-book-btn").addEventListener("click", () => {
+    $panel.hidden = !$panel.hidden;
+  });
+  $file.addEventListener("change", () => {
+    $import.hidden = true;
+    $result.innerHTML = "";
+  });
+
+  async function send(dryRun) {
+    const file = $file.files[0];
+    if (!file) {
+      toast("Choose the loan-book CSV first.", true);
+      return null;
+    }
+    const form = new FormData();
+    form.append("file", file);
+    form.append("dry_run", dryRun ? "true" : "false");
+    return api("/loan-book", { method: "POST", body: form });
+  }
+
+  function rowsHtml(r) {
+    const bad = r.details.filter((d) => d.errors.length);
+    const opened = r.details.filter((d) => d.access_key);
+    const skipped = r.details.filter((d) => d.account_id && !d.access_key && !d.errors.length);
+    let html = `<p class="upload-result">${r.rows} loan${r.rows === 1 ? "" : "s"} read · ${r.ready} ${r.imported ? "opened" : "ready to open"} · ${r.already_on_books} already here · ${r.with_errors} with something to fix</p>`;
+    if (bad.length) {
+      html += `<ul class="loan-book-errors">${bad.map((d) => `<li><b>Row ${d.row}${d.borrower_name ? ` (${escapeHtml(d.borrower_name)})` : ""}:</b> ${d.errors.map(escapeHtml).join("; ")}</li>`).join("")}</ul>`;
+    }
+    if (skipped.length) {
+      html += `<p class="section-subtitle">Already here, skipped: ${skipped.map((d) => `${escapeHtml(d.external_ref)} → ${escapeHtml(d.account_id)}`).join(", ")}</p>`;
+    }
+    if (opened.length) {
+      html += `<p class="loan-book-once"><b>Each access key is shown only now</b> — the system keeps only a scrambled copy. Download them before leaving this page.</p>
+        <table class="loan-book-keys"><thead><tr><th>Row</th><th>Account</th><th>Borrower</th><th>Access key</th></tr></thead><tbody>
+        ${opened.map((d) => `<tr><td>${d.row}</td><td>${escapeHtml(d.account_id)}</td><td>${escapeHtml(d.borrower_name || "")}</td><td><code>${escapeHtml(d.access_key)}</code></td></tr>`).join("")}
+        </tbody></table>
+        <button type="button" class="btn btn-primary" id="loan-book-download">Download access keys (CSV)</button>`;
+    }
+    return html;
+  }
+
+  $check.addEventListener("click", async () => {
+    $check.disabled = true;
+    try {
+      const r = await send(true);
+      if (!r) return;
+      $result.innerHTML = rowsHtml(r);
+      $import.hidden = !(r.with_errors === 0 && r.ready > 0);
+      $import.textContent = `Open the ${r.ready} loan${r.ready === 1 ? "" : "s"}`;
+    } catch (err) {
+      $result.innerHTML = `<p class="mini-form-error">${escapeHtml(err.message)}</p>`;
+    } finally {
+      $check.disabled = false;
+    }
+  });
+
+  $import.addEventListener("click", async () => {
+    $import.disabled = true;
+    try {
+      const r = await send(false);
+      if (!r) return;
+      $result.innerHTML = rowsHtml(r);
+      $import.hidden = true;
+      const opened = r.details.filter((d) => d.access_key);
+      const $dl = document.getElementById("loan-book-download");
+      if ($dl) {
+        $dl.addEventListener("click", () => {
+          const lines = ["row,account_id,borrower_name,loan_reference,access_key,telegram_link",
+            ...opened.map((d) => [d.row, d.account_id, d.borrower_name || "", d.external_ref || "", d.access_key, d.telegram_invite_link || ""]
+              .map((x) => `"${String(x).replaceAll('"', '""')}"`).join(","))];
+          const url = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv" }));
+          const a = Object.assign(document.createElement("a"), { href: url, download: "access-keys.csv" });
+          a.click();
+          URL.revokeObjectURL(url);
+        });
+      }
+      toast(`${opened.length} loan${opened.length === 1 ? "" : "s"} opened.`);
+      await loadAll();
+    } catch (err) {
+      $result.innerHTML = `<p class="mini-form-error">${escapeHtml(err.message)}</p>`;
+    } finally {
+      $import.disabled = false;
+    }
+  });
+})();
+
+/* ============================================================
    Quality -- GET /quality (eval/conversation_lab.py + the nightly suites)
    ============================================================ */
 async function loadQuality() {
@@ -3486,6 +3611,8 @@ window.addEventListener("pagehide", () => {
    Boot / refresh
    ============================================================ */
 
+let demoResetChecked = false;
+
 async function loadAll() {
   const myGeneration = ++loadGeneration;
   // The escalation-rate figure is fetched alongside but never holds up the portfolio: accounts and escalations render
@@ -3501,6 +3628,10 @@ async function loadAll() {
   renderInbox();
   loadBank(); // the Bank tab's waiting count, kept current with the rest
   loadHealth();
+  if (!demoResetChecked) {
+    demoResetChecked = true;
+    initDemoReset();
+  }
   metricsRequest
     .then((metrics) => {
       if (myGeneration !== loadGeneration) return;

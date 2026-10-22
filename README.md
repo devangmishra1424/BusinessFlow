@@ -223,6 +223,12 @@ gives the same result every time.
 The ops **Quality** tab shows the lab, case by case with its label, and each
 nightly suite's last result.
 
+**Bring a real loan book; reset the demo.**
+- **Loan book**: ops import a loan book as CSV (`ops/loan_book.py`). Columns are matched by name, Indian phone and date formats are read, and every row is checked the way the New account form checks one.
+- Nothing is opened unless every row is right. A loan whose reference is already here is skipped on a second import, never opened twice.
+- Each new borrower's access key is shown once, with a CSV download; the database keeps only its hash.
+- **Demo reset**: on the public demo, **Reset demo** puts the demo borrowers back to their starting story, dated from today. It runs at most once every 5 minutes. A real deployment turns it off with `DEMO_RESET_ENABLED=0`.
+
 ## Architecture, in one paragraph
 
 One Groq-hosted LLM (`openai/gpt-oss-20b`) with a belt of tools in a single

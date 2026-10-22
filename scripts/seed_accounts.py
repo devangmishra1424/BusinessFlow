@@ -342,6 +342,8 @@ def main():
         # delete-then-insert did, so a concurrent seed's payment_history/
         # events inserts can never hit a missing parent row.
         conn.execute("delete from events where account_id = any(%s)", (_ACCOUNT_IDS,))
+        # Bank-statement lines posted to a demo account point at payments deleted below; they go with them.
+        conn.execute("delete from bank_lines where account_id = any(%s)", (_ACCOUNT_IDS,))
         conn.execute("delete from escalations where account_id = any(%s)", (_ACCOUNT_IDS,))
         conn.execute("delete from disputes where account_id = any(%s)", (_ACCOUNT_IDS,))
         conn.execute("delete from promises where account_id = any(%s)", (_ACCOUNT_IDS,))
