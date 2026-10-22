@@ -2,10 +2,19 @@
 
 ## Promise to pay
 
-A borrower can promise to pay a specific amount by a specific future date.
-This is logged against the account. Whether the promise was kept is judged
-against a 2-day tolerance band either side of the promised date, not the
-exact date — a payment landing within that window still counts as kept.
+A borrower can promise to pay in one payment or in up to 4 parts, each a
+specific amount by a specific date, within the next 90 days. The promise is
+judged by its exact words: each part is kept once the money paid since the
+promise reaches it by that part's date, and broken if it does not — there
+is no extra window after the date. Paying a part in pieces is fine; paying
+it late is not. When one part is broken the whole promise is broken, and it
+counts once however many parts it had. A second broken promise on record
+sends the account to a person on the team, and blocks automated
+restructuring offers (see escalation_policy.md). The terms are read back to the
+borrower and recorded only after they confirm them. A new promise replaces
+one still open. While a promise is open, the borrower is reminded only of
+their own promise (the day before each part and on the day); routine EMI
+reminders and the overdue follow-up resume if it is broken.
 
 ## NACH auto-debit mandate
 

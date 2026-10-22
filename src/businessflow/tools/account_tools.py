@@ -1,13 +1,14 @@
 """Tools that read or record facts against a borrower's account."""
 
 from datetime import date
-from typing import Literal
+from typing import Literal, TypedDict
 
 from businessflow.accounts import cases, store
 from businessflow.accounts.dues import amount_due_now, charges_due
+from businessflow.accounts.promises import Part, promise_view_for, validate_parts
+from businessflow.accounts.promises import terms_text as promise_terms_text
 from businessflow.accounts.policy import (
     PAYMENT_CLAIM_REVIEW_WORKING_DAYS,
-    PROMISE_TOLERANCE_DAYS,
 )
 from businessflow.tools import validation
 from businessflow.tools.server import mcp
@@ -73,6 +74,7 @@ def get_payment_status(account_id: str) -> dict:
     as_of = store.current_date()
     # The fee is on the books the first time anyone looks, not only after the nightly pass (store.assess_late_fees).
     store.assess_late_fees(as_of, account_id)
+    store.resolve_promises(as_of, account_id)
     account = store.get_account_or_raise(account_id)
     days_past_due = account.days_past_due(as_of)
     fees_owed = charges_due(account)
@@ -105,6 +107,9 @@ def get_payment_status(account_id: str) -> dict:
         "dispute_open": account.dispute_open,
         "risk_tier": account.risk_tier,
         "broken_promise_count": account.broken_promise_count(),
+        # The borrower's current promise (or most recent one), judged by its own words: terms, status
+        # ('on_track' | 'kept' | 'broken' | 'replaced'), each part with how much is paid, and the next part still owed.
+        "promise": promise_view_for(account, as_of),
         # A running credit from an earlier off-cycle extra payment the
         # borrower chose to apply, or an overpayment's excess -- reduces
         # what's actually due next cycle. Zero for the overwhelming
@@ -150,33 +155,62 @@ def get_payment_history(account_id: str, limit: int = 5) -> dict:
     }
 
 
+class PromisePartIn(TypedDict):
+    date: str  # YYYY-MM-DD
+    amount: float
+
+
 @mcp.tool(
     description=(
-        "Record a borrower's promise to pay a specific amount by a specific date "
-        "(promised_date as YYYY-MM-DD). Whether the promise was kept is judged later, "
-        "once that date passes, against a few days' tolerance either side -- not the "
-        "exact date."
+        "Record a borrower's promise to pay, in their exact words: promised_date (YYYY-MM-DD) and promised_amount for "
+        "the first (or only) payment, and more_parts for any later ones ([{date, amount}], up to 3 more, later dates). "
+        "A promise is judged by those words alone: each part must be paid in full by its date, or the whole promise is "
+        "broken -- so pin the terms down first (how much, by which date, in one go or in parts). Two steps, always: "
+        "call it with borrower_confirmed=false (the default) and it returns read_back, the terms written out; read "
+        "them back to the borrower in their language and ask them to confirm. Only after a clear yes, call it again "
+        "with exactly the same terms and borrower_confirmed=true to record it. A new promise replaces one still open."
     )
 )
-def log_promise_to_pay(account_id: str, promised_date: str, promised_amount: float) -> dict:
-    """Record a borrower's promise to pay a specific amount by a specific
-    date. promised_date is an ISO date string (YYYY-MM-DD). Whether the
-    promise was kept is evaluated later, once that date has passed, against
-    a tolerance band of a few days either side -- not the exact date."""
+def log_promise_to_pay(
+    account_id: str, promised_date: str, promised_amount: float,
+    more_parts: list[PromisePartIn] | None = None, borrower_confirmed: bool = False,
+) -> dict:
+    """Records a promise plan from chat (accounts/promises.py), only after its exact terms were read back to the
+    borrower: the first call returns the read-back text (and notes that it was read back); the confirming call, with
+    the same terms and borrower_confirmed=True, records it. Enforced here, not only in the prompt: a promise the
+    borrower never heard read back cannot be recorded from chat. Raises ValueError on terms that are not a real plan
+    (past or far-off dates, dates out of order, more than the account could owe)."""
     account = store.get_account_or_raise(account_id)  # raises if the account doesn't exist
     today = store.current_date()
-    parsed_date = validation.promise_date(promised_date, today)
-    promised_amount = validation.money(promised_amount, "promised_amount", ceiling=validation.max_payable(account))
-    newly_logged = store.add_promise(
-        account_id, made_on=today, promised_date=parsed_date, promised_amount=promised_amount
-    )
+    raw = [{"date": promised_date, "amount": promised_amount}, *(more_parts or [])]
+    parts = []
+    for i, r in enumerate(raw, 1):
+        d = validation.promise_date(r.get("date") if isinstance(r, dict) else None, today)
+        amount = validation.money(r.get("amount") if isinstance(r, dict) else None, f"part {i} amount", ceiling=validation.max_payable(account))
+        parts.append(Part(d, amount))
+    parts = validate_parts(parts, today, ceiling=validation.max_payable(account))
+    terms = promise_terms_text(parts)
+
+    if not borrower_confirmed or not store.promise_was_read_back(account_id, terms):
+        store.log_promise_read_back(account_id, terms)
+        return {
+            "account_id": account_id,
+            "logged": False,
+            "read_back": terms,
+            "next_step": (
+                "Read these terms back to the borrower, in their language, and ask them to confirm. Only if they "
+                "clearly say yes, call log_promise_to_pay again with exactly these terms and borrower_confirmed=true."
+            ),
+        }
+    result = store.add_promise_plan(account_id, parts, made_on=today, made_via="chat", terms_text=terms)
     return {
         "account_id": account_id,
-        "promised_date": parsed_date.isoformat(),
-        "promised_amount": promised_amount,
-        "tolerance_days": PROMISE_TOLERANCE_DAYS,
         "logged": True,
-        "already_logged": not newly_logged,  # True if this exact promise was already on record today
+        "terms": terms,
+        "plan_id": result["plan_id"],
+        "already_logged": result["already_logged"],  # True if this exact promise was already on record today
+        "replaced_earlier_promise": result["replaced_plan_id"] is not None,
+        "how_it_is_judged": "Each part must be paid in full by its date; if one is missed, the promise is broken.",
     }
 
 

@@ -408,10 +408,14 @@ def main():
             )
 
         for account_id, made_on, promised_date, promised_amount, kept in promises:
-            conn.execute(
-                "insert into promises (account_id, made_on, promised_date, promised_amount, kept) values (%s, %s, %s, %s, %s)",
-                (account_id, made_on, promised_date, promised_amount, kept),
-            )
+            # Each seeded promise is a one-part plan, already judged (accounts/promises.py).
+            row = conn.execute(
+                "insert into promises (account_id, made_on, promised_date, promised_amount, kept, part_no, parts_total, made_via, resolution, resolved_on) "
+                "values (%s, %s, %s, %s, %s, 1, 1, 'seed', %s, %s) returning id",
+                (account_id, made_on, promised_date, promised_amount, kept,
+                 None if kept is None else ("kept" if kept else "broken"), None if kept is None else promised_date),
+            ).fetchone()
+            conn.execute("update promises set plan_id = 'P-' || id where id = %s", (row["id"],))
 
         conn.commit()
 

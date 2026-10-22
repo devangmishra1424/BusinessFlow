@@ -32,9 +32,15 @@ class FakeStore:
         self.tokens.append(amount)
         return "tok"
 
-    def add_promise(self, account_id, made_on, promised_date, promised_amount):
-        self.promises.append((promised_date, promised_amount))
-        return True
+    def add_promise_plan(self, account_id, parts, made_on, made_via, terms_text=None):
+        self.promises.extend((p.date, p.amount) for p in parts)
+        return {"plan_id": "P-1", "already_logged": False, "replaced_plan_id": None}
+
+    def log_promise_read_back(self, account_id, terms):
+        self.read_back = terms
+
+    def promise_was_read_back(self, account_id, terms, within_minutes=30):
+        return getattr(self, "read_back", None) == terms
 
     def current_date(self):
         return TODAY
@@ -103,8 +109,9 @@ def test_a_promise_to_pay_needs_a_real_near_date_and_a_sensible_amount(store, pr
 
 
 def test_a_promise_for_today_or_the_next_three_months_is_recorded(store):
-    account_tools.log_promise_to_pay("BF-1", "2026-10-11", 5000.0)
-    account_tools.log_promise_to_pay("BF-1", "2027-01-09", 5000.0)  # exactly 90 days ahead
+    for promised_date in ("2026-10-11", "2027-01-09"):  # today, and exactly 90 days ahead
+        account_tools.log_promise_to_pay("BF-1", promised_date, 5000.0)  # read back
+        account_tools.log_promise_to_pay("BF-1", promised_date, 5000.0, borrower_confirmed=True)
 
     assert [d.isoformat() for d, _ in store.promises] == ["2026-10-11", "2027-01-09"]
 

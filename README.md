@@ -169,6 +169,19 @@ borrower confirms. A payment dated within the grace period removes a fee
 charged before it was recorded; ops can waive a fee only with their name and a
 reason, which the borrower is sent.
 
+**A promise is judged by its own words.** A borrower promises in one payment or
+in up to 4 parts, each an amount by a date (`accounts/promises.py`). In chat the
+assistant must read the exact terms back, and the tool records them only on a
+second call after the borrower says yes; this is enforced in code, not only in
+the prompt. Ops tick that they read the terms back. A part is kept once the money
+paid since the promise reaches it by its date, and broken the day after if it
+does not. There is no extra window. One broken part breaks the promise and voids
+the rest, and it counts once. A payment judges the promise in the same
+transaction, so the borrower sees "Paid" at once. While a promise runs, routine
+reminders pause and the borrower is reminded of their own terms the day before
+each part and on the day. A new promise replaces an open one, which is not
+counted as broken.
+
 ## Architecture, in one paragraph
 
 One Groq-hosted LLM (`openai/gpt-oss-20b`) with a belt of tools in a single

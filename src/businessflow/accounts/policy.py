@@ -11,9 +11,9 @@ GRACE_PERIOD_DAYS = 3
 # reminder goes out -- outbound/decide.py's own deadline-proximity check.
 HEADS_UP_DAYS_BEFORE_DUE = 3
 
-# A promise-to-pay is "kept" if payment lands within this many days of the
-# promised date, not only on the exact date.
-PROMISE_TOLERANCE_DAYS = 2
+# A promise to pay has no extra window: it is judged by the borrower's own words -- each part paid in full by its
+# date (accounts/promises.py; owner's decision 2026-10-22). The 2-day tolerance this used to hold lived only in a
+# policy document, never in what the borrower promised.
 
 # Escalate to a human on the account's Nth broken promise, not the 1st —
 # a single slip is normal; a pattern isn't.

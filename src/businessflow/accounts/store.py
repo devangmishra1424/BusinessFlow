@@ -25,7 +25,7 @@ from businessflow.accounts.db import get_connection
 from businessflow.accounts.dues import allocate_payment, emi_due_now
 from businessflow.accounts.escalation_kinds import classify_escalation
 from businessflow.accounts.models import Account, Charge, Escalation, PaymentRecord, PromiseToPay
-from businessflow.accounts.policy import GRACE_PERIOD_DAYS, LATE_FEE_FLAT_AMOUNT, PAYMENT_TOKEN_TTL_HOURS, PROMISE_TOLERANCE_DAYS
+from businessflow.accounts.policy import GRACE_PERIOD_DAYS, LATE_FEE_FLAT_AMOUNT, PAYMENT_TOKEN_TTL_HOURS
 
 logger = logging.getLogger(__name__)
 
@@ -55,12 +55,19 @@ _CHARGE_COLUMNS = "id, account_id, kind, for_due_date, amount, amount_paid, asse
 
 
 def _promise(r: dict) -> PromiseToPay:
-    return PromiseToPay(made_on=r["made_on"], promised_date=r["promised_date"], promised_amount=float(r["promised_amount"]), kept=r["kept"])
+    return PromiseToPay(
+        made_on=r["made_on"], promised_date=r["promised_date"], promised_amount=float(r["promised_amount"]), kept=r["kept"],
+        id=r.get("id"), plan_id=r.get("plan_id"), part_no=r.get("part_no") or 1, parts_total=r.get("parts_total") or 1,
+        terms_text=r.get("terms_text"), made_via=r.get("made_via"), resolution=r.get("resolution"),
+    )
+
+
+_PROMISE_COLUMNS = "id, account_id, made_on, promised_date, promised_amount, kept, plan_id, part_no, parts_total, terms_text, made_via, resolution"
 
 
 def _load_payment_history(account_id: str, ex=None) -> list[PaymentRecord]:
     rows = (ex or get_connection()).execute(
-        "select payment_date, amount, on_time, kind, charges_paid from payment_history where account_id = %s order by payment_date",
+        "select payment_date, amount, on_time, kind, charges_paid from payment_history where account_id = %s order by payment_date, id",
         (account_id,),
     ).fetchall()
     return [_payment_record(r) for r in rows]
@@ -75,7 +82,7 @@ def _load_charges(account_id: str, ex=None) -> list[Charge]:
 
 def _load_promises(account_id: str, ex=None) -> list[PromiseToPay]:
     rows = (ex or get_connection()).execute(
-        "select made_on, promised_date, promised_amount, kept from promises where account_id = %s order by promised_date",
+        f"select {_PROMISE_COLUMNS} from promises where account_id = %s order by made_on, plan_id, part_no",
         (account_id,),
     ).fetchall()
     return [_promise(r) for r in rows]
@@ -136,7 +143,7 @@ def list_accounts() -> list[Account]:
         ids = [r["account_id"] for r in rows]
         history_rows = conn.execute(
             "select account_id, payment_date, amount, on_time, kind, charges_paid from payment_history "
-            "where account_id = any(%s) order by account_id, payment_date",
+            "where account_id = any(%s) order by account_id, payment_date, id",
             (ids,),
         ).fetchall()
         charge_rows = conn.execute(
@@ -144,8 +151,8 @@ def list_accounts() -> list[Account]:
             (ids,),
         ).fetchall()
         promise_rows = conn.execute(
-            "select account_id, made_on, promised_date, promised_amount, kept from promises "
-            "where account_id = any(%s) order by account_id, promised_date",
+            f"select {_PROMISE_COLUMNS} from promises "
+            "where account_id = any(%s) order by account_id, made_on, plan_id, part_no",
             (ids,),
         ).fetchall()
     history: dict[str, list[PaymentRecord]] = {i: [] for i in ids}
@@ -269,72 +276,132 @@ def current_date() -> date:
     return datetime.now(timezone.utc).date()
 
 
-def add_promise(account_id: str, made_on: date, promised_date: date, promised_amount: float) -> bool:
-    """Returns True if a new promise row was inserted, False if an
-    identical one (same account, made today, same promised date/amount)
-    already existed -- a duplicate tool call (a retry, or the model
-    calling this twice in one turn) logs the promise once, not twice.
+def add_promise_plan(account_id: str, parts: list, made_on: date, made_via: str, terms_text: str | None = None) -> dict:
+    """Records a promise plan (accounts/promises.py: one or more parts, each an amount by a date), validated by the
+    caller. One plan is open per account at a time: a new one voids the open parts of the one before ("replaced by a
+    new promise" -- not counted as broken; the borrower renegotiated before a date passed).
 
-    This is a plain check-then-act, not a DB-enforced constraint -- fine
-    for the realistic threat here (one conversation's sequential tool
-    calls), not a guarantee against genuinely concurrent writers racing
-    on the exact same promise. A unique index would be the fuller fix
-    if that ever becomes a real risk."""
-    existing = get_connection().execute(
-        "select id from promises where account_id = %s and made_on = %s "
-        "and promised_date = %s and promised_amount = %s",
-        (account_id, made_on, promised_date, promised_amount),
-    ).fetchone()
-    if existing:
-        return False
-    get_connection().execute(
-        "insert into promises (account_id, made_on, promised_date, promised_amount) values (%s, %s, %s, %s)",
-        (account_id, made_on, promised_date, promised_amount),
-    )
-    return True
+    Idempotent against a retry: an identical open plan made the same day is not recorded twice (already_logged).
+    Serialised per account with a transaction-scoped advisory lock, so two identical calls at once log one plan.
+    Returns {plan_id, already_logged, replaced_plan_id}."""
+    from businessflow.accounts.promises import terms_text as _terms
+
+    terms = terms_text or _terms(parts)
+    with get_connection().transaction() as tx:
+        tx.execute("select pg_advisory_xact_lock(hashtext(%s))", (f"promise:{account_id}",))
+        open_rows = tx.execute(
+            "select plan_id, made_on, terms_text from promises where account_id = %s and resolution is null and kept is null",
+            (account_id,),
+        ).fetchall()
+        same = next((r for r in open_rows if r["made_on"] == made_on and r["terms_text"] == terms), None)
+        if same is not None:
+            return {"plan_id": same["plan_id"], "already_logged": True, "replaced_plan_id": None}
+        replaced = sorted({r["plan_id"] for r in open_rows})
+        if replaced:
+            tx.execute(
+                "update promises set resolution = 'void', resolved_on = %s where account_id = %s and resolution is null and kept is null",
+                (made_on, account_id),
+            )
+        plan_id = None
+        for i, part in enumerate(parts, 1):
+            row = tx.execute(
+                "insert into promises (account_id, made_on, promised_date, promised_amount, plan_id, part_no, parts_total, terms_text, made_via) "
+                "values (%s, %s, %s, %s, %s, %s, %s, %s, %s) returning id",
+                (account_id, made_on, part.date, part.amount, plan_id, i, len(parts), terms, made_via),
+            ).fetchone()
+            if plan_id is None:
+                plan_id = f"P-{row['id']}"
+                tx.execute("update promises set plan_id = %s where id = %s", (plan_id, row["id"]))
+    logger.info("promise plan %s on %s (%s): %s%s", plan_id, account_id, made_via, terms,
+                f"; replaced {', '.join(replaced)}" if replaced else "")
+    return {"plan_id": plan_id, "already_logged": False, "replaced_plan_id": replaced[-1] if replaced else None}
+
+
+def add_promise(account_id: str, made_on: date, promised_date: date, promised_amount: float, made_via: str = "ops") -> bool:
+    """A one-part promise (an amount by a date). True if recorded, False if the same promise was already logged today.
+    Kept for callers that only ever take one amount and one date."""
+    from businessflow.accounts.promises import Part
+
+    return not add_promise_plan(account_id, [Part(promised_date, float(promised_amount))], made_on, made_via)["already_logged"]
+
+
+def resolve_promises(as_of: date | None = None, account_id: str | None = None, ex=None) -> list[dict]:
+    """Judges every open promise plan by its own words (accounts/promises.py evaluate_plan) against real payments, and
+    writes each verdict that changed: a part is kept once the money paid since the promise reaches it by its date,
+    broken the day after its date if it did not, and every later part of a broken plan is void.
+
+    Run by the daily pass, by record_payment (inside its transaction, so a payment that keeps a part shows at once),
+    and before a screen shows a promise. Returns every part resolved by this call: {account_id, plan_id, part_no,
+    resolution, kept}."""
+    from businessflow.accounts.promises import Part, evaluate_plan
+
+    as_of = as_of or current_date()
+    conn = ex or get_connection()
+    # A row written without a plan (by code from before plans, still running while this deploys) is a one-part plan.
+    conn.execute("update promises set plan_id = 'P-' || id where plan_id is null")
+    rows = conn.execute(
+        f"""select {_PROMISE_COLUMNS} from promises where plan_id in (
+              select plan_id from promises where resolution is null and kept is null
+                and (%(a)s::text is null or account_id = %(a)s::text))
+            order by plan_id, part_no""",
+        {"a": account_id},
+    ).fetchall()
+    if not rows:
+        return []
+    accounts = sorted({r["account_id"] for r in rows})
+    pay_rows = conn.execute(
+        "select account_id, payment_date, amount from payment_history where account_id = any(%s)", (accounts,),
+    ).fetchall()
+    payments: dict[str, list] = {}
+    for r in pay_rows:
+        payments.setdefault(r["account_id"], []).append((r["payment_date"], float(r["amount"])))
+
+    plans: dict[str, list[dict]] = {}
+    for r in rows:
+        plans.setdefault(r["plan_id"], []).append(r)
+    resolved = []
+    for plan_id, parts in plans.items():
+        parts.sort(key=lambda r: r["part_no"])
+        states = evaluate_plan(
+            [Part(r["promised_date"], float(r["promised_amount"])) for r in parts], parts[0]["made_on"],
+            payments.get(parts[0]["account_id"], []), as_of,
+        )
+        for r, st in zip(parts, states):
+            if r["resolution"] is not None or st.resolution is None:
+                continue
+            kept = {"kept": True, "broken": False}.get(st.resolution)
+            conn.execute(
+                "update promises set resolution = %s, kept = %s, resolved_on = %s where id = %s and resolution is null",
+                (st.resolution, kept, as_of, r["id"]),
+            )
+            resolved.append({"account_id": r["account_id"], "plan_id": plan_id, "part_no": r["part_no"],
+                             "resolution": st.resolution, "kept": kept})
+    for r in resolved:
+        if r["resolution"] == "broken":
+            logger.info("promise %s part %s on %s broken (not paid by its date)", r["plan_id"], r["part_no"], r["account_id"])
+    return resolved
 
 
 def resolve_matured_promises() -> list[dict]:
-    """Evaluates every promise-to-pay whose evaluation window has passed
-    (promised_date + PROMISE_TOLERANCE_DAYS is before today) and still has
-    kept=null, against real payment_history, and writes the real verdict.
+    """The daily pass's call: resolve_promises() for every account, as of today. Rows carry `kept` (True/False/None
+    for void) for callers that react to newly broken promises."""
+    return resolve_promises()
 
-    Found live (this codebase's own README names it explicitly, under
-    "Known gaps"): promises.kept was only ever written once, by
-    scripts/seed_accounts.py at seed time -- no code path anywhere in this
-    app ever evaluated a promise made after that and flipped it true/false.
-    That silently froze Account.broken_promise_count() (used by ops/
-    flags.py's broken_promises flag and the mandatory-restructuring-
-    escalation policy) at whatever the seed data happened to show,
-    regardless of what actually happened afterward. Called from outbound/
-    run.py's daily pass -- this is now a real, live evaluation, not a
-    one-time seed artifact.
 
-    A promise counts as kept if a real payment for at least the promised
-    amount landed on or after it was made and on or before the tolerance
-    deadline -- a single matching payment_history row, not a sum across
-    several partial payments (this project's existing "simple, explainable
-    rule over black-box scoring" style -- see SETTLEMENT_DISCOUNT_PCT's own
-    comment in policy.py for the same tradeoff made elsewhere). Returns
-    every {id, account_id, kept} row this call just resolved, so callers
-    (run.py) can react to newly-broken promises without a second query."""
-    rows = get_connection().execute(
-        """
-        update promises p
-        set kept = exists (
-            select 1 from payment_history ph
-            where ph.account_id = p.account_id
-              and ph.payment_date >= p.made_on
-              and ph.payment_date <= p.promised_date + %(tolerance)s
-              and ph.amount >= p.promised_amount
-        )
-        where p.kept is null
-          and p.promised_date + %(tolerance)s < %(today)s
-        returning p.id, p.account_id, p.kept
-        """,
-        {"tolerance": PROMISE_TOLERANCE_DAYS, "today": current_date()},
-    ).fetchall()
-    return [dict(r) for r in rows]
+def log_promise_read_back(account_id: str, terms: str) -> None:
+    """Records that the assistant read these exact terms back to the borrower (tools/account_tools.py
+    log_promise_to_pay): a promise from chat is logged only after its terms were read back and the borrower said yes."""
+    log_event(account_id, "promise_read_back", {"terms": terms})
+
+
+def promise_was_read_back(account_id: str, terms: str, within_minutes: int = 30) -> bool:
+    """Whether these exact terms were read back to this borrower in the last `within_minutes`."""
+    row = get_connection().execute(
+        "select 1 from events where account_id = %s and event_type = 'promise_read_back' and details->>'terms' = %s "
+        "and created_at > now() - make_interval(mins => %s) limit 1",
+        (account_id, terms, within_minutes),
+    ).fetchone()
+    return row is not None
 
 
 def open_dispute(account_id: str, reason: str, kind: str = cases.DISPUTE) -> dict:
@@ -1047,7 +1114,10 @@ def _record_payment_in(
         "update accounts set principal_amount = %s, emi_amount = %s, months_remaining = %s, emi_due_date = %s, pending_emi_credit = %s, updated_at = now() where account_id = %s",
         (new_principal, new_emi_amount, new_months_remaining, next_due_date, new_credit, account_id),
     )
+    # A payment can keep a promised part: judged now, on the same transaction, so the borrower sees it at once.
+    promises_resolved = resolve_promises(current_date(), account_id, ex=conn)
     return {
+        "promises_resolved": promises_resolved,
         "account_id": account_id,
         "amount": amount,
         "payment_date": payment_date.isoformat(),

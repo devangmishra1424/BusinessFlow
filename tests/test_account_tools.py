@@ -5,7 +5,7 @@ from the canonical seed data, not whatever a previous test left behind.
 """
 
 import os
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pytest
 
@@ -95,27 +95,77 @@ def test_get_payment_status_raises_on_unknown_account(reseed_accounts):
         get_payment_status(account_id="BF-9999")
 
 
-def test_log_promise_to_pay_persists_a_real_row(reseed_accounts):
+def _promise_confirmed(**terms):
+    """The chat flow: the terms are read back first, then recorded on the borrower's yes."""
+    first = log_promise_to_pay(**terms)
+    assert first["logged"] is False and first["read_back"]
+    return log_promise_to_pay(**terms, borrower_confirmed=True)
+
+
+def test_log_promise_to_pay_reads_the_terms_back_before_recording_anything(reseed_accounts):
     result = log_promise_to_pay(account_id="BF-1001", promised_date=_FUTURE_PROMISE_DATE, promised_amount=12500)
 
-    assert result == {
-        "account_id": "BF-1001",
-        "promised_date": _FUTURE_PROMISE_DATE,
-        "promised_amount": 12500.0,
-        "tolerance_days": 2,
-        "logged": True,
-        "already_logged": False,
-    }
+    assert result["logged"] is False
+    assert result["read_back"].startswith("₹12,500 by ")
+    assert store.get_account_or_raise("BF-1001").promises == []
+
+
+def test_a_confirmation_without_a_read_back_is_not_recorded(reseed_accounts):
+    # borrower_confirmed=True on the first call is not enough: the terms were never read back to them.
+    result = log_promise_to_pay(account_id="BF-1001", promised_date=_FUTURE_PROMISE_DATE, promised_amount=12500,
+                                borrower_confirmed=True)
+
+    assert result["logged"] is False
+    assert store.get_account_or_raise("BF-1001").promises == []
+
+
+def test_confirming_different_terms_from_the_ones_read_back_is_not_recorded(reseed_accounts):
+    log_promise_to_pay(account_id="BF-1001", promised_date=_FUTURE_PROMISE_DATE, promised_amount=12500)
+    result = log_promise_to_pay(account_id="BF-1001", promised_date=_FUTURE_PROMISE_DATE, promised_amount=10000,
+                                borrower_confirmed=True)
+
+    assert result["logged"] is False and result["read_back"].startswith("₹10,000 by ")
+    assert store.get_account_or_raise("BF-1001").promises == []
+
+
+def test_log_promise_to_pay_persists_a_real_row(reseed_accounts):
+    result = _promise_confirmed(account_id="BF-1001", promised_date=_FUTURE_PROMISE_DATE, promised_amount=12500)
+
+    assert result["logged"] is True and result["already_logged"] is False and result["replaced_earlier_promise"] is False
     account = store.get_account_or_raise("BF-1001")
-    assert any(p.promised_date.isoformat() == _FUTURE_PROMISE_DATE and p.promised_amount == 12500.0 for p in account.promises)
+    [row] = account.promises
+    assert (row.promised_date.isoformat(), row.promised_amount, row.made_via) == (_FUTURE_PROMISE_DATE, 12500.0, "chat")
+    assert row.terms_text == result["terms"]
+
+
+def test_a_promise_in_parts_is_one_plan_with_each_part_recorded(reseed_accounts):
+    first_date = date.fromisoformat(_FUTURE_PROMISE_DATE)
+    second = (first_date + timedelta(days=7)).isoformat()
+    result = _promise_confirmed(account_id="BF-1001", promised_date=_FUTURE_PROMISE_DATE, promised_amount=5000,
+                                more_parts=[{"date": second, "amount": 7500}])
+
+    assert ", then ₹7,500 by " in result["terms"]
+    parts = store.get_account_or_raise("BF-1001").promises
+    assert [(p.part_no, p.parts_total, p.promised_amount, p.plan_id) for p in parts] == [
+        (1, 2, 5000.0, result["plan_id"]), (2, 2, 7500.0, result["plan_id"])]
+    view = get_payment_status("BF-1001")["promise"]
+    assert view["status"] == "on_track" and view["next_part"] == {"date": _FUTURE_PROMISE_DATE, "amount_left": 5000.0}
+
+
+def test_a_promise_with_dates_out_of_order_is_refused(reseed_accounts):
+    earlier = (date.fromisoformat(_FUTURE_PROMISE_DATE) - timedelta(days=1)).isoformat()
+    with pytest.raises(ValueError, match="must come after"):
+        log_promise_to_pay(account_id="BF-1001", promised_date=_FUTURE_PROMISE_DATE, promised_amount=5000,
+                           more_parts=[{"date": earlier, "amount": 5000}])
 
 
 def test_log_promise_to_pay_is_idempotent_against_an_identical_repeat_call(reseed_accounts):
     # A retry, or the model calling this twice in one turn, should log the
     # promise once -- not create two rows for what was meant to be one
     # real-world commitment.
-    log_promise_to_pay(account_id="BF-1001", promised_date=_FUTURE_PROMISE_DATE, promised_amount=12500)
-    result = log_promise_to_pay(account_id="BF-1001", promised_date=_FUTURE_PROMISE_DATE, promised_amount=12500)
+    _promise_confirmed(account_id="BF-1001", promised_date=_FUTURE_PROMISE_DATE, promised_amount=12500)
+    result = log_promise_to_pay(account_id="BF-1001", promised_date=_FUTURE_PROMISE_DATE, promised_amount=12500,
+                                borrower_confirmed=True)
 
     assert result["already_logged"] is True
     account = store.get_account_or_raise("BF-1001")
@@ -123,15 +173,15 @@ def test_log_promise_to_pay_is_idempotent_against_an_identical_repeat_call(resee
     assert len(matching) == 1
 
 
-def test_log_promise_to_pay_with_a_different_amount_is_a_genuinely_new_promise(reseed_accounts):
-    # Idempotency must only collapse true repeats -- a borrower revising
-    # their own promise (different amount) has to still go through.
-    log_promise_to_pay(account_id="BF-1001", promised_date=_FUTURE_PROMISE_DATE, promised_amount=12500)
-    result = log_promise_to_pay(account_id="BF-1001", promised_date=_FUTURE_PROMISE_DATE, promised_amount=8000)
+def test_a_new_promise_replaces_the_open_one_without_counting_it_broken(reseed_accounts):
+    # A borrower revising their own promise before its date renegotiated; they did not break it.
+    _promise_confirmed(account_id="BF-1001", promised_date=_FUTURE_PROMISE_DATE, promised_amount=12500)
+    result = _promise_confirmed(account_id="BF-1001", promised_date=_FUTURE_PROMISE_DATE, promised_amount=8000)
 
-    assert result["already_logged"] is False
+    assert result["already_logged"] is False and result["replaced_earlier_promise"] is True
     account = store.get_account_or_raise("BF-1001")
-    assert len(account.promises) == 2
+    assert [(p.promised_amount, p.resolution) for p in account.promises] == [(12500.0, "void"), (8000.0, None)]
+    assert account.broken_promise_count() == 0
 
 
 def test_log_promise_to_pay_raises_on_malformed_date(reseed_accounts):

@@ -207,6 +207,8 @@ class AccountSnapshotOut(BaseModel):
     risk_tier: str
     broken_promise_count: int
     pending_emi_credit: float
+    # The borrower's current (or most recent) promise, judged by its own words -- accounts/promises.py plan_view.
+    promise: dict | None = None
 
 
 class TimelineEntryOut(BaseModel):

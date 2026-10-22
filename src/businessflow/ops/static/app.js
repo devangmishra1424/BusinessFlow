@@ -218,6 +218,10 @@ const confirmPaymentClaim = (accountId, caseRef, payload) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+// How a promise was made, and each part's verdict, for the account history.
+const PROMISE_VIA_LABELS = { chat: "Made in chat, terms read back", ops: "Logged by the team", reminder_button: "From a reminder button" };
+const PROMISE_PART_LABELS = { open: "to pay", kept: "paid", broken: "missed", void: "cancelled" };
+
 const logPromise = (accountId, payload) =>
   api(`/accounts/${accountId}/promises`, {
     method: "POST",
@@ -1895,13 +1899,29 @@ function renderDetail(a, documents, conversation = []) {
           ${msgs.length ? `<details class="history-thread"><summary>${msgs.length} message${msgs.length === 1 ? "" : "s"}</summary>${msgs.map(caseMessageHtml).join("")}</details>` : ""}`,
       });
     });
-  a.promises.forEach((p) => {
-    const status = p.kept === null ? "pending" : p.kept ? "kept" : "broken";
+  // One entry per promise (a plan of one or more parts, accounts/promises.py), judged by its own words.
+  const plans = new Map();
+  a.promises.forEach((p, i) => {
+    const key = p.plan_id || `row-${i}`;
+    if (!plans.has(key)) plans.set(key, []);
+    plans.get(key).push(p);
+  });
+  plans.forEach((parts) => {
+    parts.sort((x, y) => x.part_no - y.part_no);
+    const res = parts.map((p) => p.resolution || (p.kept === null ? "open" : p.kept ? "kept" : "broken"));
+    const status = res.includes("broken") ? "broken"
+      : res.every((r) => r === "kept") ? "kept"
+      : !res.includes("open") ? "replaced" : "on track";
+    const terms = parts[0].terms_text || parts.map((p) => `${fmtInr(p.promised_amount)} by ${fmtDate(p.promised_date)}`).join(", then ");
+    const via = PROMISE_VIA_LABELS[parts[0].made_via] || "";
+    const partLines = parts.length > 1
+      ? parts.map((p, k) => `<div class="history-sub">Part ${p.part_no}: ${fmtInr(p.promised_amount)} by ${fmtDate(p.promised_date)} — ${escapeHtml(PROMISE_PART_LABELS[res[k]] || res[k])}</div>`).join("")
+      : "";
     history.push({
-      when: p.made_on,
-      tone: status,
+      when: parts[0].made_on,
+      tone: status === "kept" ? "kept" : status === "broken" ? "broken" : "pending",
       icon: status === "kept" ? "✓" : status === "broken" ? "✕" : "…",
-      html: `Promised <b>${fmtInr(p.promised_amount)}</b> by ${fmtDate(p.promised_date)} — ${status}`,
+      html: `Promised <b>${escapeHtml(terms)}</b> — ${escapeHtml(status)}${via ? `<div class="history-sub">${escapeHtml(via)}</div>` : ""}${partLines}`,
     });
   });
   a.call_log.forEach((c) =>
@@ -2082,10 +2102,16 @@ function renderDetail(a, documents, conversation = []) {
         <div class="compose-panel section-block" data-compose-panel="promise" hidden>
           <form class="upload-form" id="log-promise-form">
             <p class="inline-form-title">A promise to pay the borrower made (e.g. on a call)</p>
-            <div class="upload-row">
-              <input type="number" id="lp-amount" placeholder="Promised amount (₹)" min="0.01" step="0.01" required />
-              <input type="date" id="lp-date" required title="Date they promised to pay by" />
+            <p class="section-subtitle">Exactly what they said: each amount by its date. Every part must be paid in full by its date, or the promise is broken.</p>
+            <div id="lp-parts">
+              <div class="upload-row lp-part">
+                <input type="number" class="lp-amount" placeholder="Amount (₹)" min="0.01" step="0.01" required />
+                <input type="date" class="lp-date" required title="Date they promised to pay by" />
+              </div>
             </div>
+            <button type="button" class="btn btn-secondary" id="lp-add-part">+ Add a part</button>
+            <p class="lp-readback" id="lp-readback" hidden></p>
+            <label class="lp-confirm"><input type="checkbox" id="lp-confirmed" /> I read these terms back and the borrower confirmed them</label>
             <button type="submit" class="btn btn-primary upload-btn" id="log-promise-btn">Log a promise to pay</button>
             <p class="mini-form-error" id="log-promise-error" hidden></p>
             <p class="upload-result" id="log-promise-result" hidden></p>
@@ -2416,14 +2442,48 @@ function renderDetail(a, documents, conversation = []) {
   });
 
   const logPromiseForm = document.getElementById("log-promise-form");
+  const partsEl = document.getElementById("lp-parts");
+  const readbackEl = document.getElementById("lp-readback");
+  const readPromiseParts = () =>
+    [...partsEl.querySelectorAll(".lp-part")].map((row) => ({
+      amount: Number(row.querySelector(".lp-amount").value),
+      date: row.querySelector(".lp-date").value,
+    }));
+  // The terms as they will be recorded, to read back to the borrower before logging.
+  const updateReadback = () => {
+    const parts = readPromiseParts().filter((p) => p.amount > 0 && p.date);
+    readbackEl.hidden = !parts.length;
+    readbackEl.textContent = parts.length ? `Read back: ${parts.map((p) => `${fmtInr(p.amount)} by ${fmtDate(p.date)}`).join(", then ")}` : "";
+    document.getElementById("lp-confirmed").checked = false;
+  };
+  partsEl.addEventListener("input", updateReadback);
+  document.getElementById("lp-add-part").addEventListener("click", () => {
+    if (partsEl.querySelectorAll(".lp-part").length >= 4) {
+      toast("A promise has at most 4 parts.");
+      return;
+    }
+    partsEl.insertAdjacentHTML("beforeend", `<div class="upload-row lp-part">
+      <input type="number" class="lp-amount" placeholder="Amount (₹)" min="0.01" step="0.01" required />
+      <input type="date" class="lp-date" required title="Date they promised to pay by" />
+    </div>`);
+  });
   logPromiseForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const errorEl = document.getElementById("log-promise-error");
     errorEl.hidden = true;
-    const amount = Number(document.getElementById("lp-amount").value);
-    const promisedDate = document.getElementById("lp-date").value;
-    if (!amount || amount <= 0 || !promisedDate) {
-      errorEl.textContent = "Enter a valid amount and date.";
+    const parts = readPromiseParts();
+    if (!parts.length || parts.some((p) => !p.amount || p.amount <= 0 || !p.date)) {
+      errorEl.textContent = "Enter an amount and a date for every part.";
+      errorEl.hidden = false;
+      return;
+    }
+    if (parts.some((p, k) => k > 0 && p.date <= parts[k - 1].date)) {
+      errorEl.textContent = "Each part's date must come after the one before it.";
+      errorEl.hidden = false;
+      return;
+    }
+    if (!document.getElementById("lp-confirmed").checked) {
+      errorEl.textContent = "Read the terms back to the borrower and tick that they confirmed them.";
       errorEl.hidden = false;
       return;
     }
@@ -2431,8 +2491,13 @@ function renderDetail(a, documents, conversation = []) {
     btn.disabled = true;
     btn.textContent = "Logging…";
     try {
-      await logPromise(a.account_id, { promised_date: promisedDate, promised_amount: amount });
-      toast("Promise logged.");
+      const [first, ...rest] = parts;
+      const result = await logPromise(a.account_id, {
+        promised_date: first.date,
+        promised_amount: first.amount,
+        more_parts: rest.map((p) => ({ date: p.date, amount: p.amount })),
+      });
+      toast(result.replaced_earlier_promise ? "Promise logged. It replaces the one that was open." : "Promise logged.");
       await refreshAfterAction();
     } catch (err) {
       errorEl.textContent = err.message;
