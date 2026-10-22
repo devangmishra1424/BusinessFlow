@@ -364,6 +364,16 @@ button, input, select, textarea { font-family: inherit; }
 }
 .due-card-cta .due-card-alt:hover { text-decoration: underline; }
 .due-card .action-result { flex-basis: 100%; }
+/* The borrower's promise, part by part, under the due figure. */
+.promise-strip { flex-basis: 100%; border-top: 1px solid var(--border); padding-top: 16px; }
+.promise-parts { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 6px; }
+.promise-part { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; color: var(--text-0); font-variant-numeric: tabular-nums; }
+.promise-chip { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--accent-tint); color: var(--accent-strong); white-space: nowrap; }
+.promise-part.kept .promise-chip { background: var(--success-solid-dim); color: var(--success); }
+.promise-part.broken .promise-chip { background: var(--danger-solid-dim); color: var(--danger); }
+.promise-part.void { color: var(--text-2); text-decoration: line-through; }
+.promise-part.void .promise-chip { background: none; color: var(--text-2); }
+.promise-pay { margin-top: 12px; }
 .pay-link-btn {
   display: inline-block; background: var(--accent); color: var(--on-accent) !important; font-weight: 600; font-size: 13px;
   padding: 10px 18px; border-radius: var(--radius-md); text-decoration: none; word-break: normal !important;

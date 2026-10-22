@@ -8,7 +8,9 @@ a proactive reminder to a borrower who hasn't asked for anything, the
 other drafts a reply to an ops-initiated concern about an account's flags.
 """
 
+from businessflow.accounts import store
 from businessflow.accounts.dues import reminder_amounts
+from businessflow.accounts.promises import promise_view_for
 from businessflow.accounts.models import Account
 from businessflow.agent.client import MODEL, groq_client
 from businessflow.outbound.decide import OutboundReminder
@@ -63,7 +65,15 @@ def compose_message(account: Account, reminder: OutboundReminder, risk_profile=N
     # emi_amount, which ignored credit and the fee.
     emi, late_fee, total = reminder_amounts(account, reminder.kind)
     emi_str = f"{emi:,.0f}"
-    if reminder.kind == "heads_up":
+    if reminder.kind == "promise_due":
+        view = promise_view_for(account, store.current_date())
+        part = view["next_part"] if view else None
+        when = "today" if reminder.days == 0 else "tomorrow"
+        situation = (
+            f"They promised, in their own words: {view['terms']}. The next part, {part['amount_left']:,.0f} rupees, "
+            f"is due by {part['date']} ({when}). Remind them of their own promise, kindly; ask for nothing beyond it."
+        ) if part else "They have a promise to pay on record."
+    elif reminder.kind == "heads_up":
         situation = f"Their EMI of {emi_str} rupees is due in {reminder.days} day(s), on {account.emi_due_date.isoformat()}."
     elif reminder.kind == "due_now":
         situation = (

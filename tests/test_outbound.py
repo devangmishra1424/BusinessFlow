@@ -268,14 +268,16 @@ def test_resolve_matured_promises_marks_a_fulfilled_promise_kept(reseed_accounts
 
     today = store.current_date()
     made_on = today - timedelta(days=20)
-    promised_date = today - timedelta(days=10)  # well past promised_date + PROMISE_TOLERANCE_DAYS
+    promised_date = today - timedelta(days=10)  # already past
     store.add_promise("BF-1001", made_on, promised_date, 5_000)
-    store.record_payment("BF-1001", 5_000, payment_date=promised_date, apply_extra_to_next=False)
-
+    # The payment itself judges the promise (record_payment resolves on its own transaction), so the daily pass
+    # afterwards has nothing left to resolve for this account.
+    payment = store.record_payment("BF-1001", 5_000, payment_date=promised_date, apply_extra_to_next=False)
     resolved = store.resolve_matured_promises()
 
-    matches = [r for r in resolved if r["account_id"] == "BF-1001"]
-    assert matches and all(r["kept"] is True for r in matches)
+    assert [r["kept"] for r in payment["promises_resolved"]] == [True]
+    assert [r for r in resolved if r["account_id"] == "BF-1001"] == []
+    assert store.get_account_or_raise("BF-1001").promises[-1].kept is True
 
 
 @_pg_skip

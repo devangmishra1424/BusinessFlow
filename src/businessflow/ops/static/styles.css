@@ -995,3 +995,8 @@ a.voice-row .voice-row-value { color: var(--accent-strong); text-decoration: und
 .waive-form { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; }
 .waive-form input { flex: 1 1 160px; min-width: 0; }
 .charge-item .btn-sm, .waive-form .btn-sm { padding: 4px 10px; font-size: 12px; }
+
+/* Promise form: the terms as they will be recorded, read back before logging. */
+.lp-part + .lp-part { margin-top: 8px; }
+.lp-readback { margin: 10px 0 0; padding: 8px 12px; border-radius: 8px; background: var(--surface-2, rgba(0,0,0,0.04)); font-size: 13px; font-weight: 600; }
+.lp-confirm { display: flex; align-items: center; gap: 8px; margin: 10px 0; font-size: 13px; }

@@ -1193,8 +1193,19 @@ function renderDueCard(account) {
     left = `<div><p class="due-card-label">Due now</p><p class="due-card-amount${account.late_fee_applicable ? " overdue" : ""}">${fmtInr(account.amount_due_now)}</p><p class="due-card-sub">${escapeHtml(composition)} \u00b7 ${escapeHtml(when)}</p></div>`;
     cta = `<div class="due-card-cta"><button type="button" class="btn-primary" id="due-pay-btn">Pay ${escapeHtml(fmtInr(account.amount_due_now))}</button><button type="button" class="due-card-alt" id="due-other-btn">Pay a different amount</button></div>`;
   }
-  $card.innerHTML = `${left}${cta}<div class="action-result" id="due-result" style="flex-basis:100%" hidden></div>`;
+  $card.innerHTML = `${left}${cta}${promiseStrip(account.promise)}<div class="action-result" id="due-result" style="flex-basis:100%" hidden></div>`;
   $card.hidden = false;
+  const $promisePay = document.getElementById("promise-pay-btn");
+  if ($promisePay) {
+    $promisePay.addEventListener("click", async () => {
+      $promisePay.disabled = true;
+      try {
+        await startPayment(account.promise.next_part.amount_left, document.getElementById("due-result"));
+      } finally {
+        $promisePay.disabled = false;
+      }
+    });
+  }
   const $pay = document.getElementById("due-pay-btn");
   if ($pay) {
     $pay.addEventListener("click", async () => {
@@ -1211,6 +1222,37 @@ function renderDueCard(account) {
       $btn.scrollIntoView({ behavior: "smooth", block: "center" });
     });
   }
+}
+
+// The borrower's promise, in their own words, part by part (accounts/promises.py plan_view): shown while it runs,
+// and for two weeks after it was kept or missed so the outcome is never a surprise. A replaced promise is not shown.
+const PROMISE_PART_LABEL = { kept: "Paid", broken: "Missed", void: "Cancelled", open: "To pay" };
+function promiseStrip(promise) {
+  if (!promise || promise.status === "replaced") return "";
+  const parts = promise.parts || [];
+  const lastDate = parts.length ? parts[parts.length - 1].date : promise.made_on;
+  const daysSince = (Date.now() - new Date(`${lastDate}T00:00:00`).getTime()) / 86400000;
+  if (promise.status !== "on_track" && daysSince > 14) return "";
+  const head = {
+    on_track: "Your promise",
+    kept: "Promise kept \u2014 thank you",
+    broken: "Promise missed",
+  }[promise.status] || "Your promise";
+  const rows = parts
+    .map((p) => {
+      const partial = p.status === "open" && p.paid_toward > 0 ? ` \u00b7 ${fmtInr(p.paid_toward)} paid so far` : "";
+      return `<li class="promise-part ${p.status}"><span>${fmtInr(p.amount)} by ${fmtDate(p.date)}${partial}</span><span class="promise-chip">${PROMISE_PART_LABEL[p.status] || ""}</span></li>`;
+    })
+    .join("");
+  const note = promise.status === "broken"
+    ? "A part was not paid in full by its date, so this promise is marked missed. Talk to us in chat to agree a new one."
+    : promise.status === "on_track"
+      ? "Each part must be paid in full by its date. While this promise runs, we only remind you of it."
+      : "";
+  const next = promise.status === "on_track" && promise.next_part
+    ? `<button type="button" class="btn-cancel promise-pay" id="promise-pay-btn">Pay ${escapeHtml(fmtInr(promise.next_part.amount_left))} (next part)</button>`
+    : "";
+  return `<div class="promise-strip ${promise.status}"><p class="due-card-label">${escapeHtml(head)}</p><ul class="promise-parts">${rows}</ul>${note ? `<p class="due-card-sub">${escapeHtml(note)}</p>` : ""}${next}</div>`;
 }
 
 function renderDashboard(data) {

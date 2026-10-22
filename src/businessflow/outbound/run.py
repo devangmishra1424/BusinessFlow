@@ -21,6 +21,7 @@ from datetime import datetime, time, timezone
 
 from businessflow.accounts import store
 from businessflow.accounts.dues import reminder_amounts
+from businessflow.accounts.promises import promise_view_for
 from businessflow.accounts.escalation_kinds import BROKEN_PROMISE_PATTERN_PREFIX, CHRONIC_DELINQUENCY_REASON
 from businessflow.accounts.policy import BROKEN_PROMISES_BEFORE_MANDATORY_ESCALATION, MANDATORY_ESCALATION_DAYS_PAST_DUE
 from businessflow.outbound.compose import compose_message
@@ -68,7 +69,13 @@ def run_daily_outbound_pass(account_ids: list[str] | None = None) -> list[dict]:
         # ignored credit and the fee and sent borrowers to a pay page that
         # called the difference an "extra payment".
         _emi, _late_fee, amount_due = reminder_amounts(account, reminder.kind)
-        if _emi <= 0:
+        if reminder.kind == "promise_due":
+            # The link is for what is left of the promised part -- the figure the reminder quotes.
+            view = promise_view_for(account, store.current_date())
+            if not view or not view["next_part"]:
+                continue
+            amount_due = view["next_part"]["amount_left"]
+        elif _emi <= 0:
             # This cycle's EMI is already covered by credit from an earlier
             # extra payment -- there is nothing to remind them to pay.
             continue

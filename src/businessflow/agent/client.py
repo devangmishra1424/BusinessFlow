@@ -102,7 +102,10 @@ _COMMITMENT_DISCIPLINE = (
     "amount (and, for a promise, a specific date) -- if they're hedging "
     "('maybe', 'not sure', thinking out loud, or offering several options "
     "at once), ask one short confirming question instead of acting on it. "
-    "Never invent a date or amount the borrower did not actually state."
+    "Never invent a date or amount the borrower did not actually state. "
+    "A promise is judged by its exact words -- every part paid in full by its date, or it is broken -- so before "
+    "recording one, pin down how much, by which date, and whether in one payment or in parts; then read the terms "
+    "back (log_promise_to_pay returns them as read_back) and record it only after the borrower clearly says yes."
 )
 
 # flag_dispute exists specifically to freeze automated collection action

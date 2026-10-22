@@ -23,7 +23,7 @@ from businessflow.accounts.policy import GRACE_PERIOD_DAYS, HEADS_UP_DAYS_BEFORE
 @dataclass
 class OutboundReminder:
     account_id: str
-    kind: str  # "heads_up" | "due_now" | "follow_up"
+    kind: str  # "heads_up" | "due_now" | "follow_up" | "promise_due"
     days: int  # days until due (heads_up), or days past due (due_now/follow_up -- 0 on the due date itself)
 
 
@@ -38,6 +38,15 @@ def decide_reminder(account: Account, as_of: date | None = None) -> OutboundRemi
     # Account.days_past_due. Never remind someone who has nothing left to pay.
     if account.months_remaining <= 0:
         return None
+
+    # A promise still open replaces the routine reminders: the borrower said what they will pay and by when, so they
+    # are reminded of their own words the day before each part and on the day, not chased about the EMI in between.
+    # That includes the chronic-delinquency escalation in run.py, which rides on follow_up. A broken promise ends the
+    # pause (the plan is no longer open) and the routine reminders resume the next day.
+    open_parts = [p for p in account.open_plan() if p.is_open]
+    if open_parts:
+        days_to_part = (open_parts[0].promised_date - as_of).days
+        return OutboundReminder(account.account_id, "promise_due", days_to_part) if days_to_part in (0, 1) else None
 
     days_until_due = (account.emi_due_date - as_of).days
     if 0 < days_until_due <= HEADS_UP_DAYS_BEFORE_DUE:

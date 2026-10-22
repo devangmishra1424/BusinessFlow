@@ -53,11 +53,25 @@ class Charge:
 
 @dataclass
 class PromiseToPay:
+    """One part of a promise plan (accounts/promises.py): an amount by a date, in the borrower's own words. A one-part
+    plan is an ordinary single promise."""
     made_on: date
     promised_date: date
     promised_amount: float
-    # None until the promised_date has passed and is checked against payment_history.
+    # None while open (or void); True/False once judged against payment_history.
     kept: bool | None = None
+    id: int | None = None
+    plan_id: str | None = None
+    part_no: int = 1
+    parts_total: int = 1
+    terms_text: str | None = None
+    made_via: str | None = None
+    # 'kept' | 'broken' | 'void' (a later part of a broken plan, or replaced by a new promise); None while open.
+    resolution: str | None = None
+
+    @property
+    def is_open(self) -> bool:
+        return self.resolution is None and self.kept is None
 
 
 @dataclass
@@ -135,4 +149,15 @@ class Account:
         return max(delta, 0)
 
     def broken_promise_count(self) -> int:
-        return sum(1 for p in self.promises if p.kept is False)
+        """Broken PROMISES, not parts: a plan broken at its second part counts once. A row with no plan_id (a
+        hand-built one) is its own plan."""
+        return len({p.plan_id or f"row-{i}" for i, p in enumerate(self.promises) if p.kept is False})
+
+    def open_plan(self) -> list["PromiseToPay"]:
+        """Every part of the plan still running (at most one at a time: a new promise replaces it), in order; [] if
+        none is open."""
+        open_ids = {p.plan_id for p in self.promises if p.is_open}
+        if not open_ids:
+            return []
+        latest = max(open_ids, key=lambda pid: max(p.made_on for p in self.promises if p.plan_id == pid))
+        return sorted((p for p in self.promises if p.plan_id == latest), key=lambda p: p.part_no)

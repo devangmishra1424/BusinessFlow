@@ -39,6 +39,10 @@ from pydantic import BaseModel, Field, field_validator
 from businessflow.accounts import cases, store
 from businessflow.accounts.db import check_database, get_connection
 from businessflow.accounts.dues import amount_due_now
+from businessflow.accounts.promises import Part as PromisePart
+from businessflow.accounts.promises import terms_text as promise_terms_text
+from businessflow.accounts.promises import validate_parts as validate_promise_parts
+from businessflow.tools import validation
 from businessflow.accounts.escalation_kinds import (
     BROKEN_PROMISE_PATTERN_PREFIX,
     CALLBACK,
@@ -221,6 +225,19 @@ class PromiseOut(BaseModel):
     promised_date: date
     promised_amount: float
     kept: bool | None
+    # One part of a promise plan (accounts/promises.py): which plan, which part, the terms as confirmed, how it was
+    # made, and its verdict -- 'kept' | 'broken' | 'void', None while open.
+    plan_id: str | None = None
+    part_no: int = 1
+    parts_total: int = 1
+    terms_text: str | None = None
+    made_via: str | None = None
+    resolution: str | None = None
+
+
+class PromisePartIn(BaseModel):
+    date: date
+    amount: float = Field(gt=0)
 
 
 class DisputeOut(BaseModel):
@@ -359,6 +376,8 @@ class ResolveDisputeOut(BaseModel):
 class LogPromiseIn(BaseModel):
     promised_date: date
     promised_amount: float
+    # Later parts of the same promise, if the borrower promised in parts ("10,000 by the 25th, the rest by the 2nd").
+    more_parts: list[PromisePartIn] = Field(default_factory=list, max_length=3)
     # Defaults to today if omitted -- an operator logging a promise made
     # during a call happening right now, the common case.
     made_on: date | None = None
@@ -376,7 +395,10 @@ class LogPromiseOut(BaseModel):
     made_on: date
     promised_date: date
     promised_amount: float
-    created: bool  # False if this exact promise was already logged (see store.add_promise)
+    created: bool  # False if this exact promise was already logged (see store.add_promise_plan)
+    plan_id: str | None = None
+    terms: str | None = None
+    replaced_earlier_promise: bool = False
 
 
 class CallLogIn(BaseModel):
@@ -813,6 +835,7 @@ def get_account(account_id: str):
     # pooled connection, took 5 s on the live server (see store.py, the note above _payment_record).
     with get_connection().transaction() as conn:
         store.assess_late_fees(store.current_date(), account_id, ex=conn)
+        store.resolve_promises(store.current_date(), account_id, ex=conn)
         account = store.get_account(account_id, ex=conn)
         if account is None:
             raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
@@ -845,7 +868,9 @@ def get_account(account_id: str):
             for p in account.payment_history
         ],
         promises=[
-            PromiseOut(made_on=p.made_on, promised_date=p.promised_date, promised_amount=p.promised_amount, kept=p.kept)
+            PromiseOut(made_on=p.made_on, promised_date=p.promised_date, promised_amount=p.promised_amount, kept=p.kept,
+                       plan_id=p.plan_id, part_no=p.part_no, parts_total=p.parts_total, terms_text=p.terms_text,
+                       made_via=p.made_via, resolution=p.resolution)
             for p in account.promises
         ],
         escalations=[
@@ -1391,10 +1416,17 @@ def log_account_promise(account_id: str, body: LogPromiseIn):
     if store.get_account(account_id) is None:
         raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
     made_on = body.made_on or store.current_date()
-    created = store.add_promise(account_id, made_on, body.promised_date, body.promised_amount)
+    account = store.get_account_or_raise(account_id)
+    raw = [PromisePart(body.promised_date, body.promised_amount)] + [PromisePart(p.date, p.amount) for p in body.more_parts]
+    try:
+        parts = validate_promise_parts(raw, made_on, ceiling=validation.max_payable(account))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    result = store.add_promise_plan(account_id, parts, made_on, made_via="ops")
     return LogPromiseOut(
         account_id=account_id, made_on=made_on, promised_date=body.promised_date,
-        promised_amount=body.promised_amount, created=created,
+        promised_amount=body.promised_amount, created=not result["already_logged"], plan_id=result["plan_id"],
+        terms=promise_terms_text(parts), replaced_earlier_promise=result["replaced_plan_id"] is not None,
     )
 
 

@@ -108,11 +108,22 @@ create table promises (
     made_on          date not null,
     promised_date    date not null,
     promised_amount  numeric not null,
-    -- NULL until promised_date has passed and is checked against
-    -- payment_history; true/false once evaluated.
+    -- NULL while open (or void); true/false once judged against payment_history (accounts/promises.py).
     kept             boolean,
+    -- A promise is a plan of one or more parts in the borrower's own words (migration 2026-10-23_promise_plans.sql):
+    -- plan_id groups the parts ('P-<id of the first part>'), terms_text is what was read back and confirmed,
+    -- made_via is 'chat' | 'reminder_button' | 'ops' | 'seed', and resolution 'kept' | 'broken' | 'void' (a later part
+    -- of a broken plan, or an open part of a plan replaced by a new promise), NULL while open.
+    plan_id          text,
+    part_no          integer not null default 1,
+    parts_total      integer not null default 1,
+    terms_text       text,
+    made_via         text,
+    resolution       text check (resolution in ('kept', 'broken', 'void')),
+    resolved_on      date,
     created_at       timestamptz not null default now()
 );
+create index promises_account_open_idx on promises (account_id) where resolution is null;
 
 create table disputes (
     id               bigint primary key generated always as identity,

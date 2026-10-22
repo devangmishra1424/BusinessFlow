@@ -142,17 +142,29 @@ class ActionDeps:
 def real_deps() -> ActionDeps:
     from businessflow.accounts import store
     from businessflow.accounts.dues import amount_due_now
-    from businessflow.tools.account_tools import log_promise_to_pay
     from businessflow.tools.escalation_tools import escalate_to_human
 
     return ActionDeps(
         get_account=store.get_account,
         today=store.current_date,
         amount_due=amount_due_now,
-        log_promise=log_promise_to_pay,
+        log_promise=_promise_from_button,
         escalate=escalate_to_human,
         log_event=store.log_event,
     )
+
+
+def _promise_from_button(account_id: str, promised_date: str, amount: float) -> dict:
+    """A tapped "I'll pay in N days" button: the borrower chose these exact terms (the amount the reminder quoted, by
+    that date), so it is recorded as a one-part promise with no read-back -- the tap is the confirmation."""
+    from datetime import date as _date
+
+    from businessflow.accounts import store
+    from businessflow.accounts.promises import Part
+
+    result = store.add_promise_plan(account_id, [Part(_date.fromisoformat(promised_date), float(amount))],
+                                    made_on=store.current_date(), made_via="reminder_button")
+    return {"logged": True, "already_logged": result["already_logged"], "plan_id": result["plan_id"]}
 
 
 def run_action(chat_id: int, data: str, deps: ActionDeps | None = None) -> ActionResult | None:
