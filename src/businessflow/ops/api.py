@@ -16,6 +16,7 @@ default port 8000 -- run both side by side, they're independent apps).
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -1854,6 +1855,47 @@ def get_portfolio_health():
                "handing the borrower to a person.",
     }
     return health
+
+
+_EVAL_RESULTS_DIR = Path(__file__).resolve().parents[3] / "eval" / "results"
+# The nightly suites whose last result the Quality tab shows, with what each checks, in plain words.
+_NIGHTLY_SUITES = {
+    "red_team": "attacks on the assistant handled safely",
+    "tool_calling_benchmark": "the right action taken for a clear request",
+    "realistic_conversation_benchmark": "messy multi-turn conversations handled right",
+    "reasoning_accuracy": "replies stating the account's facts correctly",
+    "latency_benchmark": "how long a reply takes",
+}
+
+
+def _read_json(path: Path) -> dict | None:
+    """A results file, or None when it does not exist yet. A file that exists but is not valid JSON is a real fault
+    (a half-written run) and raises."""
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@app.get("/quality", dependencies=[Depends(require_api_key)])
+def get_quality():
+    """What the evals say, for ops (eval/conversation_lab.py and the nightly suites on this server's disk): the
+    conversation lab's labelled cases -- each with the policy line it is labelled from, whether it passed, and whether
+    the model's side was recorded or scripted -- any prompt variant's lab run beside it, and each nightly suite's last
+    result. Nothing here runs a model; it reads what the runs saved."""
+    labs = []
+    for path in sorted(_EVAL_RESULTS_DIR.glob("conversation_lab*.json")):
+        data = _read_json(path)
+        if data:
+            labs.append(data)
+    nightly = []
+    for name, what in _NIGHTLY_SUITES.items():
+        history = _EVAL_RESULTS_DIR / f"{name}_history.jsonl"
+        last = None
+        if history.exists():
+            lines = [line for line in history.read_text(encoding="utf-8").splitlines() if line.strip()]
+            last = json.loads(lines[-1]) if lines else None
+        nightly.append({"suite": name, "checks": what, "last_run": last})
+    return {"labs": labs, "nightly": nightly}
 
 
 @app.get("/metrics", response_model=MetricsOut, dependencies=[Depends(require_api_key)])

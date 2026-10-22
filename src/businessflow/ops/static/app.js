@@ -367,7 +367,43 @@ function setView(view) {
   document.getElementById("view-overview").hidden = view !== "overview";
   document.getElementById("view-inbox").hidden = view !== "inbox";
   document.getElementById("view-bank").hidden = view !== "bank";
+  document.getElementById("view-quality").hidden = view !== "quality";
   if (view === "bank") loadBank();
+  if (view === "quality") loadQuality();
+}
+
+/* ============================================================
+   Quality -- GET /quality (eval/conversation_lab.py + the nightly suites)
+   ============================================================ */
+async function loadQuality() {
+  const $body = document.getElementById("quality-body");
+  try {
+    const q = await api("/quality");
+    const labs = q.labs.map((lab) => {
+      const s = lab.summary;
+      const cases = lab.results
+        .map((r) => `<details class="q-case ${r.passed ? "pass" : "fail"}">
+          <summary><span class="q-dot"></span>${escapeHtml(r.case_id.replaceAll("_", " "))}<span class="q-src">${r.source}${r.stale_recording ? " · recorded under an older prompt" : ""}</span></summary>
+          <p class="q-why">${escapeHtml(r.why)}</p>
+          <p class="q-label">Labelled from: ${escapeHtml(r.label_source)}</p>
+          ${r.turns.map((t, i) => `<div class="q-turn"><b>Borrower:</b> ${escapeHtml(t.user)}<br><b>Reply:</b> ${escapeHtml(t.reply)}${t.problems.length ? `<ul class="q-problems">${t.problems.map((p) => `<li>${escapeHtml(p)}</li>`).join("")}</ul>` : ""}</div>`).join("")}
+        </details>`)
+        .join("");
+      return `<div class="q-lab">
+        <h2>Conversation lab <span class="muted">· prompt ${escapeHtml(s.prompt_version)} · ${escapeHtml(s.mode)} · ${fmtDateTime(s.ran_at)}</span></h2>
+        <p class="q-score"><b>${s.passed} of ${s.cases}</b> cases right · ${s.recorded} with the real model's recorded words, the rest scripted</p>
+        ${cases}
+      </div>`;
+    }).join("") || `<p class="empty-state">The conversation lab has not run on this server yet.</p>`;
+    const nightly = q.nightly.map((n) => {
+      const last = n.last_run;
+      const summary = last ? Object.entries(last.summary || {}).slice(0, 4).map(([k, v]) => `${escapeHtml(k.replaceAll("_", " "))}: <b>${typeof v === "number" && v <= 1 && !Number.isInteger(v) ? Math.round(v * 100) + "%" : escapeHtml(String(v))}</b>`).join(" · ") : "not run yet";
+      return `<div class="q-suite"><div><b>${escapeHtml(n.suite.replaceAll("_", " "))}</b> <span class="muted">— ${escapeHtml(n.checks)}</span></div><div class="q-suite-sum">${summary}${last ? ` <span class="muted">(${fmtDateTime(last.recorded_at)})</span>` : ""}</div></div>`;
+    }).join("");
+    $body.innerHTML = `${labs}<div class="q-nightly"><h2>Nightly suites <span class="muted">· the real model, on a copy of the data</span></h2>${nightly}</div>`;
+  } catch (err) {
+    $body.innerHTML = `<p class="mini-form-error">${escapeHtml(err.message)}</p>`;
+  }
 }
 
 /* ============================================================
@@ -589,6 +625,10 @@ function fmtFileSize(bytes) {
 
 function fmtDate(d) {
   return new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function fmtDateTime(iso) {
+  return new Date(iso).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 }
 
 function fmtShortDate(d) {

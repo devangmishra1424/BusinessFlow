@@ -1,0 +1,49 @@
+{
+  "case_id": "promise_read_back_then_recorded",
+  "source": "recorded",
+  "prompt_version": null,
+  "prompt_fingerprint": "1582f4a33a0608d2",
+  "recorded_at": "2026-10-22T16:46:49.320249+00:00",
+  "turns": [
+    [
+      {
+        "tool_calls": [
+          {
+            "name": "log_promise_to_pay",
+            "arguments": {
+              "account_id": "BF-1002",
+              "borrower_confirmed": false,
+              "promised_amount": 22000,
+              "promised_date": "{today+5}"
+            }
+          }
+        ],
+        "content": null
+      },
+      {
+        "tool_calls": [],
+        "content": "You’ve agreed to pay ₹22,000 by {date+5}. Is that correct? If so, please confirm so we can record it."
+      }
+    ],
+    [
+      {
+        "tool_calls": [
+          {
+            "name": "log_promise_to_pay",
+            "arguments": {
+              "account_id": "BF-1002",
+              "borrower_confirmed": true,
+              "promised_amount": 22000,
+              "promised_date": "{today+5}"
+            }
+          }
+        ],
+        "content": null
+      },
+      {
+        "tool_calls": [],
+        "content": "Great, your promise to pay ₹22,000 by {date+5} is now recorded. We’ll track it, and if you need any help or have questions, just let me know."
+      }
+    ]
+  ]
+}
