@@ -593,7 +593,7 @@ def _stub_outbound_run(monkeypatch, account: Account, kind: str):
     monkeypatch.setattr(run, "escalate_to_human", lambda *a, **k: None)
     monkeypatch.setattr(run, "compose_message", lambda *a, **k: "reminder text")
     monkeypatch.setattr(run, "generate_payment_link", lambda aid, amount: minted.append(amount) or {"payment_link": "http://x/pay/t"})
-    monkeypatch.setattr(run, "send_reminder", lambda aid, kind, msg, url, amount: sent.append(amount) or False)
+    monkeypatch.setattr(run, "send_reminder", lambda aid, kind, msg, url, amount, tone=None: sent.append(amount) or False)
     return run, minted, sent
 
 

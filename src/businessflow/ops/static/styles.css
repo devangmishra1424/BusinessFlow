@@ -1074,3 +1074,29 @@ a.voice-row .voice-row-value { color: var(--accent-strong); text-decoration: und
 .loan-book-keys { width: 100%; border-collapse: collapse; font-size: 13px; margin: 6px 0 10px; }
 .loan-book-keys th, .loan-book-keys td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
 .loan-book-keys code { font-size: 14px; font-weight: 700; letter-spacing: 0.06em; }
+
+/* The per-component report: verdict chips, components, chains with their time split, outcomes, evidence. */
+.q-comp-report { margin-bottom: 22px; }
+.q-comp-report h3 { font-size: 13px; margin: 14px 0 6px; color: var(--text-1); }
+.q-verdict { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+.q-chip { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: var(--surface-2); color: var(--text-1); }
+.q-chip.red { background: var(--danger-solid-dim); color: var(--danger); }
+.q-chip.amber { background: var(--warning-solid-dim); color: var(--warning); }
+.q-chip.green { background: var(--success-solid-dim); color: var(--success); }
+.q-gates { list-style: none; padding: 0; margin: 0 0 10px; font-size: 13px; display: grid; gap: 3px; }
+.q-gates .bad { color: var(--danger); font-weight: 600; }
+.q-comp { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; font-size: 13px; }
+.q-comp summary { cursor: pointer; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.q-comp.red .q-dot { background: var(--danger); }
+.q-comp.amber .q-dot { background: var(--warning); }
+.q-comp.not_enough_data .q-dot { background: var(--text-3); }
+.q-stats { color: var(--text-2); font-size: 12px; margin-left: auto; }
+.q-table { width: 100%; border-collapse: collapse; margin: 8px 0 0; font-size: 12px; }
+.q-table th, .q-table td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.q-chain { padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.q-timebar { display: flex; height: 16px; border-radius: 4px; overflow: hidden; margin: 6px 0 4px; background: var(--surface-2); }
+.q-seg { display: flex; align-items: center; justify-content: center; font-size: 10px; color: #fff; background: var(--text-3); min-width: 2px; overflow: hidden; }
+.q-llm { background: #4f46e5; } .q-tool { background: #0f766e; } .q-stt { background: #b45309; } .q-tts { background: #be185d; }
+.q-retrieval { background: #0369a1; } .q-guardrail { background: #475569; } .q-compose { background: #7c3aed; } .q-bank_match { background: #15803d; }
+.q-outcomes { margin: 0; padding-left: 18px; font-size: 13px; display: grid; gap: 4px; }
+.q-evidence { font-size: 12px; margin-top: 8px; }

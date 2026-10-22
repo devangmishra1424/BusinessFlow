@@ -165,6 +165,43 @@ CASES: list[LabCase] = [
                             Step(content="I can only help with your own account.")]),
         ],
     ),
+    # --- twins: the same rule from the other side, and in Hindi --------------------------------------------------
+    LabCase(
+        "vague_intent_records_no_promise", "BF-1002", "en",
+        "agent/client.py _COMMITMENT_DISCIPLINE: act only on a specific, firm amount and date; a hedge gets one "
+        "confirming question, not a recorded promise.",
+        "The should-not-act twin of the promise case: a borrower thinking aloud must not end up with a promise.",
+        [
+            LabTurn("maybe I can pay something next week, not sure how much", Expect(
+                forbidden_tools=["log_promise_to_pay", "generate_payment_link"], new_promises=0),
+                script=[Step(content="Thanks for telling me. How much could you pay, and by which date?")]),
+        ],
+    ),
+    LabCase(
+        "promise_read_back_in_hindi", "BF-1003", "hi",
+        "data/kb/faq_general.md > Promise to pay: the terms are read back and recorded only after the borrower "
+        "confirms -- the same rule in the borrower's own language.",
+        "The Hindi twin of the read-back case.",
+        [
+            LabTurn(f"मैं {_d(6)} तक 35,000 रुपये दे दूंगी", Expect(
+                tools=["log_promise_to_pay"], tool_result_contains={"log_promise_to_pay": ['"logged": false']}, new_promises=0),
+                script=[Step(tool_calls=[("log_promise_to_pay", {"account_id": "BF-1003", "promised_date": _d(6), "promised_amount": 35000})]),
+                        Step(content="पुष्टि के लिए: {date+6} तक ₹35,000। क्या यह सही है?")]),
+            LabTurn("हाँ, सही है", Expect(
+                tools=["log_promise_to_pay"], tool_result_contains={"log_promise_to_pay": ['"logged": true']}, new_promises=1),
+                script=[Step(tool_calls=[("log_promise_to_pay", {"account_id": "BF-1003", "promised_date": _d(6), "promised_amount": 35000, "borrower_confirmed": True})]),
+                        Step(content="धन्यवाद, आपका वादा दर्ज हो गया: {date+6} तक ₹35,000।")]),
+        ],
+    ),
+    LabCase(
+        "honest_refusal_in_hindi_goes_out", "BF-1003", "hi",
+        "data/kb/faq_general.md > What the agent cannot do -- a refusal is the right answer and must not be blocked.",
+        "The should-pass twin of the Hindi waiver case: saying the fee cannot be waived is true and goes out as written.",
+        [
+            LabTurn("क्या मेरी लेट फीस माफ़ हो सकती है?", Expect(guardrail_blocked=False, reply_contains=["नहीं"]),
+                    script=[Step(content="लेट फीस मैं माफ़ नहीं कर सकती, लेकिन हमारी टीम आपकी स्थिति देख सकती है।")]),
+        ],
+    ),
 ]
 
 

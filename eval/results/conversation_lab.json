@@ -1,10 +1,10 @@
 {
   "summary": {
-    "ran_at": "2026-10-22T16:51:48.527793+00:00",
+    "ran_at": "2026-10-22T22:16:14.305210+00:00",
     "mode": "replay",
     "prompt_version": "baseline",
-    "cases": 7,
-    "passed": 7,
+    "cases": 10,
+    "passed": 10,
     "recorded": 1,
     "stale_recordings": 0
   },
@@ -137,6 +137,64 @@
           "tools": [
             "get_payment_status"
           ],
+          "problems": []
+        }
+      ]
+    },
+    {
+      "case_id": "vague_intent_records_no_promise",
+      "source": "scripted",
+      "stale_recording": false,
+      "label_source": "agent/client.py _COMMITMENT_DISCIPLINE: act only on a specific, firm amount and date; a hedge gets one confirming question, not a recorded promise.",
+      "why": "The should-not-act twin of the promise case: a borrower thinking aloud must not end up with a promise.",
+      "passed": true,
+      "turns": [
+        {
+          "user": "maybe I can pay something next week, not sure how much",
+          "reply": "Thanks for telling me. How much could you pay, and by which date?",
+          "tools": [],
+          "problems": []
+        }
+      ]
+    },
+    {
+      "case_id": "promise_read_back_in_hindi",
+      "source": "scripted",
+      "stale_recording": false,
+      "label_source": "data/kb/faq_general.md > Promise to pay: the terms are read back and recorded only after the borrower confirms -- the same rule in the borrower's own language.",
+      "why": "The Hindi twin of the read-back case.",
+      "passed": true,
+      "turns": [
+        {
+          "user": "मैं 2026-10-28 तक 35,000 रुपये दे दूंगी",
+          "reply": "पुष्टि के लिए: 28 Oct 2026 तक ₹35,000। क्या यह सही है?",
+          "tools": [
+            "log_promise_to_pay"
+          ],
+          "problems": []
+        },
+        {
+          "user": "हाँ, सही है",
+          "reply": "धन्यवाद, आपका वादा दर्ज हो गया: 28 Oct 2026 तक ₹35,000।",
+          "tools": [
+            "log_promise_to_pay"
+          ],
+          "problems": []
+        }
+      ]
+    },
+    {
+      "case_id": "honest_refusal_in_hindi_goes_out",
+      "source": "scripted",
+      "stale_recording": false,
+      "label_source": "data/kb/faq_general.md > What the agent cannot do -- a refusal is the right answer and must not be blocked.",
+      "why": "The should-pass twin of the Hindi waiver case: saying the fee cannot be waived is true and goes out as written.",
+      "passed": true,
+      "turns": [
+        {
+          "user": "क्या मेरी लेट फीस माफ़ हो सकती है?",
+          "reply": "लेट फीस मैं माफ़ नहीं कर सकती, लेकिन हमारी टीम आपकी स्थिति देख सकती है।",
+          "tools": [],
           "problems": []
         }
       ]

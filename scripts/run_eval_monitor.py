@@ -57,9 +57,12 @@ chat and request on all ten demo accounts.
 Run manually: python -m scripts.run_eval_monitor
 """
 
+import json
 import logging
+from datetime import datetime, timezone
 
 from businessflow.accounts.db import database_schema, get_connection
+from businessflow.observability import trace_report
 from businessflow.outbound.send import send_ops_alert
 from eval import conversation_lab, latency_benchmark, reasoning_accuracy, red_team, tool_calling_benchmark, voice_naturalness_benchmark
 from eval.report import RESULTS_DIR, SuiteOutcome, build_report, for_telegram
@@ -121,13 +124,21 @@ def main() -> None:
     # suite runs -- a suite's own failure would only be logged and skipped.
     get_connection().execute("select 1")
     logger.info("running nightly eval regression check on schema %r", schema)
+    started = datetime.now(timezone.utc)
     outcomes = run_all_suites()
 
     # The whole report every night, on the server and in the log; Telegram only when something needs a look.
     report = build_report(outcomes, results_dir=RESULTS_DIR)
     RESULTS_DIR.mkdir(exist_ok=True)
+    # Every turn the suites ran was traced (observability/trace.py) into this schema's events: the per-component report
+    # for tonight's runs, saved for the ops Quality tab, with its verdict at the top of the message.
+    components = trace_report.collect(since=started)
+    (RESULTS_DIR / "trace_report.json").write_text(json.dumps(components, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    report = "\n".join(["Per component, tonight's runs:", *trace_report.summary_lines(components), "", report])
     (RESULTS_DIR / "nightly_report.txt").write_text(report + "\n", encoding="utf-8")
-    needs_a_look = any(o.regressed or o.error for o in outcomes)
+    # Alert on a regression or a broken safeguard (a gate), not on a red component: the red-team suite provokes untrue
+    # replies on purpose, so "the guardrail blocked replies" is expected at night and would alert every time.
+    needs_a_look = any(o.regressed or o.error for o in outcomes) or not all(g["passed"] for g in components["gates"])
     if not needs_a_look:
         logger.info("nightly eval check: all suites held steady\n%s", report)
         return

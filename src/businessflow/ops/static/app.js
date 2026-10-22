@@ -500,6 +500,50 @@ async function initDemoReset() {
 /* ============================================================
    Quality -- GET /quality (eval/conversation_lab.py + the nightly suites)
    ============================================================ */
+// The per-component report (observability/trace_report.py): verdict weakest first, safeguards, each component and its
+// actions, each chain with where its time goes and where failures start, outcomes judged by what happened later.
+const Q_STATUS = { red: "Needs a look", amber: "Watch", green: "Healthy", not_enough_data: "Too few to judge" };
+function qPct(v) {
+  return v === null || v === undefined ? "–" : `${Math.round(v * 1000) / 10}%`;
+}
+function qSec(v) {
+  return v === null || v === undefined ? "–" : `${v < 1 ? Math.round(v * 1000) + " ms" : (Math.round(v * 10) / 10) + " s"}`;
+}
+function componentsHtml(r, title, sub) {
+  if (!r) return `<div class="q-comp-report"><h2>${escapeHtml(title)}</h2><p class="empty-state">No report yet.</p></div>`;
+  const gates = r.gates.map((g) => `<li class="${g.passed ? "ok" : "bad"}">${g.passed ? "✓" : "⛔"} ${escapeHtml(g.name)} <span class="muted">— ${escapeHtml(g.detail)}</span></li>`).join("");
+  const verdict = r.verdict.map((v) => `<span class="q-chip ${v.status}" title="${escapeHtml(v.why)}">${escapeHtml(v.component)} · ${Q_STATUS[v.status]}</span>`).join("");
+  const comps = r.components.map((c) => `<details class="q-comp ${c.status}">
+      <summary><span class="q-dot"></span><b>${escapeHtml(c.component)}</b>
+        <span class="q-stats">${c.steps} steps · ${qPct(c.failed_rate)} failing a check${c.previous_failed_rate !== null ? ` (was ${qPct(c.previous_failed_rate)})` : ""} · p50 ${qSec(c.p50_seconds)} · p90 ${qSec(c.p90_seconds)}${c.tokens_in ? ` · ${c.tokens_in.toLocaleString("en-IN")} tokens in` : ""}</span></summary>
+      ${c.checks.length ? `<table class="q-table"><tr><th>Check</th><th>Times</th><th>Share</th><th>What to do</th></tr>${c.checks.map((k) => `<tr><td>${k.critical ? "⚠ " : ""}${escapeHtml(k.means)}</td><td>${k.count}</td><td>${qPct(k.rate)}</td><td>${escapeHtml(k.action)}</td></tr>`).join("")}</table>` : `<p class="muted">Every step passed its checks.</p>`}
+      <table class="q-table"><tr><th>Action</th><th>Count</th><th>Failing</th><th>p50</th></tr>${c.actions.map((a) => `<tr><td>${escapeHtml(a.name)}</td><td>${a.count}</td><td>${qPct(a.failed_rate)}</td><td>${qSec(a.p50_seconds)}</td></tr>`).join("")}</table>
+    </details>`).join("");
+  const chains = r.chains.map((ch) => {
+    const bar = Object.entries(ch.time_share).map(([step, share]) => `<span class="q-seg q-${escapeHtml(step)}" style="flex:${share}" title="${escapeHtml(step)}: ${Math.round(share * 100)}% of the time">${share >= 0.12 ? escapeHtml(step) : ""}</span>`).join("");
+    const starts = Object.entries(ch.failures_start_at).map(([step, n]) => `${escapeHtml(step)} ${n}`).join(", ");
+    return `<div class="q-chain"><div><b>${escapeHtml(ch.kind.replaceAll("_", " "))}</b> <span class="muted">${ch.turns} turns · ${qPct(ch.success_rate)} clean · p50 ${qSec(ch.p50_seconds)} · p90 ${qSec(ch.p90_seconds)}</span></div>
+      <div class="q-timebar">${bar}</div>${starts ? `<div class="muted">Failures start at: ${starts}</div>` : ""}</div>`;
+  }).join("");
+  const o = r.outcomes || {};
+  const outcomes = [
+    o.reminders ? `Reminders: <b>${o.reminders.delivered} of ${o.reminders.sent}</b> reached the borrower on Telegram (${qPct(o.reminders.delivered_rate)})` : "",
+    o.repeats ? `Borrowers repeating themselves within 2 minutes: <b>${o.repeats.repeated} of ${o.repeats.messages}</b> messages` : "",
+    o.bank_matcher && o.bank_matcher.lines ? `Bank matcher: ${o.bank_matcher.auto_posted} posted on its own; suggestions kept by people <b>${o.bank_matcher.suggestions_kept} of ${o.bank_matcher.suggestions_decided}</b>` : "",
+    o.promises ? Object.entries(o.promises.by_channel).map(([via, p]) => `Promises made via ${escapeHtml(via)}: <b>${p.kept} kept, ${p.broken} broken</b>`).join("<br>") : "",
+  ].filter(Boolean).map((x) => `<li>${x}</li>`).join("");
+  const evidence = r.evidence.map((e) => `<li><code>#${e.id}</code> ${escapeHtml(e.kind.replaceAll("_", " "))}${e.account_id ? ` · ${escapeHtml(e.account_id)}` : ""} · ${qSec(e.seconds)} — ${e.failed.map(escapeHtml).join(", ")}${e.error ? ` · error ${escapeHtml(e.error)}` : ""}</li>`).join("");
+  return `<div class="q-comp-report">
+    <h2>${escapeHtml(title)} <span class="muted">· ${escapeHtml(sub)} · ${r.window.traces} turns${r.window.capped ? " (capped)" : ""}</span></h2>
+    <div class="q-verdict">${verdict || `<span class="muted">No AI steps recorded in this window.</span>`}</div>
+    ${gates ? `<ul class="q-gates">${gates}</ul>` : ""}
+    ${comps}
+    ${chains ? `<h3>Chains</h3>${chains}` : ""}
+    ${outcomes ? `<h3>What happened afterwards</h3><ul class="q-outcomes">${outcomes}</ul>` : ""}
+    ${evidence ? `<details class="q-evidence"><summary>Worst turns (trace ids)</summary><ul>${evidence}</ul></details>` : ""}
+  </div>`;
+}
+
 async function loadQuality() {
   const $body = document.getElementById("quality-body");
   try {
@@ -525,7 +569,11 @@ async function loadQuality() {
       const summary = last ? Object.entries(last.summary || {}).slice(0, 4).map(([k, v]) => `${escapeHtml(k.replaceAll("_", " "))}: <b>${typeof v === "number" && v <= 1 && !Number.isInteger(v) ? Math.round(v * 100) + "%" : escapeHtml(String(v))}</b>`).join(" · ") : "not run yet";
       return `<div class="q-suite"><div><b>${escapeHtml(n.suite.replaceAll("_", " "))}</b> <span class="muted">— ${escapeHtml(n.checks)}</span></div><div class="q-suite-sum">${summary}${last ? ` <span class="muted">(${fmtDateTime(last.recorded_at)})</span>` : ""}</div></div>`;
     }).join("");
-    $body.innerHTML = `${labs}<div class="q-nightly"><h2>Nightly suites <span class="muted">· the real model, on a copy of the data</span></h2>${nightly}</div>`;
+    const components = [
+      componentsHtml(q.components_live, "Every AI step, live", "real conversations, last 7 days"),
+      componentsHtml(q.components_nightly, "Every AI step, nightly", "the nightly suites' turns, on a copy of the data"),
+    ].join("");
+    $body.innerHTML = `${components}${labs}<div class="q-nightly"><h2>Nightly suites <span class="muted">· the real model, on a copy of the data</span></h2>${nightly}</div>`;
   } catch (err) {
     $body.innerHTML = `<p class="mini-form-error">${escapeHtml(err.message)}</p>`;
   }

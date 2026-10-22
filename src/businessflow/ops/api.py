@@ -2035,7 +2035,15 @@ def get_quality():
             lines = [line for line in history.read_text(encoding="utf-8").splitlines() if line.strip()]
             last = json.loads(lines[-1]) if lines else None
         nightly.append({"suite": name, "checks": what, "last_run": last})
-    return {"labs": labs, "nightly": nightly}
+    from businessflow.observability import trace_report
+
+    return {
+        "labs": labs, "nightly": nightly,
+        # Per AI component and chain (observability/trace_report.py): live, from the last 7 days of real turns, and
+        # from the last nightly run's turns.
+        "components_live": trace_report.collect(days=7),
+        "components_nightly": _read_json(_EVAL_RESULTS_DIR / "trace_report.json"),
+    }
 
 
 @app.get("/metrics", response_model=MetricsOut, dependencies=[Depends(require_api_key)])

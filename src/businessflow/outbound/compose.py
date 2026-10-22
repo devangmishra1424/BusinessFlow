@@ -16,6 +16,7 @@ from businessflow.accounts.promises import promise_view_for
 from businessflow.accounts.models import Account
 from businessflow.agent.client import MODEL, groq_client
 from businessflow.guardrail import grounding
+from businessflow.observability import trace
 from businessflow.outbound.decide import OutboundReminder
 
 logger = logging.getLogger(__name__)
@@ -109,19 +110,25 @@ def compose_message(account: Account, reminder: OutboundReminder, risk_profile=N
         language_instruction=_LANGUAGE_INSTRUCTIONS.get(account.language_preference, _LANGUAGE_INSTRUCTIONS["en"])
     )
     messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": facts}]
-    for attempt in range(2):
-        completion = groq_client().chat.completions.create(model=MODEL, temperature=0.4, messages=messages)
-        text = (completion.choices[0].message.content or "").strip()
-        problem = reminder_problem(text, allowed)
-        if problem is None:
-            return text
-        logger.warning("reminder for %s (%s) failed its check, attempt %d: %s", account.account_id, reminder.kind,
-                       attempt + 1, problem)
-        messages = [*messages, {"role": "assistant", "content": text},
-                    {"role": "user", "content": f"That draft cannot be sent: {problem}. Write it again using only the facts given."}]
-    # Twice wrong: send the plain, fixed wording instead of anything unchecked.
-    store.log_event(account.account_id, "reminder_fallback", {"kind": reminder.kind, "problem": problem})
-    return fallback_reminder(account, reminder, emi, late_fee, total, view)
+    # One trace per reminder written (observability/trace.py): how many drafts it took, and whether the fixed wording
+    # had to go out instead.
+    with trace.turn("reminder", account_id=account.account_id, reminder_kind=reminder.kind), \
+            trace.span("compose", reminder_kind=reminder.kind, language=account.language_preference) as rec:
+        for attempt in range(2):
+            rec["attempts"] = attempt + 1
+            completion = groq_client().chat.completions.create(model=MODEL, temperature=0.4, messages=messages)
+            text = (completion.choices[0].message.content or "").strip()
+            problem = reminder_problem(text, allowed)
+            if problem is None:
+                return text
+            logger.warning("reminder for %s (%s) failed its check, attempt %d: %s", account.account_id, reminder.kind,
+                           attempt + 1, problem)
+            messages = [*messages, {"role": "assistant", "content": text},
+                        {"role": "user", "content": f"That draft cannot be sent: {problem}. Write it again using only the facts given."}]
+        # Twice wrong: send the plain, fixed wording instead of anything unchecked.
+        rec["fallback"] = True
+        store.log_event(account.account_id, "reminder_fallback", {"kind": reminder.kind, "problem": problem})
+        return fallback_reminder(account, reminder, emi, late_fee, total, view)
 
 
 def reminder_problem(text: str, allowed: set[float]) -> str | None:

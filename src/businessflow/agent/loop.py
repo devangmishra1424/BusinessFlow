@@ -22,6 +22,7 @@ from businessflow.agent.client import MODEL, build_system_prompt, client, reset_
 from businessflow.guardrail import grounding
 from businessflow.guardrail.unverified_restructuring import check_unverified_restructuring_claim
 from businessflow.memory import conversation_memory
+from businessflow.observability import trace
 from businessflow.tools import mcp
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,7 @@ def _create_completion(**kwargs):
             if transient_error_attempts >= _TRANSIENT_ERROR_RETRIES:
                 raise
             transient_error_attempts += 1
+            trace.note(transient_retries=1)
             logger.warning(
                 "transient Groq error (%s) -- retrying (attempt %d of %d)",
                 type(e).__name__, transient_error_attempts, _TRANSIENT_ERROR_RETRIES,
@@ -145,6 +147,7 @@ def _create_completion(**kwargs):
             if rate_limit_waits >= _RATE_LIMIT_WAIT_ROUNDS:
                 raise
             rate_limit_waits += 1
+            trace.note(rate_limit_waits=1)
             wait_seconds = _retry_after_seconds(e)
             logger.warning(
                 "every configured Groq key is rate-limited -- waiting %.0fs for one to refill (round %d of %d)",
@@ -161,7 +164,23 @@ def _create_completion(**kwargs):
             # a real signal to investigate the model/prompt, not just retry
             # forever.
             malformed_tool_call_attempts += 1
+            trace.note(malformed_retries=1)
             logger.warning("retrying after malformed tool-call generation (attempt %d)", malformed_tool_call_attempts)
+
+
+def _complete(**kwargs):
+    """One model call as the turn loop makes it, recorded as an "llm" span (observability/trace.py): tokens, the tools
+    it chose, and the retries and waits _create_completion noted. Calls _create_completion by name, so the
+    conversation lab's replay (which swaps that function) is traced the same way."""
+    with trace.span("llm", model=kwargs.get("model"), offered_tools=bool(kwargs.get("tools"))) as rec:
+        completion = _create_completion(**kwargs)
+        message = completion.choices[0].message
+        usage = getattr(completion, "usage", None)
+        rec["tokens_in"] = getattr(usage, "prompt_tokens", None)
+        rec["tokens_out"] = getattr(usage, "completion_tokens", None)
+        rec["tool_calls"] = [c.function.name for c in message.tool_calls or []]
+        rec["reply_chars"] = len(message.content or "")
+        return completion
 
 
 async def _tool_specs() -> list[dict]:
@@ -196,6 +215,32 @@ async def _account_scoped_tools() -> frozenset[str]:
 
 @langfuse.observe(name="tool_call", as_type="tool")
 async def _execute_tool_call(tool_call, verified_account_id: str | None = None, anonymous: bool = False) -> str:
+    """Runs one tool call (_run_tool_call) as a "tool" span: its outcome (ok, error, or blocked -- another account, or an
+    unverified chat) and, for the tools whose result decides what happens next, the fact that matters (did a promise get
+    logged, how many passages a policy search returned). Passages are kept for this turn's checks, not saved."""
+    with trace.span("tool", tool=tool_call.function.name) as rec:
+        result_json = await _run_tool_call(tool_call, verified_account_id, anonymous)
+        try:
+            result = json.loads(result_json)
+        except json.JSONDecodeError:
+            result = None
+        if isinstance(result, dict) and "error" in result:
+            error = str(result["error"])
+            rec["outcome"] = "blocked" if "not verified" in error else "error"
+        else:
+            rec["outcome"] = "ok"
+        if isinstance(result, dict) and rec["outcome"] == "ok":
+            if tool_call.function.name == "check_policy":
+                passages = result.get("results") or []
+                rec["passages"] = len(passages)
+                for r in passages:
+                    trace.keep("retrieved_texts", r.get("text") or "", append=True)
+            elif tool_call.function.name == "log_promise_to_pay":
+                rec["logged"] = bool(result.get("logged"))
+        return result_json
+
+
+async def _run_tool_call(tool_call, verified_account_id: str | None = None, anonymous: bool = False) -> str:
     tool_name = tool_call.function.name
     try:
         arguments = json.loads(tool_call.function.arguments)
@@ -347,9 +392,13 @@ def _finalize_reply(conversation: list[dict], verified_account_id: str | None) -
         system_prompt = next((m.get("content") or "" for m in conversation if m.get("role") == "system"), "")
         failure = grounding.check_prompt_leak(reply_text, system_prompt)
 
+    trace.keep("reply", reply_text)
+    with trace.span("guardrail", blocked=bool(failure), check=type(failure).__name__ if failure else None):
+        pass
     if not failure:
         return conversation, reply_text
 
+    trace.keep("guardrail_blocked", True)
     logger.warning("guardrail: blocked a reply -- %s", failure.describe())
     store.log_event(verified_account_id, "guardrail_failed", {"reply": reply_text, "reason": failure.describe()})
     if verified_account_id:
@@ -380,12 +429,19 @@ async def _run_turn_async(
     expand_query found (see README.md's "Status and known gaps"
     section). Left unset for that reason; kept as an opt-in parameter
     rather than removed, same as expand_query."""
+    with trace.span("agent", verified=verified_account_id is not None, anonymous=anonymous):
+        return await _run_turn_rounds(conversation, verified_account_id, reasoning_effort, anonymous)
+
+
+async def _run_turn_rounds(
+    conversation: list[dict], verified_account_id: str | None, reasoning_effort: str | None, anonymous: bool,
+) -> tuple[list[dict], str]:
     conversation = _trim_to_recent_turns(conversation, _MAX_CONVERSATION_TURNS)
     tools = await _tool_specs()
     reasoning_kwargs = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
 
     for _ in range(MAX_TOOL_ROUNDS):
-        completion = _create_completion(model=MODEL, messages=conversation, tools=tools, **reasoning_kwargs)
+        completion = _complete(model=MODEL, messages=conversation, tools=tools, **reasoning_kwargs)
         message = completion.choices[0].message
         conversation.append(message.model_dump(exclude_none=True))
 
@@ -409,7 +465,8 @@ async def _run_turn_async(
         "role": "user",
         "content": "Please give your final answer now, without calling any more tools.",
     })
-    completion = _create_completion(model=MODEL, messages=conversation, **reasoning_kwargs)
+    trace.note(hit_round_cap=True)
+    completion = _complete(model=MODEL, messages=conversation, **reasoning_kwargs)
     final_text = completion.choices[0].message.content
     conversation.append({"role": "assistant", "content": final_text})
     return _finalize_reply(conversation, verified_account_id)
@@ -501,9 +558,14 @@ def run_turn(
     anonymous=True is for a chat that has NOT verified a borrower yet: tools that act on an account are refused (see
     _execute_tool_call). It is a separate flag, not "verified_account_id is None", because None has always meant
     "enforce nothing" for the evals and tests that call this directly."""
-    return _get_sync_loop().run_until_complete(
-        _run_turn_async(conversation, verified_account_id, reasoning_effort, anonymous)
-    )
+    # One trace per turn (observability/trace.py): joins the one a channel opened (a voice turn's speech-to-text and
+    # text-to-speech belong to it), or opens its own -- so evals that call run_turn directly are traced too.
+    with trace.turn("chat_turn", account_id=verified_account_id):
+        last_user = next((m.get("content") for m in reversed(conversation) if m.get("role") == "user"), None)
+        trace.keep("user_text", last_user if isinstance(last_user, str) else None)
+        return _get_sync_loop().run_until_complete(
+            _run_turn_async(conversation, verified_account_id, reasoning_effort, anonymous)
+        )
 
 
 def start_conversation_with_recap(language: str = "en", account_id: str | None = None) -> list[dict]:

@@ -223,6 +223,21 @@ gives the same result every time.
 The ops **Quality** tab shows the lab, case by case with its label, and each
 nightly suite's last result.
 
+**Every AI step traced and graded, with no model.** Each turn is one trace
+(`observability/trace.py`), saved as one row and kept for 30 days. Its steps are
+speech-to-text, every model call, every tool, retrieval, the guardrail,
+text-to-speech, the reminder writer and the bank matcher. Each step records its
+timing and a few numbers: Whisper's own confidence, tokens, the retrieval margin,
+and audio length. The borrower's words are never saved in a trace.
+`observability/checks.py` grades each step with 22 plain rules, and each rule says
+what it means and what to do. `observability/trace_report.py` turns the traces
+into the quality report on the ops Quality tab and in the nightly message:
+- a verdict per component, weakest first, with "too few to judge" rather than a false green;
+- each component's actions with p50/p90 times;
+- each chain, with where its time goes and the step where failures start;
+- two safeguard gates (every reply checked; no promise from chat without a read-back);
+- outcomes judged later by what actually happened: reminders delivered and paid within 3 days by tone, borrowers repeating themselves, bank suggestions people kept, promises kept by channel.
+
 **Bring a real loan book; reset the demo.**
 - **Loan book**: ops import a loan book as CSV (`ops/loan_book.py`). Columns are matched by name, Indian phone and date formats are read, and every row is checked the way the New account form checks one.
 - Nothing is opened unless every row is right. A loan whose reference is already here is skipped on a second import, never opened twice.

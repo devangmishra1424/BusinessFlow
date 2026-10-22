@@ -104,7 +104,8 @@ async def _deliver_and_log(
 
 
 def send_reminder(
-    account_id: str, kind: str, message: str, payment_url: str | None = None, payment_amount: float | None = None
+    account_id: str, kind: str, message: str, payment_url: str | None = None, payment_amount: float | None = None,
+    tone: str | None = None,
 ) -> bool:
     """Called from outbound/run.py's daily pass. Returns True if the
     borrower was actually reached over Telegram (see module docstring).
@@ -115,7 +116,9 @@ def send_reminder(
     channels/reminder_actions.py (promise to pay, talk to a person,
     dispute), handled in telegram_bot.on_callback_query."""
     return asyncio.run(
-        _deliver_and_log(account_id, message, "reminder_sent", {"kind": kind}, payment_url, payment_amount, with_actions=True)
+        # tone: the risk engine's choice, so reminders can be judged by whether payment followed (trace_report.py)
+        _deliver_and_log(account_id, message, "reminder_sent", {"kind": kind, "tone": tone}, payment_url, payment_amount,
+                         with_actions=True)
     )
 
 
