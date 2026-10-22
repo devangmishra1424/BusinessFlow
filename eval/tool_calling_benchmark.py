@@ -36,7 +36,10 @@ from eval.tool_scoring import (
 )
 from scripts.seed_accounts import main as _reseed_demo_accounts
 
-_RESULTS_DIR = Path(__file__).resolve().parent / "results"
+# Runs write to results/live/ (git-ignored): the server's nightly run rewriting a committed results file left its checkout
+# dirty, and the next deploy's git pull refused to merge (found 2026-10-23). The committed files stay as published
+# results; readers (eval/report.py, the ops Quality tab) prefer live/.
+_RESULTS_DIR = Path(__file__).resolve().parent / "results" / "live"
 
 
 @dataclass
@@ -187,7 +190,7 @@ def main():
     previous = record_run_history("tool_calling_benchmark", summary, _RESULTS_DIR)
     summary["regressed_metrics"] = print_regression_delta(previous, summary, metrics=("precision", "recall", "scenario_success_rate"))
 
-    _RESULTS_DIR.mkdir(exist_ok=True)
+    _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out_path = _RESULTS_DIR / "tool_calling_benchmark.json"
     out_path.write_text(json.dumps({"summary": summary, "results": results}, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\nsaved to {out_path}")

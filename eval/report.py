@@ -80,8 +80,10 @@ def read_results(name: str, results_dir: Path = RESULTS_DIR) -> list[dict]:
 
 
 def read_history(name: str, results_dir: Path = RESULTS_DIR) -> list[dict]:
-    """Every recorded run's summary, oldest first (the run just finished is the last one)."""
-    path = results_dir / f"{name}_history.jsonl"
+    """Every recorded run's summary, oldest first (the run just finished is the last one). From live/ (where runs
+    write, git-ignored) when there, else the committed copy."""
+    live = results_dir / "live" / f"{name}_history.jsonl"
+    path = live if live.exists() else results_dir / f"{name}_history.jsonl"
     if not path.exists():
         return []
     return [json.loads(line)["summary"] for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
