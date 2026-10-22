@@ -133,7 +133,8 @@ def main() -> None:
     # Every turn the suites ran was traced (observability/trace.py) into this schema's events: the per-component report
     # for tonight's runs, saved for the ops Quality tab, with its verdict at the top of the message.
     components = trace_report.collect(since=started)
-    (RESULTS_DIR / "trace_report.json").write_text(json.dumps(components, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    (RESULTS_DIR / "live").mkdir(exist_ok=True)
+    (RESULTS_DIR / "live" / "trace_report.json").write_text(json.dumps(components, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
     report = "\n".join(["Per component, tonight's runs:", *trace_report.summary_lines(components), "", report])
     (RESULTS_DIR / "nightly_report.txt").write_text(report + "\n", encoding="utf-8")
     # Alert on a regression or a broken safeguard (a gate), not on a red component: the red-team suite provokes untrue

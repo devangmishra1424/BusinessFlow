@@ -69,3 +69,5 @@ seed_c.log
 .bench_old/
 eval/results/tts_benchmark_audio/
 kaggle/tts-score-kernel/dataset/
+# Written by runs on a server (the nightly, the lab); never committed -- a tracked file rewritten there blocks the deploy's pull.
+eval/results/live/
