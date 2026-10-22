@@ -101,9 +101,11 @@ async def _deliver_and_log(
     delivered = False
     if account and account.telegram_chat_id:
         actions = action_rows(account_id, account.language_preference) if with_actions else None
-        delivered = await _send_telegram_message(
-            account.telegram_chat_id, telegram_text or message, payment_url, payment_amount, actions
-        )
+        text = telegram_text or message
+        # A chat holding several loans (channels/telegram_bot.py /loans) has to be told which one this is about.
+        if len(store.get_accounts_by_telegram_chat_id(account.telegram_chat_id)) > 1:
+            text = f"[{account_id} · {account.business_name}]\n{text}"
+        delivered = await _send_telegram_message(account.telegram_chat_id, text, payment_url, payment_amount, actions)
 
     store.log_event(account_id, event_type, {**extra_details, "message": message, "delivered_via_telegram": delivered})
     return delivered

@@ -891,24 +891,39 @@ def set_telegram_chat_id(account_id: str, chat_id: int) -> dict:
     channels/telegram_bot.py's handle_incoming_message. Last-verified-
     chat-wins by design (see the column's comment in schema.sql).
 
-    One chat speaks for one account: a chat that verifies a second account stops being linked to the first. Found
-    reading this (2026-10-23): it used to stay on both, and the bot then resumed whichever row the database returned
-    first. Returns {"previous_chat_id": the chat this account was linked to before, if a different one (it no longer
-    gets this account's messages -- the caller tells it), "unlinked_accounts": accounts this chat was linked to before}."""
+    One chat can hold several loans (a shop owner with two loans uses one Telegram): verifying another account adds it
+    to the chat, and telegram_linked_at marks it the chat's active loan (touch_telegram_active when the borrower
+    switches). An account has one chat: verified from a new chat, it leaves the old one. Returns {"previous_chat_id":
+    the chat it was linked to before, if a different one (it no longer gets this loan's messages -- the caller tells
+    it), "loans_in_chat": every account now linked to this chat, active first}."""
     with get_connection().transaction() as tx:
         row = tx.execute("select telegram_chat_id from accounts where account_id = %s for update", (account_id,)).fetchone()
         previous = row["telegram_chat_id"] if row else None
-        others = tx.execute(
-            "update accounts set telegram_chat_id = null, updated_at = now() where telegram_chat_id = %s "
-            "and account_id <> %s returning account_id",
-            (chat_id, account_id),
-        ).fetchall()
         tx.execute(
-            "update accounts set telegram_chat_id = %s, updated_at = now() where account_id = %s",
+            "update accounts set telegram_chat_id = %s, telegram_linked_at = now(), updated_at = now() where account_id = %s",
             (chat_id, account_id),
         )
     return {"previous_chat_id": previous if previous not in (None, chat_id) else None,
-            "unlinked_accounts": [r["account_id"] for r in others]}
+            "loans_in_chat": [a.account_id for a in get_accounts_by_telegram_chat_id(chat_id)]}
+
+
+def touch_telegram_active(account_id: str, chat_id: int) -> bool:
+    """Makes a loan already linked to this chat its active one (the borrower switched with /loans), so a restart resumes
+    it. False if the account is not linked to this chat -- switching never links anything."""
+    row = get_connection().execute(
+        "update accounts set telegram_linked_at = now() where account_id = %s and telegram_chat_id = %s returning 1",
+        (account_id, chat_id),
+    ).fetchone()
+    return row is not None
+
+
+def get_accounts_by_telegram_chat_id(chat_id: int) -> list[Account]:
+    """Every loan linked to this chat, the active one (most recently verified or switched to) first."""
+    rows = get_connection().execute(
+        "select * from accounts where telegram_chat_id = %s order by telegram_linked_at desc nulls last, account_id",
+        (chat_id,),
+    ).fetchall()
+    return [_row_to_account(r) for r in rows]
 
 
 def unlink_telegram(account_id: str) -> int | None:
@@ -937,8 +952,8 @@ def get_account_by_telegram_chat_id(chat_id: int) -> Account | None:
     whatever chat_id it currently holds with no further re-verification --
     this just extends that same, already-accepted trust to resuming a
     text conversation instead of only outbound pushes."""
-    row = get_connection().execute("select * from accounts where telegram_chat_id = %s", (chat_id,)).fetchone()
-    return _row_to_account(row) if row else None
+    loans = get_accounts_by_telegram_chat_id(chat_id)
+    return loans[0] if loans else None  # the active loan, when the chat holds several
 
 
 # ---------------------------------------------------------------------------------------------------------------------

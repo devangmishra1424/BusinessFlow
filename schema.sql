@@ -51,6 +51,9 @@ create table accounts (
     -- The lender's own loan reference, for a loan imported from their loan book (ops/loan_book.py); a second import of
     -- the same book skips it. Migration 2026-10-26_external_ref.sql.
     external_ref         text unique,
+    -- When this account was last verified from, or switched to in, its Telegram chat: a chat can hold several loans,
+    -- and the most recent is the one it resumes (channels/telegram_bot.py /loans). Migration 2026-10-27.
+    telegram_linked_at   timestamptz,
 
     -- The Telegram chat_id this account last verified from (see
     -- channels/telegram_bot.py's handle_incoming_message), so a decision
