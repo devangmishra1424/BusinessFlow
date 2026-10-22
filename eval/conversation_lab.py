@@ -36,6 +36,9 @@ from pathlib import Path
 
 CASSETTE_DIR = Path(__file__).resolve().parent / "cassettes"
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
+# Where runs write: git-ignored. The server's nightly run writes here too; a run that rewrote a tracked file left the
+# server's checkout dirty, and the next deploy's `git pull` refused to overwrite it (found 2026-10-23: deploy failed).
+LIVE_RESULTS_DIR = RESULTS_DIR / "live"
 _DATE_TOKEN = re.compile(r"\{today([+-]\d+)?\}")
 _ISO_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 # \s, not a space: models write dates with no-break spaces ("27 Oct 2026" with U+202F).
@@ -427,9 +430,9 @@ def run_lab(record: bool = False, only: str | None = None, prompt_version: str |
     }
     out = {"summary": summary, "results": results}
     if not only:
-        RESULTS_DIR.mkdir(exist_ok=True)
+        LIVE_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
         name = "conversation_lab" + (f"_{prompt_version}" if prompt_version else "")
-        (RESULTS_DIR / f"{name}.json").write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
+        (LIVE_RESULTS_DIR / f"{name}.json").write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
     return out
 
 

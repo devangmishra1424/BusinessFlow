@@ -2022,11 +2022,10 @@ def get_quality():
     conversation lab's labelled cases -- each with the policy line it is labelled from, whether it passed, and whether
     the model's side was recorded or scripted -- any prompt variant's lab run beside it, and each nightly suite's last
     result. Nothing here runs a model; it reads what the runs saved."""
-    labs = []
-    for path in sorted(_EVAL_RESULTS_DIR.glob("conversation_lab*.json")):
-        data = _read_json(path)
-        if data:
-            labs.append(data)
+    # A run on this server writes to live/ (git-ignored); the committed copy is shown only until one has.
+    live_dir = _EVAL_RESULTS_DIR / "live"
+    lab_paths = sorted(live_dir.glob("conversation_lab*.json")) or sorted(_EVAL_RESULTS_DIR.glob("conversation_lab*.json"))
+    labs = [data for data in (_read_json(p) for p in lab_paths) if data]
     nightly = []
     for name, what in _NIGHTLY_SUITES.items():
         history = _EVAL_RESULTS_DIR / f"{name}_history.jsonl"
@@ -2042,7 +2041,7 @@ def get_quality():
         # Per AI component and chain (observability/trace_report.py): live, from the last 7 days of real turns, and
         # from the last nightly run's turns.
         "components_live": trace_report.collect(days=7),
-        "components_nightly": _read_json(_EVAL_RESULTS_DIR / "trace_report.json"),
+        "components_nightly": _read_json(live_dir / "trace_report.json"),
     }
 
 

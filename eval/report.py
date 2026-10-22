@@ -70,7 +70,10 @@ def _clip(text: str, limit: int = _MAX_REASON_CHARS) -> str:
 
 
 def read_results(name: str, results_dir: Path = RESULTS_DIR) -> list[dict]:
-    path = results_dir / f"{name}.json"
+    """A suite's per-case results: from live/ (where runs on a server write, git-ignored) when there, else the
+    committed copy."""
+    live = results_dir / "live" / f"{name}.json"
+    path = live if live.exists() else results_dir / f"{name}.json"
     if not path.exists():
         return []
     return json.loads(path.read_text(encoding="utf-8")).get("results") or []
