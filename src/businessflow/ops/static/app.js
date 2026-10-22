@@ -2387,6 +2387,9 @@ function renderDetail(a, documents, conversation = []) {
         <span class="badge">${escapeHtml(a.loan_type)}</span>
         <span class="badge">${LANGUAGE_LABELS[a.language_preference] || a.language_preference}</span>
         <a class="badge badge-link" href="tel:${escapeHtml(a.phone_number)}">${escapeHtml(a.phone_number)}</a>
+${a.telegram_linked
+          ? `<span class="badge risk-low">Telegram linked</span><button type="button" class="badge badge-edit-btn" id="unlink-telegram-btn" title="Stop sending to this chat; it must verify again">Unlink</button>`
+          : `<span class="badge" title="Reminders and decisions are logged but not delivered until the borrower links Telegram (Reset key gives a fresh invite link)">Not on Telegram</span>`}
         <button type="button" class="badge badge-edit-btn" id="edit-account-btn" title="Edit phone, language, or onboarding risk rating">✎ Edit</button>
       </div>
       ${riskWhyHtml(a)}
@@ -2971,6 +2974,21 @@ function renderDetail(a, documents, conversation = []) {
 
   document.getElementById("call-log-dismiss-btn").addEventListener("click", refreshAfterAction);
 
+  const unlinkBtn = document.getElementById("unlink-telegram-btn");
+  if (unlinkBtn) {
+    unlinkBtn.addEventListener("click", async () => {
+      if (!window.confirm(`Unlink ${a.account_id} from its Telegram chat? Nothing more is sent there until the borrower verifies again.`)) return;
+      unlinkBtn.disabled = true;
+      try {
+        const r = await api(`/accounts/${a.account_id}/telegram/unlink`, { method: "POST" });
+        toast(r.chat_told ? "Unlinked -- the chat was told." : "Unlinked.");
+        await refreshAfterAction();
+      } catch (err) {
+        toast(err.message, true);
+        unlinkBtn.disabled = false;
+      }
+    });
+  }
   const editAccountBtn = document.getElementById("edit-account-btn");
   const editAccountForm = document.getElementById("edit-account-form");
   editAccountBtn.addEventListener("click", () => {

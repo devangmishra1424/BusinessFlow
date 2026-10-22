@@ -79,6 +79,12 @@ async def _send_telegram_message(
         return False
 
 
+async def notify_telegram_chat(chat_id: int, text: str) -> bool:
+    """A plain message to one chat, not about any one case (e.g. "this account is now linked elsewhere"). True if
+    Telegram accepted it."""
+    return await _send_telegram_message(chat_id, text)
+
+
 async def _deliver_and_log(
     account_id: str,
     message: str,

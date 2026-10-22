@@ -80,6 +80,7 @@ from businessflow.channels.credentials import looks_like_credentials, parse_cred
 from businessflow.channels.reminder_actions import run_action as run_reminder_action
 from businessflow.markup import markdown_to_telegram_html, strip_markdown
 from businessflow.observability import trace
+from businessflow.outbound.send import notify_telegram_chat
 from businessflow.tools.account_tools import flag_dispute, get_payment_history, get_payment_status
 from businessflow.tools.escalation_tools import escalate_to_human, request_closure_certificate
 from businessflow.tools.payment_tools import generate_payment_link
@@ -140,6 +141,22 @@ def _get_session_lock(chat_id: int) -> asyncio.Lock:
     return lock
 
 
+def _tell_previous_chat(account_id: str, previous_chat_id: int | None) -> None:
+    """The account was just verified from a new chat: the chat it was linked to stops getting its messages, so it is
+    told why (and what to do if it was not them), and its in-memory session for that account is closed. Runs in the
+    worker thread handle_incoming_message is called on, so it has its own event loop for the one send."""
+    if previous_chat_id is None:
+        return
+    store.log_event(account_id, "telegram_relinked", {"previous_chat_linked": True})
+    old = _sessions.get(previous_chat_id)
+    if old and old.get("account_id") == account_id:
+        _sessions.pop(previous_chat_id, None)
+    text = (f"Account {account_id} was just verified from a different Telegram chat, so its messages will go there "
+            "from now on. If that wasn't you, contact your lender to reset your access key.")
+    if not asyncio.run(notify_telegram_chat(previous_chat_id, text)):
+        logger.warning("could not tell chat %s that account %s moved to another chat", previous_chat_id, account_id)
+
+
 def handle_incoming_message(chat_id: int, text: str) -> str:
     """All routing logic for a plain-text turn, decoupled from
     python-telegram-bot's types so it's testable with plain (int, str)
@@ -193,7 +210,10 @@ def handle_incoming_message(chat_id: int, text: str) -> str:
             # request) can reach this borrower even after this in-memory
             # session is long gone. Last-verified-chat-wins, same as the
             # column's comment in schema.sql.
-            store.set_telegram_chat_id(account_id, chat_id)
+            link = store.set_telegram_chat_id(account_id, chat_id)
+            _tell_previous_chat(account_id, link["previous_chat_id"])
+            for other in link["unlinked_accounts"]:
+                store.log_event(other, "telegram_unlinked", {"reason": "this chat verified another account"})
             return f"Verified -- I've pulled up account {account_id}. What can I help you with?"
 
         if session is None:

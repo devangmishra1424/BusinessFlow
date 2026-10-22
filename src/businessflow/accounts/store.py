@@ -885,15 +885,43 @@ def reject_restructuring(escalation_id: str, reason: str | None) -> dict:
     return {"escalation_id": escalation_id, "account_id": row["account_id"], "reason": reason}
 
 
-def set_telegram_chat_id(account_id: str, chat_id: int) -> None:
+def set_telegram_chat_id(account_id: str, chat_id: int) -> dict:
     """Records the Telegram chat this account most recently verified
     from -- called once, right after a successful credential check in
     channels/telegram_bot.py's handle_incoming_message. Last-verified-
-    chat-wins by design (see the column's comment in schema.sql)."""
-    get_connection().execute(
-        "update accounts set telegram_chat_id = %s, updated_at = now() where account_id = %s",
-        (chat_id, account_id),
-    )
+    chat-wins by design (see the column's comment in schema.sql).
+
+    One chat speaks for one account: a chat that verifies a second account stops being linked to the first. Found
+    reading this (2026-10-23): it used to stay on both, and the bot then resumed whichever row the database returned
+    first. Returns {"previous_chat_id": the chat this account was linked to before, if a different one (it no longer
+    gets this account's messages -- the caller tells it), "unlinked_accounts": accounts this chat was linked to before}."""
+    with get_connection().transaction() as tx:
+        row = tx.execute("select telegram_chat_id from accounts where account_id = %s for update", (account_id,)).fetchone()
+        previous = row["telegram_chat_id"] if row else None
+        others = tx.execute(
+            "update accounts set telegram_chat_id = null, updated_at = now() where telegram_chat_id = %s "
+            "and account_id <> %s returning account_id",
+            (chat_id, account_id),
+        ).fetchall()
+        tx.execute(
+            "update accounts set telegram_chat_id = %s, updated_at = now() where account_id = %s",
+            (chat_id, account_id),
+        )
+    return {"previous_chat_id": previous if previous not in (None, chat_id) else None,
+            "unlinked_accounts": [r["account_id"] for r in others]}
+
+
+def unlink_telegram(account_id: str) -> int | None:
+    """Ops removes an account's Telegram link (a lost phone, a tester done testing): nothing more is pushed to that
+    chat, and it must verify with the access key again. Returns the chat that was linked, or None."""
+    row = get_connection().execute(
+        "update accounts a set telegram_chat_id = null, updated_at = now() from (select telegram_chat_id as old "
+        "from accounts where account_id = %s for update) p where a.account_id = %s returning p.old",
+        (account_id, account_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"No account found for account_id={account_id!r}")
+    return row["old"]
 
 
 def get_account_by_telegram_chat_id(chat_id: int) -> Account | None:
