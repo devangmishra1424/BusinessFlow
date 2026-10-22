@@ -675,7 +675,7 @@ function renderKpis() {
   const rate = state.metrics ? Math.round(state.metrics.escalation_rate * 100) : null;
   const toolCalls = state.metrics ? state.metrics.event_counts.tool_called || 0 : 0; // the rate's denominator
 
-  const riskCounts = { low: 0, medium: 0, high: 0 };
+  const riskCounts = { low: 0, medium: 0, high: 0, critical: 0 };
   accounts.forEach((a) => {
     if (riskCounts[a.risk_tier] !== undefined) riskCounts[a.risk_tier]++;
   });
@@ -728,8 +728,8 @@ function renderKpis() {
       // other card uses) since this is three counts, not one -- inline
       // colored spans read faster than three separate cards would for
       // something this glanceable.
-      valueHtml: `<span class="kpi-risk-mix"><span class="risk-low">${riskCounts.low}L</span><span class="risk-medium">${riskCounts.medium}M</span><span class="risk-high">${riskCounts.high}H</span></span>`,
-      sub: "low · medium · high risk",
+      valueHtml: `<span class="kpi-risk-mix"><span class="risk-low">${riskCounts.low}L</span><span class="risk-medium">${riskCounts.medium}M</span><span class="risk-high">${riskCounts.high}H</span>${riskCounts.critical ? `<span class="risk-critical">${riskCounts.critical}C</span>` : ""}</span>`,
+      sub: riskCounts.critical ? "low · medium · high · critical" : "low · medium · high risk",
       action: null,
     },
   ];
@@ -842,10 +842,67 @@ function renderFilterPills() {
 // find the worst one -- this is the actual "who do I call next" answer.
 // Defaults to urgency (not account_id) since that's the point of a
 // worklist, not a buried opt-in nobody would discover.
+// Why the account has the risk it has: each factor and its points (outbound/risk_engine.py), so the tier is never a
+// black box. Collapsed by default.
+function riskWhyHtml(a) {
+  if (!a.risk) return "";
+  const rows = a.risk.factors
+    .map((f) => `<li><span>${escapeHtml(f.label)}</span><b>${f.points > 0 ? "+" : ""}${Math.round(f.points)}</b></li>`)
+    .join("");
+  return `<details class="risk-why"><summary>Why ${escapeHtml(a.risk.tier)} risk? Score ${Math.round(a.risk.score)} of 100</summary>
+    <ul>${rows}</ul>
+    <p class="risk-why-note">25+ is medium, 50+ high, 75+ critical (or 2+ broken promises while past the grace period). The same score sets the tone of reminders.</p>
+  </details>`;
+}
+
+/* ============================================================
+   Collection health -- GET /portfolio/health (accounts/health.py)
+   ============================================================ */
+function pct(v) {
+  return v === null || v === undefined ? "–" : `${Math.round(v * 100)}%`;
+}
+
+async function loadHealth() {
+  try {
+    renderHealth(await api("/portfolio/health"));
+  } catch (err) {
+    console.warn("ops: collection health could not be loaded; the next refresh retries it", err);
+  }
+}
+
+function renderHealth(h) {
+  const total = h.dpd_buckets.reduce((s, b) => s + b.accounts, 0) || 1;
+  const bar = h.dpd_buckets
+    .map((b) => b.accounts ? `<span class="dpd-seg dpd-${b.key}" style="flex:${b.accounts}" title="${escapeHtml(b.label)}: ${b.accounts} account${b.accounts === 1 ? "" : "s"}, ${fmtInr(b.owed_now)} owed now">${b.accounts}</span>` : "")
+    .join("");
+  const legend = h.dpd_buckets
+    .map((b) => `<li><span class="dpd-key dpd-${b.key}"></span>${escapeHtml(b.label)} <b>${b.accounts}</b> <span class="muted">${fmtInr(b.owed_now)} owed</span></li>`)
+    .join("");
+  const tile = (label, m, sub) => `<div class="health-tile" title="${escapeHtml(m.how)}">
+      <div class="health-label">${escapeHtml(label)}</div>
+      <div class="health-value">${pct(m.value)}</div>
+      <div class="health-sub">${escapeHtml(sub)}</div>
+    </div>`;
+  const ce = h.collection_efficiency, pk = h.promises_kept, cr = h.cure_rate, ct = h.containment;
+  document.getElementById("health-row").innerHTML = `
+    <div class="health-buckets">
+      <div class="health-label">Days past due <span class="muted">· ${total} live account${total === 1 ? "" : "s"}</span></div>
+      <div class="dpd-bar">${bar}</div>
+      <ul class="dpd-legend">${legend}</ul>
+    </div>
+    <div class="health-tiles">
+      ${tile("Collection efficiency", ce, `${fmtInr(ce.collected)} in, ${fmtInr(ce.still_owed)} past due (30 days)`)}
+      ${tile("Promises kept", pk, pk.kept + pk.broken ? `${pk.kept} kept, ${pk.broken} broken (90 days)` : "no promise settled in 90 days")}
+      ${tile("Cure rate", cr, cr.went_late ? `${cr.cured} of ${cr.went_late} late accounts now current (90 days)` : "no account went late in 90 days")}
+      ${tile("Containment", ct, ct.turns ? `${ct.turns - ct.handed_to_person} of ${ct.turns} assistant turns without a person (30 days)` : "no assistant activity in 30 days")}
+    </div>`;
+  document.getElementById("health-row").hidden = false;
+}
+
 function _accountSortComparator() {
   if (state.sortBy === "risk") {
-    const rank = { high: 0, medium: 1, low: 2 };
-    return (a, b) => (rank[a.risk_tier] - rank[b.risk_tier]) || (b.days_past_due - a.days_past_due);
+    // The one computed risk (outbound/risk_engine.py): highest score first, so two "high" accounts are ordered too.
+    return (a, b) => ((b.risk?.score ?? 0) - (a.risk?.score ?? 0)) || (b.days_past_due - a.days_past_due);
   }
   if (state.sortBy === "id") {
     return (a, b) => a.account_id.localeCompare(b.account_id);
@@ -1690,7 +1747,7 @@ function naRenderReview(payload) {
     naReviewRow("Phone", payload.phone_number),
     naReviewRow("Language", payload.language_preference),
     naReviewRow("Loan type", payload.loan_type),
-    naReviewRow("Risk tier", payload.risk_tier),
+    naReviewRow("Onboarding risk rating", payload.risk_tier),
     naReviewRow("Principal", `₹${payload.principal_amount.toLocaleString("en-IN")}`),
     naReviewRow("EMI", `₹${payload.emi_amount}/month`),
     naReviewRow("Tenure", `${payload.tenure_months} months`),
@@ -1887,7 +1944,7 @@ function renderDetail(a, documents, conversation = []) {
   }
   const monthsPaidDown = Math.max(0, a.tenure_months - a.months_remaining); // months_remaining can exceed tenure after an extension
   const paidOffFraction = a.tenure_months > 0 ? monthsPaidDown / a.tenure_months : 0;
-  const ringColor = a.risk_tier === "high" ? "var(--danger)" : a.risk_tier === "medium" ? "var(--warning)" : "var(--success)";
+  const ringColor = a.risk_tier === "high" || a.risk_tier === "critical" ? "var(--danger)" : a.risk_tier === "medium" ? "var(--warning)" : "var(--success)";
   const digest = buildAccountDigest(a);
 
   const flagsHtml = a.flags.length
@@ -2117,8 +2174,9 @@ function renderDetail(a, documents, conversation = []) {
         <span class="badge">${escapeHtml(a.loan_type)}</span>
         <span class="badge">${LANGUAGE_LABELS[a.language_preference] || a.language_preference}</span>
         <a class="badge badge-link" href="tel:${escapeHtml(a.phone_number)}">${escapeHtml(a.phone_number)}</a>
-        <button type="button" class="badge badge-edit-btn" id="edit-account-btn" title="Edit phone, language, or risk tier">✎ Edit</button>
+        <button type="button" class="badge badge-edit-btn" id="edit-account-btn" title="Edit phone, language, or onboarding risk rating">✎ Edit</button>
       </div>
+      ${riskWhyHtml(a)}
 
       <form class="upload-form edit-account-form" id="edit-account-form" hidden>
         <div class="upload-row">
@@ -2128,10 +2186,10 @@ function renderDetail(a, documents, conversation = []) {
             <option value="hi" ${a.language_preference === "hi" ? "selected" : ""}>Hindi</option>
             <option value="hinglish" ${a.language_preference === "hinglish" ? "selected" : ""}>Hinglish</option>
           </select>
-          <select id="ea-risk">
-            <option value="low" ${a.risk_tier === "low" ? "selected" : ""}>Low risk</option>
-            <option value="medium" ${a.risk_tier === "medium" ? "selected" : ""}>Medium risk</option>
-            <option value="high" ${a.risk_tier === "high" ? "selected" : ""}>High risk</option>
+          <select id="ea-risk" title="The rating given at onboarding -- one input to the risk shown above">
+            <option value="low" ${a.onboarding_risk_tier === "low" ? "selected" : ""}>Onboarding rating: low</option>
+            <option value="medium" ${a.onboarding_risk_tier === "medium" ? "selected" : ""}>Onboarding rating: medium</option>
+            <option value="high" ${a.onboarding_risk_tier === "high" ? "selected" : ""}>Onboarding rating: high</option>
           </select>
         </div>
         <div class="clarify-actions-row">
@@ -3402,6 +3460,7 @@ async function loadAll() {
   renderAccountGrid();
   renderInbox();
   loadBank(); // the Bank tab's waiting count, kept current with the rest
+  loadHealth();
   metricsRequest
     .then((metrics) => {
       if (myGeneration !== loadGeneration) return;

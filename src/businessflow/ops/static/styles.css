@@ -1018,3 +1018,35 @@ a.voice-row .voice-row-value { color: var(--accent-strong); text-decoration: und
 .bank-line.unmatched { border-left: 3px solid var(--warning, #b7791f); }
 .bank-line.posted .bank-line-amount { color: var(--success, #147a52); }
 .bank-line.ignored { opacity: 0.75; }
+
+/* One computed risk: the critical tier, and the factor list behind any tier. */
+.kpi-risk-mix .risk-critical { color: var(--danger); text-decoration: underline; }
+.risk-tag.critical { color: var(--danger); }
+.risk-dot.critical { background: var(--danger); box-shadow: 0 0 0 2px var(--danger-solid-dim); }
+.badge.risk-critical { color: #fff; background: var(--danger); border-color: transparent; text-transform: capitalize; }
+.risk-why { margin: 10px 0 0; font-size: 13px; color: var(--text-1); }
+.risk-why summary { cursor: pointer; font-weight: 600; color: var(--text-2); }
+.risk-why ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; max-width: 460px; }
+.risk-why li { display: flex; justify-content: space-between; gap: 12px; }
+.risk-why li b { font-variant-numeric: tabular-nums; }
+.risk-why-note { margin: 8px 0 0; color: var(--text-3); font-size: 12px; }
+
+/* Collection health: the book by days past due, and the four rates a collections head reads it by. */
+.health-row { display: grid; grid-template-columns: minmax(260px, 1.2fr) 2fr; gap: 14px; margin: 14px 0 4px; }
+.health-buckets, .health-tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+.health-label { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.health-label .muted, .dpd-legend .muted { color: var(--text-3); font-weight: 400; }
+.dpd-bar { display: flex; height: 22px; border-radius: 6px; overflow: hidden; margin: 10px 0; background: var(--surface-2); }
+.dpd-seg { display: flex; align-items: center; justify-content: center; color: #fff; font-size: 11px; font-weight: 700; min-width: 18px; }
+.dpd-current { background: var(--success); }
+.dpd-1_30 { background: var(--warning); }
+.dpd-31_60 { background: #c2410c; }
+.dpd-61_90 { background: var(--danger); }
+.dpd-90_plus { background: #7f1d1d; }
+.dpd-legend { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; font-size: 12px; color: var(--text-1); }
+.dpd-key { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; }
+.health-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.health-value { font-size: 26px; font-weight: 700; margin: 6px 0 2px; color: var(--text-0); font-variant-numeric: tabular-nums; }
+.health-sub { font-size: 12px; color: var(--text-3); }
+@media (max-width: 1100px) { .health-row { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .health-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

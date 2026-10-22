@@ -302,8 +302,8 @@ def _overdue_rupees(accounts: list[dict]) -> float:
 def _sorted(accounts: list[dict], sort: str) -> list[dict]:
     """ops/static/app.js's _accountSortComparator, so the first name said is the first card shown."""
     if sort == "highest_risk":
-        rank = {"high": 0, "medium": 1, "low": 2}
-        return sorted(accounts, key=lambda a: (rank.get(a["risk_tier"], 3), -a["days_past_due"]))
+        rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        return sorted(accounts, key=lambda a: (rank.get(a["risk_tier"], 4), -a["days_past_due"]))
     if sort == "account_id":
         return sorted(accounts, key=lambda a: a["account_id"])
     return sorted(accounts, key=lambda a: (
@@ -312,8 +312,9 @@ def _sorted(accounts: list[dict], sort: str) -> list[dict]:
 
 
 def _risk_mix(accounts: list[dict]) -> str:
-    counts = {tier: sum(a["risk_tier"] == tier for a in accounts) for tier in ("high", "medium", "low")}
-    return f"{counts['high']} high, {counts['medium']} medium and {counts['low']} low risk"
+    counts = {tier: sum(a["risk_tier"] == tier for a in accounts) for tier in ("critical", "high", "medium", "low")}
+    lead = f"{counts['critical']} critical, " if counts["critical"] else ""
+    return f"{lead}{counts['high']} high, {counts['medium']} medium and {counts['low']} low risk"
 
 
 def _portfolio_overview(data: DashboardData) -> VoiceReplyOut:
@@ -1035,7 +1036,7 @@ def _update_account(args, account, heard) -> VoiceReplyOut:
         details.append(DetailOut(label="Language", value=f"{_LANGUAGES.get(account['language_preference'])} → {_LANGUAGES[args.language]}"))
     if args.risk_tier:
         body["risk_tier"] = args.risk_tier
-        details.append(DetailOut(label="Risk tier", value=f"{account['risk_tier']} → {args.risk_tier}"))
+        details.append(DetailOut(label="Onboarding risk rating", value=f"{account.get('onboarding_risk_tier', account['risk_tier'])} → {args.risk_tier}"))
     if not body:
         raise _Unresolved(_clarify("What should change: the phone number, the language, or the risk tier?"))
     return _proposal(

@@ -64,6 +64,7 @@ from businessflow.ops import speech_client, voice, voice_reply
 from businessflow.ops.flags import Flag, compute_flags
 from businessflow.outbound import send as notify
 from businessflow.outbound.compose import draft_clarification_message
+from businessflow.outbound.risk_engine import calculate_account_risk
 from businessflow.outbound.run import run_daily_pass
 from businessflow.rag.extraction import extract_loan_terms
 from businessflow.rate_limit import RateLimiter
@@ -191,6 +192,19 @@ class FlagOut(BaseModel):
     reason: str
 
 
+class RiskFactorOut(BaseModel):
+    label: str
+    points: float
+
+
+class RiskOut(BaseModel):
+    """The one risk (outbound/risk_engine.py): a 0-100 score from the account's own behaviour plus its onboarding
+    rating, the tier it maps to, and every factor with its points -- the same number the reminder tone uses."""
+    tier: str  # 'low' | 'medium' | 'high' | 'critical'
+    score: float
+    factors: list[RiskFactorOut]
+
+
 class AccountSummaryOut(BaseModel):
     account_id: str
     borrower_name: str
@@ -199,6 +213,7 @@ class AccountSummaryOut(BaseModel):
     principal_amount: float
     emi_amount: float
     days_past_due: int
+    # The tier everyone sees: computed (risk below), not the stored onboarding rating, which is onboarding_risk_tier.
     risk_tier: str
     flags: list[FlagOut]
     # False means every automated reminder for this account has been
@@ -210,6 +225,9 @@ class AccountSummaryOut(BaseModel):
     telegram_linked: bool
     # What the borrower owes right now (accounts/dues.py) -- the figure a payment claim's "Confirm payment" starts from.
     amount_due_now: float = 0.0
+    # The rating given at onboarding (accounts.risk_tier): editable, and one input to `risk`.
+    onboarding_risk_tier: str = "low"
+    risk: RiskOut | None = None
 
 
 class PaymentRecordOut(BaseModel):
@@ -735,6 +753,7 @@ def _sorted_cases(items: list[CaseOut]) -> list[CaseOut]:
 
 
 def _summarize(account: Account, flags: list[Flag]) -> AccountSummaryOut:
+    profile = calculate_account_risk(account, store.current_date())
     return AccountSummaryOut(
         account_id=account.account_id,
         borrower_name=account.borrower_name,
@@ -743,10 +762,13 @@ def _summarize(account: Account, flags: list[Flag]) -> AccountSummaryOut:
         principal_amount=account.principal_amount,
         emi_amount=account.emi_amount,
         days_past_due=account.days_past_due(store.current_date()),
-        risk_tier=account.risk_tier,
+        risk_tier=profile.tier.value,
         flags=[FlagOut(label=f.label, reason=f.reason) for f in flags],
         telegram_linked=account.telegram_chat_id is not None,
         amount_due_now=amount_due_now(account, store.current_date()),
+        onboarding_risk_tier=account.risk_tier,
+        risk=RiskOut(tier=profile.tier.value, score=profile.score,
+                     factors=[RiskFactorOut(**f) for f in profile.breakdown]),
     )
 
 
@@ -1811,6 +1833,27 @@ async def reject_escalation(escalation_id: str, body: EscalationRejectIn):
 
     escalation = store.get_escalation(escalation_id)
     return _escalation_out(escalation, borrower_notified=notified)
+
+
+@app.get("/portfolio/health", dependencies=[Depends(require_api_key)])
+def get_portfolio_health():
+    """Collection health (accounts/health.py): days-past-due buckets, collection efficiency, promises kept and cure
+    rate, plus containment from the event log -- each with the numbers behind it and how it was worked out. Late fees
+    are assessed first so the buckets' amounts match what every screen shows as owed."""
+    from businessflow.accounts.health import portfolio_health
+
+    store.assess_late_fees()
+    store.resolve_promises()
+    as_of = store.current_date()
+    health = portfolio_health(store.list_accounts(), as_of)
+    turns, handed = metrics.escalation_counts(datetime.now(timezone.utc) - timedelta(days=30))
+    health["containment"] = {
+        "value": round(1 - handed / turns, 4) if turns else None, "turns": turns, "handed_to_person": handed,
+        "window_days": 30,
+        "how": "Of the assistant's tool-calling turns with borrowers in the last 30 days, the share it handled without "
+               "handing the borrower to a person.",
+    }
+    return health
 
 
 @app.get("/metrics", response_model=MetricsOut, dependencies=[Depends(require_api_key)])
