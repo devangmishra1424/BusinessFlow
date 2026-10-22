@@ -31,7 +31,7 @@ CASE_MESSAGE_EVENT = "case_message"
 
 # Every event type that can belong to a case's thread. The two notification types are the outcome messages ops
 # already sent (approve/reject, dispute resolved); they carry a case_ref from now on.
-THREAD_EVENT_TYPES = (CASE_MESSAGE_EVENT, "restructuring_decision_notified", "dispute_resolution_notified")
+THREAD_EVENT_TYPES = (CASE_MESSAGE_EVENT, "restructuring_decision_notified", "dispute_resolution_notified", "charge_waived_notified")
 
 AUTHORS = ("borrower", "ops")
 

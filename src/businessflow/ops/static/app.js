@@ -194,6 +194,12 @@ const recordPayment = (accountId, payload) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+const waiveCharge = (accountId, chargeId, payload) =>
+  api(`/accounts/${accountId}/charges/${chargeId}/waive`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 const resolveDispute = (accountId, resolutionNote, disputeId = null) =>
   api(`/accounts/${accountId}/disputes/resolve`, {
     method: "POST",
@@ -1744,6 +1750,34 @@ function renderDetail(a, documents, conversation = []) {
         .join("")
     : `<p class="no-data">No active flags — this account is clean.</p>`;
 
+  // Late fees on the books (schema.sql's charges table): each with the EMI it is for and what happened to it. One
+  // still due can be waived -- who and why are required, and the borrower is told the reason.
+  const charges = a.charges || [];
+  const chargeStatus = (c) =>
+    c.status === "paid" ? `Paid ${fmtDate(c.paid_on)}`
+    : c.status === "waived" ? `Waived ${fmtDate(c.waived_on)} by ${c.waived_by}: ${c.waived_reason}`
+    : c.amount_paid > 0 ? `${fmtInr(c.outstanding)} still due (${fmtInr(c.amount_paid)} paid)`
+    : "Due";
+  const chargesHtml = charges.length
+    ? `<ul class="charge-list">${charges
+        .slice()
+        .reverse()
+        .map(
+          (c) => `<li class="charge-item charge-${c.status}">
+            <div class="charge-main"><strong>${fmtInr(c.amount)} late fee</strong> · for the ${fmtDate(c.for_due_date)} EMI
+              <span class="charge-status">${escapeHtml(chargeStatus(c))}</span></div>
+            ${c.status === "due" ? `<button type="button" class="btn btn-secondary btn-sm" data-waive-charge="${c.id}">Waive</button>
+            <form class="waive-form" data-waive-form="${c.id}" hidden>
+              <input type="text" name="waived_by" placeholder="Your name" maxlength="80" required />
+              <input type="text" name="reason" placeholder="Why (sent to the borrower)" maxlength="500" required />
+              <button type="submit" class="btn btn-danger btn-sm">Waive ${fmtInr(c.outstanding)}</button>
+              <p class="mini-form-error" hidden></p>
+            </form>` : ""}
+          </li>`
+        )
+        .join("")}</ul>`
+    : `<p class="no-data">No late fees charged on this account.</p>`;
+
   const payments = a.payment_history.slice(-8);
   const maxAmt = Math.max(1, ...payments.map((p) => p.amount));
   const barsHtml = payments.length
@@ -2115,6 +2149,9 @@ function renderDetail(a, documents, conversation = []) {
             <p class="section-title">Payment history <span class="count">last ${payments.length}</span></p>
             <p class="section-subtitle">₹ amount per payment, colored by whether it arrived on time.</p>
             ${barsHtml}
+            <p class="section-title" style="margin-top:16px">Late fees <span class="count">${charges.filter((c) => c.status === "due").length} due</span></p>
+            <p class="section-subtitle">Charged once per EMI still unpaid after the grace period. A payment goes to the EMI first, then the fee.</p>
+            ${chargesHtml}
             <form class="upload-form inline-form" id="record-payment-form">
               <p class="inline-form-title">Record a payment</p>
               <div class="upload-row">
@@ -2294,6 +2331,39 @@ function renderDetail(a, documents, conversation = []) {
     renderDetail(fresh, freshDocuments, freshConversation);
     loadAll();
   }
+
+  document.querySelectorAll("[data-waive-charge]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const form = document.querySelector(`[data-waive-form="${btn.dataset.waiveCharge}"]`);
+      form.hidden = !form.hidden;
+      if (!form.hidden) form.querySelector("input[name=waived_by]").focus();
+    });
+  });
+  document.querySelectorAll("[data-waive-form]").forEach((form) => {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const errorEl = form.querySelector(".mini-form-error");
+      errorEl.hidden = true;
+      const waivedBy = form.waived_by.value.trim();
+      const reason = form.reason.value.trim();
+      if (waivedBy.length < 2 || reason.length < 3) {
+        errorEl.textContent = "Add your name and the reason -- the borrower is told why.";
+        errorEl.hidden = false;
+        return;
+      }
+      const submit = form.querySelector("button[type=submit]");
+      submit.disabled = true;
+      try {
+        const result = await waiveCharge(a.account_id, form.dataset.waiveForm, { waived_by: waivedBy, reason });
+        toast(`Late fee waived${result.borrower_notified ? " — the borrower was told on Telegram" : " — the borrower sees it on their dashboard"}.`);
+        await refreshAfterAction();
+      } catch (err) {
+        errorEl.textContent = err.message;
+        errorEl.hidden = false;
+        submit.disabled = false;
+      }
+    });
+  });
 
   const recordPaymentForm = document.getElementById("record-payment-form");
   recordPaymentForm.addEventListener("submit", async (e) => {

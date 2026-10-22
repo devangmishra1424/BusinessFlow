@@ -59,38 +59,34 @@ async function loadInfo() {
   document.getElementById("pay-amount").textContent = fmtInr(info.amount);
   document.getElementById("pay-business").textContent = `${info.business_name} · ${info.borrower_name}`;
 
-  // Four cases, compared against what's actually due this cycle (EMI less any
-  // credit -- PaymentTokenInfoOut.emi_amount_due) and the late fee that applies
-  // right now (late_fee_due):
-  //   exactly what's due, or what's due + the fee -> a plain payment: one
-  //     button, no questions. The fee is part of what's owed, NOT "extra" --
-  //     the overdue "Pay" button and every reminder mint EMI + fee, and this
-  //     page used to call that fee an overpayment and ask how to apply it.
-  //   less than what's due -> a part-payment toward THIS month's EMI: one
-  //     button, and it says plainly what is still due afterwards.
-  //   more (by choice) -> ask how to use the extra amount.
-  const due = info.emi_amount_due;
-  const fee = info.late_fee_due || 0;
+  // What this payment covers, in the order it is applied (PaymentTokenInfoOut.breakdown, the server's own
+  // accounts/dues.py allocate_payment -- the same split the payment will get):
+  //   covers what's owed, nothing extra -> a plain payment: one button, and it says what it pays (EMI, late fee).
+  //     The fee is part of what's owed, NOT "extra" -- this page used to call it an overpayment.
+  //   short of this month's EMI -> a part-payment toward it: one button, and it says what is still due afterwards.
+  //   more than what's owed (by choice) -> ask how to use the extra amount.
+  const b = info.breakdown;
   const note = document.getElementById("pay-note");
   const confirmBtn = document.getElementById("pay-confirm-btn");
 
-  if (typeof due === "number") {
-    if (Math.abs(info.amount - due) <= EPS) {
-      // plain
-    } else if (fee > 0 && Math.abs(info.amount - (due + fee)) <= EPS) {
-      note.textContent = `This covers your EMI of ${fmtInr(due)} and the ${fmtInr(fee)} late fee.`;
-      note.hidden = false;
-    } else if (info.amount + EPS < due) {
-      note.textContent = `This pays part of this month's EMI of ${fmtInr(due)}. ${fmtInr(due - info.amount)} will still be due afterwards.`;
+  if (b) {
+    const parts = [];
+    if (b.to_emi > EPS && b.emi_retired) parts.push(`your EMI of ${fmtInr(b.to_emi)}`);
+    for (const c of b.to_charges) parts.push(`the ${fmtInr(c.amount)} ${c.label.charAt(0).toLowerCase()}${c.label.slice(1)}`);
+    const covers = parts.length ? `This covers ${parts.join(" and ")}.` : "";
+    if (b.short_of_emi > EPS) {
+      note.textContent = `${parts.length ? covers + " " : ""}This pays ${fmtInr(b.to_emi)} toward this month's EMI; ${fmtInr(b.short_of_emi)} of it will still be due afterwards.`;
       note.hidden = false;
       confirmBody = { apply_extra_to_next: true };
       confirmBtn.firstChild.textContent = `Pay ${fmtInr(info.amount)} `;
-    } else {
-      const excess = info.amount - due;
+    } else if (b.extra > EPS) {
       confirmBtn.hidden = true;
       document.getElementById("pay-overpay-note-text").textContent =
-        `This is ${fmtInr(excess)} more than the ${fmtInr(due)} due this cycle.`;
+        `${covers ? covers + " " : ""}That leaves ${fmtInr(b.extra)} extra.`;
       document.getElementById("pay-overpay-question").hidden = false;
+    } else if (b.to_charges.length || parts.length > 1) {
+      note.textContent = covers;
+      note.hidden = false;
     }
   }
 
@@ -119,7 +115,9 @@ function successLines(result) {
   } else if (result.kind === "principal_prepayment_reduce_tenure") {
     lines.push(`Extra applied to your loan. ${result.months_remaining} months remaining.`);
   } else {
-    if (result.late_fee_paid > 0) lines.push(`Includes the ${fmtInr(result.late_fee_paid)} late fee.`);
+    // A payment that went only to fees (kind "charge") paid the fee; one that also paid the EMI included it.
+    if (result.late_fee_paid > 0) lines.push(result.kind === "charge" ? `This paid the ${fmtInr(result.late_fee_paid)} late fee.` : `Includes the ${fmtInr(result.late_fee_paid)} late fee.`);
+    if (result.late_fee_waived_paid_in_grace) lines.push("The late fee for this EMI was removed: you paid within the grace period.");
     lines.push(
       result.months_remaining > 0
         ? `${result.months_remaining} months remaining · next EMI due ${fmtDate(result.next_emi_due_date)}`

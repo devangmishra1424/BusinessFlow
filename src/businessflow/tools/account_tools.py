@@ -4,10 +4,8 @@ from datetime import date
 from typing import Literal
 
 from businessflow.accounts import cases, store
-from businessflow.accounts.dues import amount_due_now
+from businessflow.accounts.dues import amount_due_now, charges_due
 from businessflow.accounts.policy import (
-    GRACE_PERIOD_DAYS,
-    LATE_FEE_FLAT_AMOUNT,
     PAYMENT_CLAIM_REVIEW_WORKING_DAYS,
     PROMISE_TOLERANCE_DAYS,
 )
@@ -33,12 +31,15 @@ _MAX_PAYMENT_HISTORY_LIMIT = 20
         "status, late fee applicability, and dispute status. outstanding_balance_approx "
         "is an approximation (emi_amount * months_remaining), not a real amortization "
         "schedule. amount_due_now is what the borrower owes right now (this cycle's EMI "
-        "less any credit, plus the late fee once it applies; 0 for a fully repaid loan) "
-        "-- quote it directly instead of adding figures yourself. "
+        "less any credit, plus every late fee still owed) -- quote it directly instead of adding figures yourself. "
+        "A late fee is a real charge on the account: charged once for each EMI still unpaid after the grace period, "
+        "never compounded, never charged interest. charges lists each one still owed (amount, which EMI it is for); "
+        "a payment pays this month's EMI first, then the fee. Only our team can waive a fee -- never say one is or "
+        "will be waived. "
         "interest_rate_pct is often None -- if so, say you don't have it "
         "rather than guessing one. nach_mandate_active only reflects current status, not "
         "why a debit failed -- for 'why did my auto-debit fail', combine this with "
-        "check_policy on NACH troubleshooting, don't guess. late_fee_amount is set only "
+        "check_policy on NACH troubleshooting, don't guess. late_fee_amount (the late fees still owed) is set only "
         "when late_fee_applicable is true."
     )
 )
@@ -69,10 +70,13 @@ def get_payment_status(account_id: str) -> dict:
     late_fee_applicable is true (with late_fee_amount set) only once
     days_past_due exceeds the grace period; within the grace period, or
     not past due at all, it's false and late_fee_amount is None."""
-    account = store.get_account_or_raise(account_id)
     as_of = store.current_date()
+    # The fee is on the books the first time anyone looks, not only after the nightly pass (store.assess_late_fees).
+    store.assess_late_fees(as_of, account_id)
+    account = store.get_account_or_raise(account_id)
     days_past_due = account.days_past_due(as_of)
-    late_fee_applicable = days_past_due > GRACE_PERIOD_DAYS
+    fees_owed = charges_due(account)
+    late_fee_applicable = fees_owed > 0
     return {
         "account_id": account.account_id,
         "borrower_name": account.borrower_name,
@@ -87,7 +91,12 @@ def get_payment_status(account_id: str) -> dict:
         "interest_rate_pct": account.interest_rate_pct,
         "nach_mandate_active": account.nach_mandate_active,
         "late_fee_applicable": late_fee_applicable,
-        "late_fee_amount": float(LATE_FEE_FLAT_AMOUNT) if late_fee_applicable else None,
+        "late_fee_amount": fees_owed if late_fee_applicable else None,
+        "charges": [
+            {"kind": c.kind, "for_emi_due_date": c.for_due_date.isoformat(), "amount": c.amount,
+             "amount_still_owed": c.outstanding}
+            for c in account.open_charges()
+        ],
         # What the borrower owes right now -- one grounded figure for the
         # agent to quote (so it never has to add EMI + fee itself, which the
         # grounding guardrail would block as unverified arithmetic) and the
@@ -109,8 +118,9 @@ def get_payment_status(account_id: str) -> dict:
         "Look up a borrower's recent payments: date, amount, on-time flag, and kind, "
         "most recent first. kind is 'regular' for a normal EMI payment, "
         "'extra_unapplied'/'extra_applied' for an off-cycle payment not credited/credited "
-        "toward the next EMI, or 'overpayment_applied' when a payment exceeded what was "
-        "due that cycle (excess credited to the next one). limit is clamped to a safe "
+        "toward the next EMI, 'overpayment_applied' when a payment exceeded what was "
+        "due that cycle (excess credited to the next one), or 'charge' when it only paid a late fee; "
+        "charges_paid is how much of a payment went to late fees. limit is clamped to a safe "
         "range rather than erroring on an odd value."
     )
 )
@@ -135,7 +145,7 @@ def get_payment_history(account_id: str, limit: int = 5) -> dict:
     return {
         "account_id": account.account_id,
         "payment_history": [
-            {"date": r.date.isoformat(), "amount": r.amount, "on_time": r.on_time, "kind": r.kind} for r in records
+            {"date": r.date.isoformat(), "amount": r.amount, "on_time": r.on_time, "kind": r.kind, "charges_paid": r.charges_paid} for r in records
         ],
     }
 

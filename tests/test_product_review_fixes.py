@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from businessflow.accounts import dues, escalation_kinds as kinds, store
-from businessflow.accounts.models import Account, Escalation, PaymentRecord, PromiseToPay
+from businessflow.accounts.models import Account, Charge, Escalation, PaymentRecord, PromiseToPay
 from businessflow.ops.flags import compute_flags
 from businessflow.outbound.decide import decide_reminder
 from businessflow.outbound.risk_engine import RiskTier, ToneStrategy, calculate_account_risk
@@ -33,6 +33,11 @@ def _account(**overrides) -> Account:
     return Account(**defaults)
 
 
+def _late_fee(for_due: date) -> Charge:
+    """A late fee on the books (schema.sql's charges table), as store.assess_late_fees would have put it there."""
+    return Charge(id=1, kind="late_fee", for_due_date=for_due, amount=500.0, amount_paid=0.0, assessed_on=for_due, status="due")
+
+
 class _FakeConn:
     def __init__(self, sink):
         self.sink = sink
@@ -40,6 +45,12 @@ class _FakeConn:
     def execute(self, sql, params=None):
         self.sink.append((" ".join(sql.split()), params))
         return self
+
+    def fetchall(self):
+        return []  # nothing was waived/inserted in the database: charges live on the in-memory account (see _pay)
+
+    def fetchone(self):
+        return {"id": 1}  # the new payment_history row's id
 
     @contextlib.contextmanager
     def transaction(self):
@@ -56,6 +67,18 @@ def _pay(monkeypatch, account: Account, amount: float, payment_date: date = TODA
     monkeypatch.setattr(store, "get_account_or_raise", lambda _id: account)
     # The account is read under a row lock inside the transaction (store._lock_account).
     monkeypatch.setattr(store, "_lock_account", lambda _conn, _id: account)
+
+    # The late fee is a real charge: record_payment assesses it as of the payment date, then reads the account's
+    # charges. The same rule (dues.late_fee_assessable, once per instalment) applied in memory, so the payment logic
+    # under test is still the real one.
+    def assess(as_of=None, account_id=None, ex=None):
+        if dues.late_fee_assessable(account, as_of) and not any(c.for_due_date == account.emi_due_date for c in account.charges):
+            account.charges.append(_late_fee(account.emi_due_date))
+            return 1
+        return 0
+
+    monkeypatch.setattr(store, "assess_late_fees", assess)
+    monkeypatch.setattr(store, "_load_charges", lambda _id, _conn=None: list(account.charges))
     result = store.record_payment(account.account_id, amount, payment_date=payment_date, **kw)
     after = dataclasses.replace(
         account, principal_amount=result["principal_amount"], emi_amount=result["emi_amount"],
@@ -98,24 +121,29 @@ def test_a_loan_with_months_left_is_still_chased_normally():
 # ---------------------------------------------------------------------------
 
 
-def test_amount_due_now_is_emi_less_credit_plus_the_late_fee_once_it_applies():
+def test_amount_due_now_is_emi_less_credit_plus_every_late_fee_on_the_books():
     within_grace = _account(emi_due_date=TODAY - timedelta(days=3))  # exactly at the grace boundary: no fee yet
     overdue = _account(emi_due_date=TODAY - timedelta(days=4))
-    credited = _account(emi_due_date=TODAY - timedelta(days=10), pending_emi_credit=9_500)
+    assert not dues.late_fee_assessable(within_grace, TODAY)
+    assert dues.late_fee_assessable(overdue, TODAY)
+
+    charged = dataclasses.replace(overdue, charges=[_late_fee(overdue.emi_due_date)])
+    credited = _account(emi_due_date=TODAY - timedelta(days=10), pending_emi_credit=9_500, charges=[_late_fee(TODAY - timedelta(days=10))])
     fully_credited = _account(emi_due_date=TODAY + timedelta(days=1), pending_emi_credit=30_000)
 
     assert dues.amount_due_now(within_grace, TODAY) == 22_000
-    assert dues.amount_due_now(overdue, TODAY) == 22_500
+    assert dues.amount_due_now(charged, TODAY) == 22_500
     assert dues.amount_due_now(credited, TODAY) == 12_500 + 500
     assert dues.emi_due_now(fully_credited) == 0.0  # credit can exceed the EMI; never negative
 
 
-def test_reminder_amounts_follow_the_reminder_kind_not_a_clock():
+def test_reminder_amounts_come_from_the_books_not_the_reminder_kind():
     account = _account(pending_emi_credit=2_000)
+    for kind in ("heads_up", "due_now", "follow_up"):
+        assert dues.reminder_amounts(account, kind) == (20_000, 0.0, 20_000)
 
-    assert dues.reminder_amounts(account, "heads_up") == (20_000, 0.0, 20_000)
-    assert dues.reminder_amounts(account, "due_now") == (20_000, 0.0, 20_000)
-    assert dues.reminder_amounts(account, "follow_up") == (20_000, 500.0, 20_500)
+    with_fee = dataclasses.replace(account, charges=[_late_fee(TODAY - timedelta(days=5))])
+    assert dues.reminder_amounts(with_fee, "follow_up") == (20_000, 500.0, 20_500)
 
 
 # ---------------------------------------------------------------------------
@@ -201,14 +229,17 @@ def test_an_extra_of_the_same_size_is_a_real_extra_when_no_fee_applies(monkeypat
     assert result["pending_emi_credit"] == 500.0
 
 
-def test_a_larger_deliberate_extra_on_an_overdue_account_is_still_a_prepayment(monkeypatch):
+def test_a_larger_deliberate_extra_on_an_overdue_account_pays_the_fee_then_the_rest_is_a_prepayment(monkeypatch):
     account = _account(emi_amount=35_000, months_remaining=11, emi_due_date=TODAY - timedelta(days=20))
 
-    result, _, _ = _pay(monkeypatch, account, 35_000 + 5_000)  # not EMI + fee: the borrower chose to pay more
+    result, _, _ = _pay(monkeypatch, account, 35_000 + 5_000)
 
+    # The order a payment is applied in (accounts/dues.py allocate_payment): the EMI, then the fee that is owed, then
+    # the extra. Before the fee was a real charge, only an overage of exactly the fee counted as paying it, and a
+    # larger extra left the fee owed while crediting the whole extra.
     assert result["kind"] == "overpayment_applied"
-    assert result["late_fee_paid"] == 0.0
-    assert result["pending_emi_credit"] == 5_000.0
+    assert result["late_fee_paid"] == 500.0
+    assert result["pending_emi_credit"] == 4_500.0
 
 
 def test_a_part_payment_still_needs_an_explicit_decision_and_does_not_retire_the_cycle(monkeypatch):
@@ -497,13 +528,29 @@ def test_a_follow_up_quotes_the_fee_and_the_total_it_asks_for(monkeypatch):
 
     captured = _Captured()
     _fake_groq(monkeypatch, captured)
-    account = _account(emi_amount=35_000, pending_emi_credit=0, emi_due_date=TODAY - timedelta(days=20))
+    due = TODAY - timedelta(days=20)
+    account = _account(emi_amount=35_000, pending_emi_credit=0, emi_due_date=due, charges=[_late_fee(due)])
 
     compose_message(account, OutboundReminder("BF-TEST", "follow_up", 20))
 
     user_facts = captured.messages[1]["content"]
     assert "35,000 rupees is now 20 day(s) past due" in user_facts
-    assert "late fee of 500 rupees applies" in user_facts and "35,500 rupees in total is due now" in user_facts
+    assert "late fee of 500 rupees has been charged for it" in user_facts and "35,500 rupees in total is due now" in user_facts
+    assert "EMI first, then the fee" in user_facts
+
+
+def test_a_follow_up_with_no_fee_on_the_books_quotes_no_fee(monkeypatch):
+    from businessflow.outbound.compose import compose_message
+    from businessflow.outbound.decide import OutboundReminder
+
+    captured = _Captured()
+    _fake_groq(monkeypatch, captured)
+    account = _account(emi_amount=35_000, emi_due_date=TODAY - timedelta(days=20))  # e.g. the fee was waived
+
+    compose_message(account, OutboundReminder("BF-TEST", "follow_up", 20))
+
+    user_facts = captured.messages[1]["content"]
+    assert "late fee" not in user_facts and "35,000 rupees is due now" in user_facts
 
 
 def test_a_heads_up_quotes_what_is_actually_due_after_credit(monkeypatch):
@@ -551,7 +598,8 @@ def _stub_outbound_run(monkeypatch, account: Account, kind: str):
 
 
 def test_the_reminder_link_and_button_are_minted_for_what_is_due_not_the_bare_emi(monkeypatch):
-    account = _account(emi_amount=35_000, pending_emi_credit=5_000, emi_due_date=TODAY - timedelta(days=20))
+    due = TODAY - timedelta(days=20)
+    account = _account(emi_amount=35_000, pending_emi_credit=5_000, emi_due_date=due, charges=[_late_fee(due)])
     run, minted, sent = _stub_outbound_run(monkeypatch, account, "follow_up")
 
     result = run.run_daily_outbound_pass()
@@ -606,10 +654,12 @@ def test_telegram_language_for_an_unknown_account_is_english(monkeypatch):
 def test_pay_with_no_amount_pays_what_is_due_now(monkeypatch):
     from businessflow.channels import telegram_bot
 
-    account = _account(emi_amount=35_000, pending_emi_credit=0, emi_due_date=TODAY - timedelta(days=20))
+    due = TODAY - timedelta(days=20)
+    account = _account(emi_amount=35_000, pending_emi_credit=0, emi_due_date=due, charges=[_late_fee(due)])
     monkeypatch.setattr(telegram_bot, "_sessions", {7: {"account_id": "BF-TEST", "language": "en", "messages": []}})
     monkeypatch.setattr(telegram_bot.store, "get_account_or_raise", lambda _id: account)
     monkeypatch.setattr(telegram_bot.store, "current_date", lambda: TODAY)
+    monkeypatch.setattr(telegram_bot.store, "assess_late_fees", lambda *a, **k: 0)  # the fee is already on the account
     monkeypatch.setattr(telegram_bot.store, "log_event", lambda *a, **k: None)
     minted = []
     monkeypatch.setattr(
@@ -630,6 +680,7 @@ def test_pay_with_no_amount_says_so_when_nothing_is_due(monkeypatch):
     monkeypatch.setattr(telegram_bot, "_sessions", {7: {"account_id": "BF-TEST", "language": "en", "messages": []}})
     monkeypatch.setattr(telegram_bot.store, "get_account_or_raise", lambda _id: account)
     monkeypatch.setattr(telegram_bot.store, "current_date", lambda: TODAY)
+    monkeypatch.setattr(telegram_bot.store, "assess_late_fees", lambda *a, **k: 0)
     monkeypatch.setattr(telegram_bot, "generate_payment_link", lambda *a: pytest.fail("must not mint a link for nothing"))
 
     reply = asyncio.run(telegram_bot._run_pay(7, None))

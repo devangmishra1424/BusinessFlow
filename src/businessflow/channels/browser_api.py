@@ -61,7 +61,7 @@ from pydantic import BaseModel, Field
 from businessflow.accounts import store
 from businessflow.accounts import cases
 from businessflow.accounts.db import check_database
-from businessflow.accounts.dues import late_fee_due
+from businessflow.accounts.dues import allocate_payment, charges_due
 from businessflow.accounts.escalation_kinds import (
     CALLBACK, CLOSURE, FRAUD, RESTRUCTURING, SYSTEM, classify_escalation,
 )
@@ -198,8 +198,10 @@ class AccountSnapshotOut(BaseModel):
     nach_mandate_active: bool
     late_fee_applicable: bool
     late_fee_amount: float | None
-    # What the borrower owes right now (EMI less credit, plus the late fee once it
-    # applies) -- the one number the Pay button, reminders and Telegram agree on.
+    # Each charge still owed (a late fee), with the EMI it is for -- see accounts/dues.py.
+    charges: list[dict] = []
+    # What the borrower owes right now (EMI less credit, plus every late fee still owed)
+    # -- the one number the Pay button, reminders and Telegram agree on.
     amount_due_now: float
     dispute_open: bool
     risk_tier: str
@@ -252,7 +254,7 @@ class DocumentOut(BaseModel):
 
 
 class WarningOut(BaseModel):
-    label: str  # "overdue" | "disputed" | "broken_promises" -- drives which action(s) the UI offers, never shown directly
+    label: str  # "overdue" | "fee_due" | "disputed" | "broken_promises" -- drives which action(s) the UI offers, never shown directly
     text: str
 
 
@@ -263,7 +265,7 @@ class MessageOut(BaseModel):
     message: str
     delivered_via_telegram: bool
     created_at: datetime
-    kind: str = "message"  # message | decision | dispute | reminder
+    kind: str = "message"  # message | decision | dispute | fee | reminder
 
 
 class DashboardResponse(BaseModel):
@@ -354,6 +356,11 @@ def _build_emi_timeline(account: Account, days_past_due: int) -> list[dict]:
             return {"date": r.date.isoformat(), "amount": r.amount, "status": "paid-on-time" if r.on_time else "paid-late", "label": f"{base_label} + extra credited"}
         if r.kind == "principal_prepayment_reduce_emi":
             return {"date": r.date.isoformat(), "amount": r.amount, "status": "paid-on-time" if r.on_time else "paid-late", "label": f"{base_label} + extra paid off the loan (EMI lowered)"}
+        if r.kind == "charge":
+            return {"date": r.date.isoformat(), "amount": r.amount, "status": "paid-on-time", "label": "Late fee paid"}
+        if r.charges_paid > 0.005 and r.kind == "regular":
+            return {"date": r.date.isoformat(), "amount": r.amount, "status": "paid-on-time" if r.on_time else "paid-late",
+                    "label": f"{base_label} (includes ₹{r.charges_paid:,.0f} late fee)"}
         if r.kind == "principal_prepayment_reduce_tenure":
             return {"date": r.date.isoformat(), "amount": r.amount, "status": "paid-on-time" if r.on_time else "paid-late", "label": f"{base_label} + extra paid off the loan (loan shortened)"}
         return {"date": r.date.isoformat(), "amount": r.amount, "status": "paid-on-time" if r.on_time else "paid-late", "label": base_label}
@@ -405,6 +412,12 @@ def _build_emi_timeline(account: Account, days_past_due: int) -> list[dict]:
 # the output (days overdue, late fee amount, broken-promise count) is real,
 # taken from payment_status (itself get_payment_status's own real result) or
 # the flag -- never fabricated or estimated here.
+def _borrower_date(iso: str) -> str:
+    """'2026-10-03' -> '3 Oct 2026', the way the dashboard writes dates."""
+    d = date.fromisoformat(iso)
+    return f"{d.day} {d.strftime('%b')} {d.year}"
+
+
 def _build_warnings(flags: list[Flag], payment_status: dict, open_claim_kind: str | None = None) -> list[dict]:
     """Returns {label, text} per warning, not just text -- label is what
     the dashboard's own UI uses to decide which action(s) a warning can
@@ -414,6 +427,13 @@ def _build_warnings(flags: list[Flag], payment_status: dict, open_claim_kind: st
     shown to the borrower directly -- only text is, same reframing rule
     as before."""
     warnings = []
+    # A late fee left after the EMI was paid: the account is no longer overdue, so no overdue warning would mention it,
+    # and the fee would drop out of sight while still owed. Said once, with the EMI it is for.
+    fees = payment_status.get("charges") or []
+    if fees and not any(f.label == "overdue" for f in flags):
+        total = sum(c["amount_still_owed"] for c in fees)
+        for_dates = ", ".join(_borrower_date(c["for_emi_due_date"]) for c in fees)
+        flags = [Flag(label="fee_due", reason=f"A late fee of ₹{total:,.0f} (for your {for_dates} EMI) is still due."), *flags]
     for flag in flags:
         if flag.label == "overdue":
             days = payment_status["days_past_due"]
@@ -428,6 +448,8 @@ def _build_warnings(flags: list[Flag], payment_status: dict, open_claim_kind: st
                 )
             else:
                 text = f"Your EMI is {days} days overdue."
+        elif flag.label == "fee_due":
+            text = flag.reason
         elif flag.label == "disputed" and open_claim_kind == cases.PAYMENT_CLAIM:
             text = (
                 f"We're checking the payment you reported, usually within {PAYMENT_CLAIM_REVIEW_WORKING_DAYS} "
@@ -1088,6 +1110,21 @@ def quick_action_payment_link_endpoint(conversation_id: str, req: QuickActionPay
     return result
 
 
+class ChargePartOut(BaseModel):
+    label: str
+    amount: float
+
+
+class PaymentBreakdownOut(BaseModel):
+    """What one payment covers, in the order it is applied: the EMI (all of it, or part: short_of_emi > 0), late fees,
+    then anything extra -- which the borrower is asked how to use."""
+    to_emi: float
+    emi_retired: bool
+    short_of_emi: float
+    to_charges: list[ChargePartOut]
+    extra: float
+
+
 class PaymentTokenInfoOut(BaseModel):
     account_id: str
     amount: float
@@ -1100,10 +1137,13 @@ class PaymentTokenInfoOut(BaseModel):
     # clicks confirm. None for a used/expired token (no live account math
     # worth showing at that point).
     emi_amount_due: float | None = None
-    # The late fee that applies right now (0 when none). A link for exactly
+    # Every late fee still owed (0 when none). A link for exactly
     # emi_amount_due + late_fee_due is a plain payment of what's owed -- the
     # pay page must not treat the fee as an "extra" to be applied somewhere.
     late_fee_due: float | None = None
+    # How this payment will be applied (accounts/dues.py's allocate_payment): None for a used/expired link.
+    breakdown: PaymentBreakdownOut | None = None
+
 
 
 class PaymentConfirmRequest(BaseModel):
@@ -1120,6 +1160,8 @@ class PaymentConfirmOut(BaseModel):
     principal_amount: float | None = None
     emi_amount: float | None = None
     late_fee_paid: float = 0.0  # >0 when the amount included the late fee (not a prepayment)
+    # True when a late fee charged for this EMI was removed because the payment was dated within the grace period.
+    late_fee_waived_paid_in_grace: bool = False
 
 
 @app.get("/pay/{token}/info", response_model=PaymentTokenInfoOut)
@@ -1128,9 +1170,22 @@ def payment_token_info_endpoint(token: str):
     if info is None:
         raise HTTPException(status_code=404, detail=f"no payment link found for token={token!r}")
     if info["status"] == "pending":
+        today = store.current_date()
+        store.assess_late_fees(today, info["account_id"])
         account = store.get_account_or_raise(info["account_id"])
         info["emi_amount_due"] = round(account.emi_amount - account.pending_emi_credit, 2)
-        info["late_fee_due"] = late_fee_due(account, store.current_date())
+        info["late_fee_due"] = charges_due(account)
+        # The same split record_payment will apply (accounts/dues.py's allocate_payment), so the page says exactly what
+        # this payment covers before anyone clicks Confirm.
+        alloc = allocate_payment(account, float(info["amount"]), today)
+        by_id = {c.id: c for c in account.charges}
+        info["breakdown"] = PaymentBreakdownOut(
+            to_emi=alloc.to_emi, emi_retired=alloc.emi_retired, short_of_emi=alloc.short_of_emi, extra=alloc.extra,
+            to_charges=[
+                ChargePartOut(label=f"Late fee for the {_borrower_date(by_id[cid].for_due_date.isoformat())} EMI", amount=amt)
+                for cid, amt in alloc.to_charges
+            ],
+        )
     return PaymentTokenInfoOut(**info)
 
 
@@ -1167,6 +1222,7 @@ def payment_confirm_endpoint(request: Request, token: str, req: PaymentConfirmRe
         principal_amount=result.get("principal_amount"),
         emi_amount=result.get("emi_amount"),
         late_fee_paid=result.get("late_fee_paid", 0.0),
+        late_fee_waived_paid_in_grace=result.get("late_fee_waived_paid_in_grace", False),
     )
 
 

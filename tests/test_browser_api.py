@@ -590,6 +590,8 @@ def test_payment_info_endpoint_returns_pending_for_a_fresh_token(throwaway_accou
         "business_name": "Pay Test Co", "borrower_name": "Pay Test Borrower", "status": "pending",
         "emi_amount_due": 3000.0,  # emi_amount minus a fresh account's zero pending_emi_credit
         "late_fee_due": 0.0,  # due date is still in the future
+        # How it will be applied (accounts/dues.py allocate_payment): the whole EMI, early, nothing else.
+        "breakdown": {"to_emi": 3000.0, "emi_retired": True, "short_of_emi": 0.0, "to_charges": [], "extra": 0.0},
     }
 
 

@@ -196,15 +196,16 @@ def test_record_payment_reduce_tenure_removes_whole_emis_against_the_real_check_
     before = store.get_account_or_raise("BF-1002")  # 20 months left, EMI 22,000
     assert before.months_remaining == 20
 
-    # A deliberate 50,000 extra on top of the EMI -- NOT EMI + the late fee, so it is a real prepayment
-    # even though this account is past its grace period (only an overage of exactly the fee is the fee).
+    # A deliberate 50,000 extra on top of the EMI, on an account past its grace period: applied in the stated order
+    # (accounts/dues.py allocate_payment) -- the EMI, then the 500 late fee charged for it, then 49,500 of prepayment.
     result = store.record_payment("BF-1002", 22_000 + 50_000, payment_scheme="reduce_tenure")
 
     assert result["kind"] == "principal_prepayment_reduce_tenure"
-    assert result["late_fee_paid"] == 0.0
+    assert result["late_fee_paid"] == 500.0
     after = store.get_account_or_raise("BF-1002")
-    assert after.months_remaining == 17  # one for this EMI, two whole EMIs from the 50,000
-    assert after.pending_emi_credit == 6_000  # the remainder is kept, not dropped
+    assert after.months_remaining == 17  # one for this EMI, two whole EMIs from the 49,500
+    assert after.pending_emi_credit == 5_500  # the remainder is kept, not dropped
+    assert [c.status for c in after.charges] == ["paid"]
     assert after.payment_history[-1].kind == "principal_prepayment_reduce_tenure"
 
 
@@ -376,3 +377,19 @@ def test_a_correction_by_the_team_also_tells_the_agent_to_look_again(reseed_acco
     store.log_event("BF-1001", "data_correction", {"what": "removed a duplicate payment"})
 
     assert store.changes_since_last_status_check("BF-1001")["corrections"] == 1
+
+
+def test_a_reseed_starts_every_demo_loan_without_leftover_credit_or_fees(reseed_accounts):
+    # Found by re-running the suite on a database that was not rebuilt: the reseed reset every loan field except
+    # pending_emi_credit, so credit from an earlier overpayment survived it and the account showed less due than its
+    # seeded story. Late fees are on the books now too, and must not survive a reseed either.
+    from scripts.seed_accounts import main as reseed
+
+    store.record_payment("BF-1002", 22_000 + 9_000)  # EMI, the 500 late fee, 8,500 left as credit
+    assert store.get_account_or_raise("BF-1002").pending_emi_credit == 8_500
+    assert store.get_account_or_raise("BF-1002").charges
+
+    reseed()
+    after = store.get_account_or_raise("BF-1002")
+    assert after.pending_emi_credit == 0
+    assert after.charges == []

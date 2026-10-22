@@ -514,10 +514,13 @@ async def _run_pay(chat_id: int, args: list[str] | None) -> str:
     if account_id is None:
         return _NOT_VERIFIED_MESSAGE
     if not args:
-        # No amount typed: pay what's due now (EMI less credit, plus the late
-        # fee once it applies) -- the same figure the dashboard and reminders
-        # use -- instead of making the borrower work it out and type it.
-        due = amount_due_now(store.get_account_or_raise(account_id), store.current_date())
+        # No amount typed: pay what's due now (EMI less credit, plus every late
+        # fee still owed) -- the same figure the dashboard and reminders use --
+        # instead of making the borrower work it out and type it. Today's fee is
+        # put on the books first (store.assess_late_fees), as every screen does.
+        today = store.current_date()
+        store.assess_late_fees(today, account_id)
+        due = amount_due_now(store.get_account_or_raise(account_id), today)
         if due <= 0:
             return "Nothing is due on your account right now. To pay a different amount, send /pay <amount>, e.g. /pay 5000"
         amount = due

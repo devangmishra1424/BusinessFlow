@@ -69,7 +69,9 @@ def corpus_fingerprint() -> tuple:
 # policy docs already use to cross-reference each other. Extracts the
 # referenced filename fragment, matched case-insensitively against known
 # source_document basenames below.
-_EXPLICIT_REFERENCE_RE = re.compile(r"\(see ([\w./-]+\.\w+)\)", re.IGNORECASE)
+# \s+, not a single space: a reference wrapped onto the next line ("(see" at a line's end, the filename on the next)
+# is the same reference, and an editor re-wrapping a KB document used to drop it without a trace.
+_EXPLICIT_REFERENCE_RE = re.compile(r"\(see\s+([\w./-]+\.\w+)\)", re.IGNORECASE)
 
 _RRF_K = 60  # the conventional reciprocal-rank-fusion constant
 

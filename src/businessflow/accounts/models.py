@@ -24,6 +24,31 @@ class PaymentRecord:
     # needed since overpaying is never ambiguous). See
     # accounts/store.py's record_payment for where this is decided.
     kind: str = "regular"
+    # How much of this payment went to charges (a late fee) rather than the EMI -- 0 for most payments. "charge" is the
+    # kind of a payment that went only to charges. See accounts/dues.py's allocate_payment.
+    charges_paid: float = 0.0
+
+
+@dataclass
+class Charge:
+    """A charge on the account (schema.sql's charges table): today only the late fee, assessed once per missed
+    instalment after the grace period. Never compounded, never charged interest; waiving one is a recorded decision."""
+    id: int
+    kind: str  # "late_fee"
+    for_due_date: date  # the instalment it was charged for
+    amount: float
+    amount_paid: float
+    assessed_on: date
+    status: str  # "due" | "paid" | "waived"
+    paid_on: date | None = None
+    waived_on: date | None = None
+    waived_by: str | None = None
+    waived_reason: str | None = None
+
+    @property
+    def outstanding(self) -> float:
+        """What is still owed on it: 0 once paid or waived."""
+        return round(self.amount - self.amount_paid, 2) if self.status == "due" else 0.0
 
 
 @dataclass
@@ -91,6 +116,12 @@ class Account:
 
     payment_history: list[PaymentRecord] = field(default_factory=list)
     promises: list[PromiseToPay] = field(default_factory=list)
+    # Every charge ever assessed on the account, oldest first (paid and waived ones included, for the record).
+    charges: list[Charge] = field(default_factory=list)
+
+    def open_charges(self) -> list[Charge]:
+        """Charges still owed, oldest first -- the order a payment pays them in."""
+        return [c for c in self.charges if c.outstanding > 0.005]
 
     def days_past_due(self, as_of: date) -> int:
         # A fully repaid loan (months_remaining == 0) has nothing left to be

@@ -52,7 +52,7 @@ Each layer assumes the one before it failed.
 
 | Finding | Before | After |
 |---|---|---|
-| `generate_payment_link` minted a real payment token for any amount | -5,000, 0, NaN, infinity and 10^15 rupees all accepted | refused; only an amount up to every remaining EMI plus one late fee is accepted |
+| `generate_payment_link` minted a real payment token for any amount | -5,000, 0, NaN, infinity and 10^15 rupees all accepted | refused; only an amount up to every remaining EMI plus the late fees on the account (at least one) is accepted |
 | `log_promise_to_pay` | accepted a date in 2020 or 2099 and a NaN or negative amount | date must be today to +90 days; amount validated like a payment |
 | `flag_dispute` / `escalate_to_human` | stored a 200 KB "reason" | capped at 1,000 characters, control characters removed |
 | `compute("1e308 * 1e308")` | returned infinity | refused |

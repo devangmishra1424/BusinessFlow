@@ -159,6 +159,13 @@ async def notify_dispute_resolved(account_id: str, message: str, case_ref: str |
     )
 
 
+async def notify_charge_waived(account_id: str, message: str, case_ref: str | None = None) -> bool:
+    """Called from ops/api.py right after staff waive a charge (a late fee) -- the amount due dropped, and the
+    borrower should know why. Same real-or-logged delivery as every notification here; shown on the dashboard either
+    way (in the case's thread when case_ref is given). Returns True if reached over Telegram."""
+    return await _deliver_and_log(account_id, message, "charge_waived_notified", {"case_ref": case_ref} if case_ref else {})
+
+
 async def notify_clarification_request(account_id: str, message: str) -> bool:
     """Called from ops/api.py right after an operator sends a
     clarification request about an account's flags -- message is the

@@ -59,8 +59,8 @@ def compose_message(account: Account, reminder: OutboundReminder, risk_profile=N
     adjust tone (empathetic, neutral, firm, final notice)."""
     # The same amounts the payment link attached to this reminder is minted
     # for (outbound/run.py): what's still due this cycle (EMI less any
-    # credit), plus the late fee once a follow_up says it applies -- never
-    # the bare emi_amount, which ignored credit and the fee.
+    # credit), plus every late fee actually on the account -- never the bare
+    # emi_amount, which ignored credit and the fee.
     emi, late_fee, total = reminder_amounts(account, reminder.kind)
     emi_str = f"{emi:,.0f}"
     if reminder.kind == "heads_up":
@@ -69,11 +69,14 @@ def compose_message(account: Account, reminder: OutboundReminder, risk_profile=N
         situation = (
             f"Their EMI of {emi_str} rupees is due now (day {reminder.days} of the grace period, no late fee yet)."
         )
-    else:
+    elif late_fee > 0:
         situation = (
             f"Their EMI of {emi_str} rupees is now {reminder.days} day(s) past due, and a late fee of "
-            f"{late_fee:,.0f} rupees applies -- {total:,.0f} rupees in total is due now."
+            f"{late_fee:,.0f} rupees has been charged for it -- {total:,.0f} rupees in total is due now. "
+            "A payment goes to the EMI first, then the fee."
         )
+    else:
+        situation = f"Their EMI of {emi_str} rupees is now {reminder.days} day(s) past due -- {total:,.0f} rupees is due now."
 
     facts = (
         f"Borrower: {account.borrower_name}.\n"
