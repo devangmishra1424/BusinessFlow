@@ -2686,6 +2686,7 @@ ${a.telegram_linked
     try {
       const result = await draftClarification(a.account_id, note);
       document.getElementById("clarify-message").value = result.draft;
+      if (result.warnings && result.warnings.length) toast(result.warnings.join(" "), true);
     } catch (err) {
       toast(err.message, true);
     } finally {
@@ -2707,9 +2708,10 @@ ${a.telegram_linked
     try {
       const result = await draftClarification(
         a.account_id,
-        "Summarize every currently open flag on this account for the borrower and ask them to respond."
+        "Tell the borrower plainly everything on their account that needs their attention, and ask them to reply."
       );
       document.getElementById("clarify-message").value = result.draft;
+      if (result.warnings && result.warnings.length) toast(result.warnings.join(" "), true);
     } catch (err) {
       toast(err.message, true);
     } finally {

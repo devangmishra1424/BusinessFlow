@@ -47,6 +47,10 @@ _SYSTEM_PREFIXES = (
 )
 
 
+# A borrower's reply to a message from our team (accounts/store.py reply_to_team_message): an ordinary request.
+REPLY_REASON_PREFIX = "Reply to our message"
+
+
 def classify_escalation(reason: str, proposed_changes: dict | None = None) -> str:
     """Best-effort kind for display and notification wording only -- never
     for any decision that touches the account."""

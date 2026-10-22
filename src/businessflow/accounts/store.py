@@ -23,7 +23,7 @@ import psycopg
 from businessflow.accounts import cases, pins
 from businessflow.accounts.db import get_connection
 from businessflow.accounts.dues import allocate_payment, emi_due_now
-from businessflow.accounts.escalation_kinds import classify_escalation
+from businessflow.accounts.escalation_kinds import REPLY_REASON_PREFIX, classify_escalation
 from businessflow.accounts.models import Account, Charge, Escalation, PaymentRecord, PromiseToPay
 from businessflow.accounts.policy import GRACE_PERIOD_DAYS, LATE_FEE_FLAT_AMOUNT, PAYMENT_TOKEN_TTL_HOURS
 
@@ -1436,21 +1436,82 @@ def get_borrower_messages(account_id: str, ex=None) -> list[dict]:
     is shown in that case's own thread instead -- listing it here too was
     how the borrower ended up reading our reply in one panel and their
     request in another."""
-    rows = (ex or get_connection()).execute(
-        "select event_type, details, created_at from events where account_id = %s and event_type = any(%s) "
+    conn = ex or get_connection()
+    rows = conn.execute(
+        "select id, event_type, details, created_at from events where account_id = %s and event_type = any(%s) "
         "and details->>'case_ref' is null order by created_at desc limit %s",
         (account_id, list(_BORROWER_MESSAGE_KINDS), _MAX_BORROWER_MESSAGES),
     ).fetchall()
+    replied = _replies_by_message(account_id, conn)
     return [
         {
+            "id": r["id"],
             "message": r["details"].get("message", ""),
             "delivered_via_telegram": bool(r["details"].get("delivered_via_telegram", False)),
             "created_at": r["created_at"],
             "kind": _BORROWER_MESSAGE_KINDS[r["event_type"]],
+            # The request the borrower's reply to this message became (reply_to_team_message), or None.
+            "replied_case_ref": replied.get(r["id"]),
         }
         for r in rows
         if r["details"].get("message")
     ]
+
+
+def _replies_by_message(account_id: str, conn) -> dict[int, str]:
+    rows = conn.execute(
+        "select details->>'message_event_id' as mid, details->>'case_ref' as case_ref from events "
+        "where account_id = %s and event_type = 'message_replied' order by id",
+        (account_id,),
+    ).fetchall()
+    return {int(r["mid"]): r["case_ref"] for r in rows if r["mid"]}
+
+
+# What a borrower can reply to: a message a person on our team wrote. A reminder is answered with its actions (pay,
+# promise, ask the assistant), not by a note to a human inbox nobody reads for machine-sent text.
+REPLYABLE_MESSAGE_EVENTS = ("clarification_request_sent",)
+
+
+class MessageNotReplyableError(ValueError):
+    pass
+
+
+def reply_to_team_message(account_id: str, message_event_id: int, text: str, via: str) -> dict:
+    """The borrower answers a message from our team. The first reply opens a request (a case in the ops Inbox) that
+    quotes the message it answers; later replies join that request's thread while it is open, and a reply after it was
+    closed opens a new one. via is "web" or "telegram". Raises MessageNotReplyableError for a message that is not this
+    account's or not one a person wrote. Returns {case_ref, opened}."""
+    conn = get_connection()
+    row = conn.execute(
+        "select event_type, details, created_at from events where id = %s and account_id = %s", (message_event_id, account_id),
+    ).fetchone()
+    if row is None or row["event_type"] not in REPLYABLE_MESSAGE_EVENTS:
+        raise MessageNotReplyableError(f"message {message_event_id} is not a message from our team on this account")
+    earlier = _replies_by_message(account_id, conn).get(message_event_id)
+    if earlier:
+        case = get_case(account_id, earlier)
+        if case is not None and case["open"]:
+            add_case_message(account_id, earlier, "borrower", text)
+            return {"case_ref": earlier, "opened": False}
+    sent = row["created_at"].astimezone(timezone(timedelta(hours=5, minutes=30)))  # the borrower's date, not UTC's
+    quoted = " ".join((row["details"].get("message") or "").split())
+    quoted = quoted if len(quoted) <= 160 else quoted[:157] + "..."
+    reason = f"{REPLY_REASON_PREFIX} of {sent.day} {sent.strftime('%b')} (\"{quoted}\"): {text}"
+    case_ref = create_escalation(account_id, reason)
+    log_event(account_id, "message_replied", {"message_event_id": message_event_id, "case_ref": case_ref, "via": via})
+    return {"case_ref": case_ref, "opened": True}
+
+
+def find_team_message_by_telegram_id(chat_id: int, telegram_message_id: int) -> dict | None:
+    """The team message a Telegram reply quotes: {id, account_id} when the quoted message was one we sent to this chat
+    and a borrower can reply to, else None."""
+    row = get_connection().execute(
+        "select e.id, e.account_id from events e join accounts a on a.account_id = e.account_id "
+        "where e.event_type = any(%s) and a.telegram_chat_id = %s and (e.details->>'telegram_message_id')::bigint = %s "
+        "order by e.id desc limit 1",
+        (list(REPLYABLE_MESSAGE_EVENTS), chat_id, telegram_message_id),
+    ).fetchone()
+    return dict(row) if row else None
 
 
 _MAX_THREAD_EVENTS = 500  # an explicit bound: a few hundred messages is far beyond any real case history here

@@ -456,6 +456,8 @@ class ClarificationDraftIn(BaseModel):
 
 class ClarificationDraftOut(BaseModel):
     draft: str
+    # Internal words the draft still uses after one rewrite ("flag", "escalation"), for the operator to fix.
+    warnings: list[str] = []
 
 
 class ClarificationRequestIn(BaseModel):
@@ -1229,13 +1231,13 @@ def draft_clarification(account_id: str, body: ClarificationDraftIn):
         raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
 
     flags = compute_flags(account)
-    draft = draft_clarification_message(
+    result = draft_clarification_message(
         borrower_name=account.borrower_name,
         business_name=account.business_name,
         flag_reasons=[f.reason for f in flags],
         operator_note=body.operator_note,
     )
-    return ClarificationDraftOut(draft=draft)
+    return ClarificationDraftOut(**result)
 
 
 @app.post(

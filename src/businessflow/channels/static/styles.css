@@ -783,3 +783,11 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .icon-btn { width: 44px; height: 44px; }
   .dash-warning-actions { gap: 10px; }
 }
+
+/* Answering a message from us: a reply box under a team message, the actions under a reminder. */
+.dash-msg-body { flex: 1; min-width: 0; }
+.msg-reply-form { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; margin-top: 10px; }
+.msg-reply-form textarea { flex: 1 1 240px; min-height: 40px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); font: inherit; font-size: 14px; resize: vertical; background: var(--surface); color: var(--text-0); }
+.msg-reply-form textarea:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
+.dash-msg-replied { margin: 8px 0 0; font-size: 13px; color: var(--success); }
+.dash-msg-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }

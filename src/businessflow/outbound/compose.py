@@ -9,6 +9,7 @@ other drafts a reply to an ops-initiated concern about an account's flags.
 """
 
 import logging
+import re
 
 from businessflow.accounts import store
 from businessflow.accounts.dues import reminder_amounts
@@ -189,29 +190,54 @@ _CLARIFICATION_SYSTEM_PROMPT = (
     "-- never invent an amount, date, or claim that wasn't given. Keep it "
     "to 2-4 short sentences, suitable for a Telegram message. End with a "
     "clear, concrete ask (e.g. contact us, make a payment, explain the "
-    "situation) -- never a vague sign-off. Output only the message text "
+    "situation) -- never a vague sign-off. Write the way you would speak "
+    "to the borrower, never in the lender's internal language: no 'flag', "
+    "'escalation', 'risk tier' or 'delinquency' -- say what happened (e.g. "
+    "'your EMI is 19 days late'). Output only the message text "
     "itself: no preamble, no quotation marks, no signature block."
 )
 
 
+# Our own words that mean nothing (or something alarming) to a borrower. Found live: a draft told a borrower "the only
+# open flag on your account is 19 days past due" -- the facts it was given were headed "Current account flags".
+INTERNAL_TERMS = re.compile(
+    r"\b(?:flag(?:s|ged)?|escalat\w*|risk[ -]?(?:tier|score|rating)|guardrail\w*|ticket\w*|ops team|system notice|"
+    r"chronic|delinquen\w*|internal)\b",
+    re.IGNORECASE,
+)
+
+
+def internal_terms_in(text: str) -> list[str]:
+    """The internal words a message to a borrower contains, lower-cased and de-duplicated, in order."""
+    seen: list[str] = []
+    for m in INTERNAL_TERMS.finditer(text or ""):
+        word = m.group(0).lower()
+        if word not in seen:
+            seen.append(word)
+    return seen
+
+
 def draft_clarification_message(
     borrower_name: str, business_name: str, flag_reasons: list[str], operator_note: str
-) -> str:
-    """One real Groq call. Returns the raw draft text for the caller to
-    hand back to the operator for review/editing -- never sent or logged
-    from here (see ops/api.py's draft endpoint and outbound/send.py's
-    notify_clarification_request for the real send step)."""
+) -> dict:
+    """A real Groq call (two at most). Returns {"draft", "warnings"} for the operator to review/edit -- never sent or
+    logged from here (see ops/api.py's draft endpoint and outbound/send.py's notify_clarification_request for the real
+    send step). A draft using our internal words ("flag", "escalation", "risk tier") is redrafted once; any still left
+    are returned as warnings for the operator."""
     facts = (
         f"Borrower: {borrower_name} ({business_name}).\n"
-        f"Current account flags: {'; '.join(flag_reasons) if flag_reasons else 'none currently.'}\n"
+        f"What on their account needs their attention: {'; '.join(flag_reasons) if flag_reasons else 'nothing right now.'}\n"
         f"Loan officer's note: {operator_note}"
     )
-    completion = groq_client().chat.completions.create(
-        model=MODEL,
-        temperature=0.4,
-        messages=[
-            {"role": "system", "content": _CLARIFICATION_SYSTEM_PROMPT},
-            {"role": "user", "content": facts},
-        ],
-    )
-    return (completion.choices[0].message.content or "").strip()
+    messages = [{"role": "system", "content": _CLARIFICATION_SYSTEM_PROMPT}, {"role": "user", "content": facts}]
+    draft = ""
+    for _ in range(2):
+        completion = groq_client().chat.completions.create(model=MODEL, temperature=0.4, messages=messages)
+        draft = (completion.choices[0].message.content or "").strip()
+        terms = internal_terms_in(draft)
+        if not terms:
+            return {"draft": draft, "warnings": []}
+        messages = [*messages, {"role": "assistant", "content": draft},
+                    {"role": "user", "content": f"Rewrite it without these words, which mean nothing to a borrower: "
+                                                f"{', '.join(terms)}. Say plainly what happened instead."}]
+    return {"draft": draft, "warnings": [f"Uses our internal word(s): {', '.join(internal_terms_in(draft))} -- reword before sending."]}
