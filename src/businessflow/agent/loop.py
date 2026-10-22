@@ -337,7 +337,7 @@ def _finalize_reply(conversation: list[dict], verified_account_id: str | None) -
         failure = check_unverified_restructuring_claim(user_message, tools_called_this_turn)
 
     if not failure:
-        failure = grounding.check_fabricated_waiver(reply_text)
+        failure = grounding.check_fabricated_waiver(reply_text, conversation)
 
     if not failure:
         system_prompt = next((m.get("content") or "" for m in conversation if m.get("role") == "system"), "")

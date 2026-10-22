@@ -209,6 +209,8 @@ class AccountSnapshotOut(BaseModel):
     pending_emi_credit: float
     # The borrower's current (or most recent) promise, judged by its own words -- accounts/promises.py plan_view.
     promise: dict | None = None
+    # Late fees a person on the team waived in the last 60 days, with their reason (tools/account_tools.py).
+    recently_waived: list[dict] = []
 
 
 class TimelineEntryOut(BaseModel):

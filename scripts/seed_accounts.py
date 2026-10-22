@@ -45,6 +45,7 @@ from dotenv import load_dotenv
 from psycopg.rows import dict_row
 
 from businessflow.accounts.db import use_schema  # light: psycopg and dotenv only
+from businessflow.accounts.pins import hash_pin  # light: the standard library only
 
 # Explicit here rather than relying on an import of businessflow.accounts.*
 # to load it as a side effect (this script no longer imports that package
@@ -349,16 +350,17 @@ def main():
         conn.execute("delete from payment_tokens where account_id = any(%s)", (_ACCOUNT_IDS,))
 
         for a in accounts:
+            a = {**a, "access_key_hash": hash_pin(a["access_key"])}
             conn.execute(
                 """
                 insert into accounts (
                     account_id, borrower_name, business_name, phone_number, language_preference,
                     loan_type, principal_amount, emi_amount, tenure_months, months_remaining,
-                    emi_due_date, nach_mandate_active, dispute_open, risk_tier, access_key
+                    emi_due_date, nach_mandate_active, dispute_open, risk_tier, access_key, access_key_hash
                 ) values (
                     %(account_id)s, %(borrower_name)s, %(business_name)s, %(phone_number)s, %(language_preference)s,
                     %(loan_type)s, %(principal_amount)s, %(emi_amount)s, %(tenure_months)s, %(months_remaining)s,
-                    %(emi_due_date)s, %(nach_mandate_active)s, %(dispute_open)s, %(risk_tier)s, %(access_key)s
+                    %(emi_due_date)s, %(nach_mandate_active)s, %(dispute_open)s, %(risk_tier)s, null, %(access_key_hash)s
                 )
                 on conflict (account_id) do update set
                     borrower_name = excluded.borrower_name,
@@ -374,7 +376,9 @@ def main():
                     nach_mandate_active = excluded.nach_mandate_active,
                     dispute_open = excluded.dispute_open,
                     risk_tier = excluded.risk_tier,
-                    access_key = excluded.access_key,
+                    -- Only the hash is stored (accounts/pins.py); the demo keys themselves are printed below.
+                    access_key = null,
+                    access_key_hash = excluded.access_key_hash,
                     -- A reseed starts every demo loan clean: credit left by an earlier overpayment used to survive it,
                     -- so a reseeded account could show less due than its seeded story (found by a local test re-run).
                     pending_emi_credit = 0,
