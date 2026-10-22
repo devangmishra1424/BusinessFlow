@@ -188,6 +188,29 @@ create table payment_tokens (
     used_at     timestamptz
 );
 
+-- Bank-statement credit lines and what became of each (migration 2026-10-24_bank_lines.sql, accounts/bank_statement.py):
+-- status 'posted' | 'suggested' | 'unmatched' | 'ignored'; line_hash makes a re-uploaded statement a no-op.
+create table bank_lines (
+    id            bigint primary key generated always as identity,
+    statement     text not null,
+    line_no       integer not null,
+    line_date     date not null,
+    amount        numeric not null check (amount > 0),
+    narration     text not null default '',
+    reference     text not null default '',
+    line_hash     text not null unique,
+    status        text not null check (status in ('posted', 'suggested', 'unmatched', 'ignored')),
+    account_id    text references accounts(account_id) on delete set null,
+    match_reason  text,
+    payment_id    bigint references payment_history(id) on delete set null,
+    dispute_id    bigint references disputes(id) on delete set null,
+    decided_by    text,
+    decided_note  text,
+    decided_at    timestamptz,
+    created_at    timestamptz not null default now()
+);
+create index bank_lines_open_idx on bank_lines (created_at desc) where status in ('suggested', 'unmatched');
+
 -- Generic audit/telemetry log -- every tool call (successful or failed)
 -- and every conversation turn (see memory/conversation_memory.py) is
 -- logged here as one event_type or another, rather than each concern

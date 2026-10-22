@@ -366,7 +366,154 @@ function setView(view) {
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === view));
   document.getElementById("view-overview").hidden = view !== "overview";
   document.getElementById("view-inbox").hidden = view !== "inbox";
+  document.getElementById("view-bank").hidden = view !== "bank";
+  if (view === "bank") loadBank();
 }
+
+/* ============================================================
+   Bank statement (cash application) -- POST /bank-statements, GET /bank-lines
+   ============================================================ */
+const BANK_NAME_KEY = "bf_ops_name";
+function bankName() {
+  const $name = document.getElementById("bank-your-name");
+  const name = $name.value.trim();
+  if (name.length < 2) {
+    $name.focus();
+    throw new Error("Enter your name first -- it is kept on every line you post or set aside.");
+  }
+  try {
+    localStorage.setItem(BANK_NAME_KEY, name);
+  } catch (e) {
+    // Storage blocked (private window): the name just is not remembered next time.
+  }
+  return name;
+}
+
+function bankLineHtml(l, open) {
+  const accountOptions = state.accounts
+    .map((a) => `<option value="${escapeHtml(a.account_id)}"${a.account_id === l.account_id ? " selected" : ""}>${escapeHtml(a.account_id)} — ${escapeHtml(a.borrower_name)}</option>`)
+    .join("");
+  const who = l.account_id ? state.accounts.find((a) => a.account_id === l.account_id) : null;
+  const outcome = l.status === "posted"
+    ? `Recorded on <b>${escapeHtml(l.account_id || "")}</b>${who ? ` (${escapeHtml(who.borrower_name)})` : ""} by ${escapeHtml(l.decided_by || "")}${l.dispute_id ? ` — closed claim D-${l.dispute_id}` : ""}`
+    : l.status === "ignored"
+      ? `Set aside by ${escapeHtml(l.decided_by || "")}: ${escapeHtml(l.decided_note || "")}`
+      : "";
+  return `<div class="bank-line ${l.status}" data-line-id="${l.id}">
+    <div class="bank-line-main">
+      <div class="bank-line-amount">${fmtInr(l.amount)}</div>
+      <div class="bank-line-text">
+        <div>${escapeHtml(l.narration || "(no narration)")}${l.reference ? ` <span class="bank-ref">ref ${escapeHtml(l.reference)}</span>` : ""}</div>
+        <div class="bank-line-meta">${fmtDate(l.line_date)} · ${escapeHtml(l.statement)} row ${l.line_no}</div>
+        ${open ? `<div class="bank-line-reason">${escapeHtml(l.match_reason || "")}</div>` : `<div class="bank-line-reason">${outcome}</div>`}
+      </div>
+    </div>
+    ${open ? `<div class="bank-line-actions">
+      <select class="bank-account">${l.account_id ? "" : '<option value="">Pick the borrower…</option>'}${accountOptions}</select>
+      <button type="button" class="btn btn-primary" data-bank-action="post">Record payment</button>
+      <button type="button" class="btn btn-secondary" data-bank-action="ignore">Not a loan payment</button>
+      <p class="mini-form-error" hidden></p>
+    </div>` : ""}
+  </div>`;
+}
+
+async function loadBank() {
+  try {
+    const [open, done] = await Promise.all([api("/bank-lines?status=open"), api("/bank-lines?status=done")]);
+    document.getElementById("bank-open").innerHTML = open.map((l) => bankLineHtml(l, true)).join("");
+    document.getElementById("bank-open-empty").hidden = open.length > 0;
+    document.getElementById("bank-done").innerHTML = done.slice(0, 30).map((l) => bankLineHtml(l, false)).join("");
+    const badge = document.getElementById("bank-count-badge");
+    badge.textContent = String(open.length);
+    badge.hidden = open.length === 0;
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+(function initBank() {
+  try {
+    document.getElementById("bank-your-name").value = localStorage.getItem(BANK_NAME_KEY) || "";
+  } catch (e) {
+    // Storage blocked: the field starts empty.
+  }
+  document.getElementById("bank-upload-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const $result = document.getElementById("bank-upload-result");
+    const $btn = document.getElementById("bank-upload-btn");
+    const file = document.getElementById("bank-file").files[0];
+    if (!file) return;
+    try {
+      bankName();
+    } catch (err) {
+      toast(err.message, true);
+      return;
+    }
+    $btn.disabled = true;
+    $btn.textContent = "Matching…";
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const r = await api("/bank-statements", { method: "POST", body: form });
+      const bits = [`${r.posted} recorded`, `${r.suggested} waiting with a guess`, `${r.unmatched} unmatched`];
+      if (r.already_uploaded) bits.push(`${r.already_uploaded} already uploaded before (skipped)`);
+      if (r.debits_skipped) bits.push(`${r.debits_skipped} debits skipped`);
+      if (r.rejected_rows.length) bits.push(`${r.rejected_rows.length} rows unreadable (first: row ${r.rejected_rows[0].row}, ${r.rejected_rows[0].reason})`);
+      $result.textContent = `${r.statement}: ${bits.join(" · ")}.`;
+      $result.hidden = false;
+      await loadBank();
+      if (r.posted) await loadAll();
+    } catch (err) {
+      toast(err.message, true);
+    } finally {
+      $btn.disabled = false;
+      $btn.textContent = "Upload and match";
+    }
+  });
+  document.getElementById("bank-open").addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-bank-action]");
+    if (!btn) return;
+    const $line = btn.closest(".bank-line");
+    const $err = $line.querySelector(".mini-form-error");
+    $err.hidden = true;
+    let name;
+    try {
+      name = bankName();
+    } catch (err) {
+      $err.textContent = err.message;
+      $err.hidden = false;
+      return;
+    }
+    const id = $line.dataset.lineId;
+    btn.disabled = true;
+    try {
+      if (btn.dataset.bankAction === "post") {
+        const accountId = $line.querySelector(".bank-account").value;
+        if (!accountId) throw new Error("Pick the borrower this payment is from.");
+        try {
+          await api(`/bank-lines/${id}/post`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ account_id: accountId, decided_by: name }) });
+        } catch (err) {
+          if (!(err.data && err.data.code === "possible_duplicate")) throw err;
+          if (!window.confirm(`${err.data.message}\n\nRecord it anyway?`)) return;
+          await api(`/bank-lines/${id}/post`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ account_id: accountId, decided_by: name, record_even_if_duplicate: true }) });
+        }
+        toast("Payment recorded.");
+        await loadAll();
+      } else {
+        const note = window.prompt("Why is this not a loan payment? (kept on the line)");
+        if (!note || note.trim().length < 3) return;
+        await api(`/bank-lines/${id}/ignore`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decided_by: name, note: note.trim() }) });
+        toast("Set aside.");
+      }
+      await loadBank();
+    } catch (err) {
+      $err.textContent = err.message;
+      $err.hidden = false;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
 
 /* ============================================================
    Since-hours selector
@@ -3254,6 +3401,7 @@ async function loadAll() {
   renderFilterPills();
   renderAccountGrid();
   renderInbox();
+  loadBank(); // the Bank tab's waiting count, kept current with the rest
   metricsRequest
     .then((metrics) => {
       if (myGeneration !== loadGeneration) return;

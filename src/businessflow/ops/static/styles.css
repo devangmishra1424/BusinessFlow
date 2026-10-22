@@ -1000,3 +1000,21 @@ a.voice-row .voice-row-value { color: var(--accent-strong); text-decoration: und
 .lp-part + .lp-part { margin-top: 8px; }
 .lp-readback { margin: 10px 0 0; padding: 8px 12px; border-radius: 8px; background: var(--surface-2, rgba(0,0,0,0.04)); font-size: 13px; font-weight: 600; }
 .lp-confirm { display: flex; align-items: center; gap: 8px; margin: 10px 0; font-size: 13px; }
+
+/* Bank statement view: one row per credit line, the guess and why, and the one action. */
+.bank-upload-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.bank-upload-row input[type="text"] { max-width: 200px; }
+.bank-subhead { font-size: 15px; font-weight: 700; margin: 24px 0 10px; color: var(--text-0); }
+.bank-list { display: grid; gap: 10px; }
+.bank-line { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; display: flex; gap: 16px; justify-content: space-between; flex-wrap: wrap; }
+.bank-line-main { display: flex; gap: 16px; min-width: 0; flex: 1 1 380px; }
+.bank-line-amount { font-weight: 700; font-size: 18px; font-variant-numeric: tabular-nums; min-width: 96px; color: var(--text-0); }
+.bank-line-text { min-width: 0; font-size: 13px; color: var(--text-0); overflow-wrap: anywhere; }
+.bank-line-meta { color: var(--text-3); font-size: 12px; margin-top: 2px; }
+.bank-line-reason { color: var(--text-2); margin-top: 6px; }
+.bank-ref { color: var(--text-3); font-size: 12px; }
+.bank-line-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.bank-line-actions .mini-form-error { flex-basis: 100%; margin: 0; }
+.bank-line.unmatched { border-left: 3px solid var(--warning, #b7791f); }
+.bank-line.posted .bank-line-amount { color: var(--success, #147a52); }
+.bank-line.ignored { opacity: 0.75; }
