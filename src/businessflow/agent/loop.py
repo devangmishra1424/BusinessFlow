@@ -102,6 +102,10 @@ def _retry_after_seconds(error: "groq.RateLimitError") -> float:
     return min(max(seconds, 1.0), _RATE_LIMIT_MAX_WAIT_SECONDS)
 
 
+# What a reply that fails the guardrail (_finalize_reply) is replaced with. Named so evals can recognise it.
+GUARDRAIL_SAFE_REPLY = "Let me connect you with someone who can confirm those exact details before we go further."
+
+
 @langfuse.observe(name="groq_completion", as_type="generation")
 def _create_completion(**kwargs):
     # Four independent retry budgets, deliberately not sharing one counter:
@@ -351,7 +355,7 @@ def _finalize_reply(conversation: list[dict], verified_account_id: str | None) -
     if verified_account_id:
         store.create_escalation(verified_account_id, f"{GUARDRAIL_REASON_PREFIX} {failure.describe()}")
 
-    safe_reply = "Let me connect you with someone who can confirm those exact details before we go further."
+    safe_reply = GUARDRAIL_SAFE_REPLY
     conversation[-1]["content"] = safe_reply
     return conversation, safe_reply
 

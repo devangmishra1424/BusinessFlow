@@ -210,6 +210,19 @@ collection health (`accounts/health.py`):
 Each figure says how it was worked out, and a rate with nothing to measure
 shows "–", not 0%.
 
+**A conversation lab as a CI gate.** `eval/conversation_lab.py` holds labelled
+conversations. Each turn says what must be true afterwards: tools called,
+what a tool answered, what the reply may say, whether the guardrail stepped
+in, what is on the books. Each case cites the policy or KB line its labels
+come from. CI replays every case through the real loop, tools, guardrails and
+database, with the model's side fixed by a cassette, so it needs no API key and
+gives the same result every time.
+- `--record` runs the cases against the real model and saves its words as new cassettes.
+- `--record --prompt-version ID` scores a `prompt_versions` variant on the same cases (offline A/B), before any borrower sees it.
+
+The ops **Quality** tab shows the lab, case by case with its label, and each
+nightly suite's last result.
+
 ## Architecture, in one paragraph
 
 One Groq-hosted LLM (`openai/gpt-oss-20b`) with a belt of tools in a single

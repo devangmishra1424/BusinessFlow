@@ -61,13 +61,15 @@ import logging
 
 from businessflow.accounts.db import database_schema, get_connection
 from businessflow.outbound.send import send_ops_alert
-from eval import latency_benchmark, reasoning_accuracy, red_team, tool_calling_benchmark, voice_naturalness_benchmark
+from eval import conversation_lab, latency_benchmark, reasoning_accuracy, red_team, tool_calling_benchmark, voice_naturalness_benchmark
 from eval.report import RESULTS_DIR, SuiteOutcome, build_report, for_telegram
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 _SUITES = [
+    # Replay only: no model calls, so it costs nothing and runs first. Keeps the ops Quality tab's lab result current.
+    ("conversation_lab", lambda: conversation_lab.run_lab()["summary"]),
     ("tool_calling_benchmark", tool_calling_benchmark.main),
     ("reasoning_accuracy", reasoning_accuracy.main),
     ("red_team", red_team.main),

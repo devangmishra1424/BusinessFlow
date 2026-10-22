@@ -1050,3 +1050,19 @@ a.voice-row .voice-row-value { color: var(--accent-strong); text-decoration: und
 .health-sub { font-size: 12px; color: var(--text-3); }
 @media (max-width: 1100px) { .health-row { grid-template-columns: 1fr; } }
 @media (max-width: 640px) { .health-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Quality: the lab's labelled cases and the nightly suites' last results. */
+#quality-body h2 { font-size: 15px; margin: 18px 0 6px; color: var(--text-0); }
+#quality-body .muted { color: var(--text-3); font-weight: 400; font-size: 12px; }
+.q-score { margin: 0 0 10px; font-size: 13px; color: var(--text-1); }
+.q-case { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; font-size: 13px; }
+.q-case summary { cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.q-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--success); flex-shrink: 0; }
+.q-case.fail .q-dot { background: var(--danger); }
+.q-src { margin-left: auto; color: var(--text-3); font-weight: 400; font-size: 12px; }
+.q-why { margin: 8px 0 4px; color: var(--text-1); }
+.q-label { margin: 0 0 8px; color: var(--text-3); font-size: 12px; overflow-wrap: anywhere; }
+.q-turn { border-top: 1px solid var(--border); padding: 8px 0 0; margin-top: 8px; color: var(--text-1); overflow-wrap: anywhere; }
+.q-problems { margin: 6px 0 0; color: var(--danger); }
+.q-suite { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.q-suite-sum { color: var(--text-1); }

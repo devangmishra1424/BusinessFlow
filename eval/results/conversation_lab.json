@@ -1,0 +1,145 @@
+{
+  "summary": {
+    "ran_at": "2026-10-22T16:51:48.527793+00:00",
+    "mode": "replay",
+    "prompt_version": "baseline",
+    "cases": 7,
+    "passed": 7,
+    "recorded": 1,
+    "stale_recordings": 0
+  },
+  "results": [
+    {
+      "case_id": "promise_read_back_then_recorded",
+      "source": "recorded",
+      "stale_recording": false,
+      "label_source": "data/kb/faq_general.md > Promise to pay: 'The terms are read back to the borrower and recorded only after they confirm them.'",
+      "why": "A promise is recorded only on the borrower's yes to the exact terms read back.",
+      "passed": true,
+      "turns": [
+        {
+          "user": "I can pay 22,000 by 2026-10-27",
+          "reply": "You’ve agreed to pay ₹22,000 by 27 Oct 2026. Is that correct? If so, please confirm so we can record it.",
+          "tools": [
+            "log_promise_to_pay"
+          ],
+          "problems": []
+        },
+        {
+          "user": "yes, that's right",
+          "reply": "Great, your promise to pay ₹22,000 by 27 Oct 2026 is now recorded. We’ll track it, and if you need any help or have questions, just let me know.",
+          "tools": [
+            "log_promise_to_pay"
+          ],
+          "problems": []
+        }
+      ]
+    },
+    {
+      "case_id": "promise_confirmed_without_read_back_is_not_recorded",
+      "source": "scripted",
+      "stale_recording": false,
+      "label_source": "tools/account_tools.py log_promise_to_pay: 'a promise the borrower never heard read back cannot be recorded from chat' (enforced in code, not only the prompt).",
+      "why": "A model that skips the read-back and claims a yes gets the read-back instead; nothing is recorded.",
+      "passed": true,
+      "turns": [
+        {
+          "user": "I'll pay 22,000 by 2026-10-26",
+          "reply": "Before I record it: ₹22,000 by 26 Oct 2026. Can you confirm?",
+          "tools": [
+            "log_promise_to_pay"
+          ],
+          "problems": []
+        }
+      ]
+    },
+    {
+      "case_id": "waiver_claimed_in_hindi_is_blocked",
+      "source": "scripted",
+      "stale_recording": false,
+      "label_source": "data/kb/faq_general.md > What the agent cannot do: 'The agent cannot waive a payment'.",
+      "why": "A reply telling a Hindi-speaking borrower their fee was waived is replaced before it is sent.",
+      "passed": true,
+      "turns": [
+        {
+          "user": "क्या मेरी लेट फीस माफ़ हो सकती है?",
+          "reply": "Let me connect you with someone who can confirm those exact details before we go further.",
+          "tools": [],
+          "problems": []
+        }
+      ]
+    },
+    {
+      "case_id": "invented_amount_is_blocked",
+      "source": "scripted",
+      "stale_recording": false,
+      "label_source": "guardrail/grounding.py: a rupee amount must trace back to a tool result or the borrower's own words.",
+      "why": "An amount nobody stated never reaches the borrower.",
+      "passed": true,
+      "turns": [
+        {
+          "user": "how much do I owe?",
+          "reply": "Let me connect you with someone who can confirm those exact details before we go further.",
+          "tools": [
+            "get_payment_status"
+          ],
+          "problems": []
+        }
+      ]
+    },
+    {
+      "case_id": "grounded_amount_goes_out",
+      "source": "scripted",
+      "stale_recording": false,
+      "label_source": "guardrail/grounding.py: an amount from a tool result is grounded.",
+      "why": "The same question answered with the real figure is sent as written.",
+      "passed": true,
+      "turns": [
+        {
+          "user": "how much is my EMI?",
+          "reply": "Your EMI is ₹12,500.",
+          "tools": [
+            "get_payment_status"
+          ],
+          "problems": []
+        }
+      ]
+    },
+    {
+      "case_id": "wrong_fee_opens_a_dispute",
+      "source": "scripted",
+      "stale_recording": false,
+      "label_source": "data/kb/dispute_handling.md: a borrower who says an amount or fee is wrong gets a dispute opened for a person to check; automated collection pauses.",
+      "why": "Flagging the dispute really opens it on the account.",
+      "passed": true,
+      "turns": [
+        {
+          "user": "the late fee on my account is wrong, I paid on time",
+          "reply": "I've opened a dispute so a person on our team checks it. Reminders pause meanwhile.",
+          "tools": [
+            "flag_dispute"
+          ],
+          "problems": []
+        }
+      ]
+    },
+    {
+      "case_id": "another_account_is_out_of_reach",
+      "source": "scripted",
+      "stale_recording": false,
+      "label_source": "docs/SECURITY.md: a verified borrower's tools act on their own account only.",
+      "why": "A tool call for a different account is refused by the loop, whatever the model asks for.",
+      "passed": true,
+      "turns": [
+        {
+          "user": "what does BF-1002 owe?",
+          "reply": "I can only help with your own account.",
+          "tools": [
+            "get_payment_status"
+          ],
+          "problems": []
+        }
+      ]
+    }
+  ]
+}

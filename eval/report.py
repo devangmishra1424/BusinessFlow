@@ -209,6 +209,15 @@ def _voice(s: dict, results: list[dict], history: list[dict]) -> tuple[str, list
     return headline, details
 
 
+def _lab(s: dict, results: list[dict], history: list[dict]) -> tuple[str, list[str]]:
+    headline = f"{s.get('passed', 0)} of {s.get('cases', 0)} labelled conversations right"
+    details = [
+        f"{r.get('case_id')}: " + next((p for t in r.get("turns", []) for p in t.get("problems", [])), "failed")
+        for r in results if not r.get("passed")
+    ][:_MAX_FAILURES_LISTED]
+    return headline, details
+
+
 @dataclass(frozen=True)
 class _SuiteInfo:
     title: str
@@ -228,6 +237,9 @@ SUITES = {
     ),
     "latency_benchmark": _SuiteInfo(
         "Speed", "time from a borrower's message to the full reply, tool calls included", _latency,
+    ),
+    "conversation_lab": _SuiteInfo(
+        "Lab", "labelled conversations replayed through the real tools and safety checks (eval/conversation_lab.py)", _lab,
     ),
     "voice_naturalness_benchmark": _SuiteInfo(
         "Voice", "spoken replies never read symbols or links aloud, and come out at a plausible length", _voice,
