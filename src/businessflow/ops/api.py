@@ -1327,6 +1327,131 @@ def record_account_payment(account_id: str, body: RecordPaymentIn):
     return RecordPaymentOut(**result)
 
 
+# ============================================================
+# Bank statement (cash application): accounts/bank_statement.py reads and matches, accounts/store.py posts.
+# ============================================================
+
+_MAX_STATEMENT_BYTES = 2 * 1024 * 1024
+
+
+class BankLineOut(BaseModel):
+    id: int
+    statement: str
+    line_no: int
+    line_date: date
+    amount: float
+    narration: str
+    reference: str
+    status: str  # 'posted' | 'suggested' | 'unmatched' | 'ignored'
+    account_id: str | None
+    match_reason: str | None
+    payment_id: int | None
+    dispute_id: int | None  # the payment claim it settled
+    decided_by: str | None
+    decided_note: str | None
+    decided_at: datetime | None
+
+
+class StatementImportOut(BaseModel):
+    statement: str
+    posted: int
+    suggested: int
+    unmatched: int
+    already_uploaded: int
+    debits_skipped: int
+    rejected_rows: list[dict]  # {row, reason}: rows that could not be read, said, not dropped
+    lines: list[BankLineOut]
+
+
+class PostBankLineIn(BaseModel):
+    account_id: str
+    decided_by: str = Field(min_length=2, max_length=80)
+    record_even_if_duplicate: bool = False
+
+
+class IgnoreBankLineIn(BaseModel):
+    decided_by: str = Field(min_length=2, max_length=80)
+    note: str = Field(min_length=3, max_length=300)
+
+
+@app.post("/bank-statements", response_model=StatementImportOut, dependencies=[Depends(require_api_key)])
+async def upload_bank_statement(file: UploadFile = File(...)):
+    """Ops upload the lender's bank statement (a CSV export). Every credit is saved and matched: a line that names one
+    account by a strong identifier (account number, the reference the borrower gave on a payment claim, their phone
+    number) is posted at once and closes that claim, and the borrower is told in the claim's thread; the rest wait,
+    pre-filled with the best guess and why. Uploading the same statement again posts nothing twice. 400 for a file
+    that is not a readable statement."""
+    from businessflow.accounts.bank_statement import StatementError, parse_statement
+
+    raw = await file.read(_MAX_STATEMENT_BYTES + 1)
+    if len(raw) > _MAX_STATEMENT_BYTES:
+        raise HTTPException(status_code=400, detail="the statement is larger than 2 MB -- upload a shorter date range")
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as e:
+        raise HTTPException(status_code=400, detail="the file is not UTF-8 text -- export the statement as CSV") from e
+    name = Path(file.filename or "statement.csv").name[:120]
+    try:
+        parsed = parse_statement(text)
+    except StatementError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    result = store.import_bank_statement(name, parsed)
+    for line in result["lines"]:
+        if line["status"] == "posted" and line["dispute_id"]:
+            await notify.notify_case_message(
+                line["account_id"], cases.dispute_case_ref(line["dispute_id"]),
+                f"We found your payment of ₹{line['amount']:,.0f} on {line['line_date'].day} "
+                f"{line['line_date'].strftime('%b')} in our bank statement. It is now recorded on your loan, "
+                "and this claim is closed.",
+                about="your payment claim", reply_in_chat=False,
+            )
+    return StatementImportOut(
+        statement=name, posted=result["posted"], suggested=result["suggested"], unmatched=result["unmatched"],
+        already_uploaded=result["already_uploaded"], debits_skipped=parsed.debits_skipped,
+        rejected_rows=parsed.rejected[:50], lines=[BankLineOut(**line) for line in result["lines"]],
+    )
+
+
+@app.get("/bank-lines", response_model=list[BankLineOut], dependencies=[Depends(require_api_key)])
+def list_bank_lines(status: Literal["open", "done"] = "open"):
+    """'open': lines waiting for a person, oldest first. 'done': the most recently posted or ignored, newest first."""
+    return [BankLineOut(**line) for line in store.list_bank_lines(status)]
+
+
+@app.post("/bank-lines/{line_id}/post", response_model=BankLineOut, dependencies=[Depends(require_api_key)])
+def post_bank_line(line_id: int, body: PostBankLineIn):
+    """Posts a waiting line to an account as a payment dated the day the bank received it. 409 if it was posted or
+    ignored already; 409 with code possible_duplicate when the same amount is already on the account this week
+    (send record_even_if_duplicate to post it anyway); 404 for an unknown line or account."""
+    try:
+        result = store.post_bank_line(line_id, body.account_id, body.decided_by.strip(), body.record_even_if_duplicate)
+    except store.BankLineAlreadyDecidedError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except store.PossibleDuplicatePaymentError as e:
+        first = e.existing[0]
+        raise HTTPException(status_code=409, detail={
+            "code": "possible_duplicate",
+            "message": f"₹{first['amount']:,.0f} paid on {first['payment_date'].isoformat()} is already on this account. "
+                       "Post anyway only if this is a different payment.",
+            "existing": [{**x, "payment_date": x["payment_date"].isoformat(), "recorded_at": str(x["recorded_at"])} for x in e.existing],
+        }) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return BankLineOut(**result["line"])
+
+
+@app.post("/bank-lines/{line_id}/ignore", response_model=BankLineOut, dependencies=[Depends(require_api_key)])
+def ignore_bank_line(line_id: int, body: IgnoreBankLineIn):
+    """Marks a waiting line as not a loan payment, with who and why. 409 if already decided, 404 if unknown."""
+    try:
+        line = store.ignore_bank_line(line_id, body.decided_by.strip(), body.note.strip())
+    except store.BankLineAlreadyDecidedError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return BankLineOut(**line)
+
+
 @app.post(
     "/accounts/{account_id}/charges/{charge_id}/waive",
     response_model=WaiveChargeOut,

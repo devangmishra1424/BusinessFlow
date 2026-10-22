@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/styles.css?v=26" />
+<link rel="stylesheet" href="/static/styles.css?v=27" />
 </head>
 <body>
 
@@ -45,6 +45,10 @@
       <button class="tab" data-view="inbox">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M3 12h5l2 3h4l2-3h5" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M5.5 5h13l2.5 7v7a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-7l2.5-7Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
         <span class="tab-label">Inbox</span><span class="tab-badge" id="inbox-count-badge" hidden>0</span>
+      </button>
+      <button class="tab" data-view="bank">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M3 10h18L12 4 3 10Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M5 10v8m4.7-8v8m4.6-8v8M19 10v8M3 20h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <span class="tab-label">Bank</span><span class="tab-badge" id="bank-count-badge" hidden>0</span>
       </button>
     </nav>
     <div class="sidebar-footer">
@@ -112,6 +116,28 @@
       <p class="empty-title">All clear</p>
       <p>The inbox is empty — nothing waiting on a person right now.</p>
     </div>
+  </main>
+
+  <main id="view-bank" class="view" hidden>
+    <header class="page-head">
+      <div class="page-head-text">
+        <h1>Bank statement</h1>
+        <p>Upload the bank statement (CSV). A credit that names one borrower by account number, phone number or the reference they gave on a payment claim is recorded on its own, and closes that claim. The rest wait here with a best guess.</p>
+      </div>
+    </header>
+    <section class="bank-upload section-block">
+      <form id="bank-upload-form" class="bank-upload-row">
+        <input type="file" id="bank-file" accept=".csv,text/csv" required />
+        <input type="text" id="bank-your-name" placeholder="Your name" maxlength="80" required />
+        <button type="submit" class="btn btn-primary" id="bank-upload-btn">Upload and match</button>
+      </form>
+      <p class="upload-result" id="bank-upload-result" hidden></p>
+    </section>
+    <h2 class="bank-subhead">Waiting for you</h2>
+    <section class="bank-list" id="bank-open"></section>
+    <p class="empty-state" id="bank-open-empty" hidden>Nothing waiting. Every credit on the statements you uploaded is recorded or set aside.</p>
+    <h2 class="bank-subhead">Recently recorded</h2>
+    <section class="bank-list" id="bank-done"></section>
   </main>
 
   </div>
@@ -251,6 +277,6 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="/static/app.js?v=28"></script>
+<script src="/static/app.js?v=29"></script>
 </body>
 </html>

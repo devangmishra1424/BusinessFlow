@@ -182,6 +182,18 @@ reminders pause and the borrower is reminded of their own terms the day before
 each part and on the day. A new promise replaces an open one, which is not
 counted as broken.
 
+**Cash application from the bank statement.** Ops upload the lender's bank
+statement as CSV. Each credit is matched to a borrower by what it carries
+(`accounts/bank_statement.py`): the account number in the narration, the
+reference the borrower gave on an open payment claim, or their phone number.
+Exactly one account found this way means the line is recorded at once, dated
+the day the bank received it, and it closes that claim. The borrower is told in
+the claim's thread. A name alone is only ever a suggestion, waiting with its
+reason for one click, as is anything that looks like a payment already on
+record. Re-uploading a statement records nothing twice, because each line is
+hashed. A line that is not a loan payment is set aside with who and why, never
+deleted.
+
 ## Architecture, in one paragraph
 
 One Groq-hosted LLM (`openai/gpt-oss-20b`) with a belt of tools in a single

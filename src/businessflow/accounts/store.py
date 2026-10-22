@@ -1553,3 +1553,209 @@ def log_event(account_id: str | None, event_type: str, details: dict) -> None:
             "insert into events (account_id, event_type, details) values (%s, %s, %s)",
             (None, event_type, payload),
         )
+
+
+
+# ============================================================
+# Bank-statement reconciliation (accounts/bank_statement.py reads and matches; this saves and posts).
+# ============================================================
+
+class BankLineAlreadyDecidedError(ValueError):
+    """The line was posted or ignored already (a second click, or a colleague got there first)."""
+
+
+_BANK_LINE_COLUMNS = (
+    "id, statement, line_no, line_date, amount, narration, reference, status, account_id, match_reason, payment_id, "
+    "dispute_id, decided_by, decided_note, decided_at, created_at"
+)
+
+
+def _bank_line(r: dict) -> dict:
+    return {**dict(r), "amount": float(r["amount"])}
+
+
+def _match_candidates(conn) -> list:
+    """Every account as the matcher sees it: names, phone, what is owed now, and the references each borrower gave on
+    an open payment claim (the claim's own words and their messages on it)."""
+    from businessflow.accounts.bank_statement import Candidate, claim_reference_tokens
+    from businessflow.accounts.dues import amount_due_now
+
+    claims = conn.execute(
+        "select id, account_id, reason from disputes where kind = 'payment_claim' and status = 'open'"
+    ).fetchall()
+    refs: dict[str, dict[str, int]] = {}
+    for c in claims:
+        texts = [c["reason"]] + [
+            r["message"] for r in conn.execute(
+                "select details->>'message' as message from events where account_id = %s and event_type = %s "
+                "and details->>'case_ref' = %s and details->>'author' = 'borrower'",
+                (c["account_id"], cases.CASE_MESSAGE_EVENT, cases.dispute_case_ref(c["id"])),
+            ).fetchall()
+        ]
+        for text in texts:
+            for token in claim_reference_tokens(text):
+                refs.setdefault(c["account_id"], {})[token] = c["id"]
+    return [
+        Candidate(a.account_id, a.borrower_name, a.business_name, a.phone_number, amount_due_now(a), refs.get(a.account_id, {}))
+        for a in list_accounts()
+    ]
+
+
+def _post_line_in(tx, line: dict, account_id: str, decided_by: str, note: str | None, dispute_id: int | None,
+                  record_even_if_duplicate: bool) -> dict:
+    """Records the line's payment on account_id inside tx (record_payment's rules, dated the day the bank received it),
+    links it to the line, and closes the payment claim it settles if that claim is still open. Raises
+    PossibleDuplicatePaymentError (recording nothing) when a payment of the same amount is already on the account in
+    the last DUPLICATE_PAYMENT_WINDOW_DAYS -- most often the same money recorded from the pay page or a claim."""
+    _lock_account(tx, account_id)
+    if not record_even_if_duplicate:
+        same = [p for p in recent_payments([account_id], ex=tx).get(account_id, []) if abs(p["amount"] - line["amount"]) < 1]
+        if same:
+            raise PossibleDuplicatePaymentError(same)
+    # Money the bank received counts toward what is owed: less than the EMI is credited toward it, more is credited to
+    # the next one (apply_extra_to_next=True) -- nobody is asked, the borrower sent it to pay their loan.
+    payment = _record_payment_in(tx, account_id, line["amount"], line["line_date"], True, None)
+    payment_id = tx.execute(
+        "select id from payment_history where account_id = %s order by id desc limit 1", (account_id,)
+    ).fetchone()["id"]
+    closed_claim = None
+    if dispute_id is not None:
+        ref = f" (ref {line['reference']})" if line["reference"] else ""
+        row = tx.execute(
+            "update disputes set status = 'resolved', resolved_at = now(), resolution_note = %s "
+            "where id = %s and account_id = %s and status = 'open' returning id",
+            (f"Found on the bank statement: ₹{line['amount']:,.2f} on {line['line_date'].isoformat()}{ref}.",
+             dispute_id, account_id),
+        ).fetchone()
+        if row is not None:
+            closed_claim = dispute_id
+            tx.execute(
+                "update accounts set dispute_open = exists (select 1 from disputes where account_id = %s and status = 'open'), "
+                "updated_at = now() where account_id = %s", (account_id, account_id),
+            )
+    tx.execute(
+        "update bank_lines set status = 'posted', account_id = %s, payment_id = %s, dispute_id = %s, decided_by = %s, "
+        "decided_note = %s, decided_at = now() where id = %s",
+        (account_id, payment_id, closed_claim, decided_by, note, line["id"]),
+    )
+    return {"payment": payment, "payment_id": payment_id, "closed_claim_id": closed_claim}
+
+
+def _payable_ceiling(account: Account) -> float:
+    """tools/validation.py max_payable, restated here so the store does not import the tool layer."""
+    charges = sum(c.outstanding for c in account.charges if c.status == "due")
+    return round(float(account.emi_amount) * max(account.months_remaining, 1) + max(charges, LATE_FEE_FLAT_AMOUNT), 2)
+
+
+def import_bank_statement(statement_name: str, parsed) -> dict:
+    """Saves every credit line of a parsed statement (accounts/bank_statement.py parse_statement) and applies it:
+    a line matched by a strong identifier to exactly one account is posted at once; the rest wait, pre-filled with the
+    best guess and why. A line already uploaded (same line_hash) is skipped -- uploading the same statement twice posts
+    nothing twice. A strong match that looks like a payment already on record (same amount in the last
+    DUPLICATE_PAYMENT_WINDOW_DAYS) or is more than the account could owe is not posted; it waits, saying so.
+
+    Each line is its own transaction: one line that cannot be posted never undoes the others. Returns
+    {posted, suggested, unmatched, already_uploaded, lines: [...]}."""
+    from businessflow.accounts.bank_statement import match_line
+
+    conn = get_connection()
+    candidates = _match_candidates(conn)
+    summary = {"posted": 0, "suggested": 0, "unmatched": 0, "already_uploaded": 0, "lines": []}
+    for line, line_hash in zip(parsed.lines, parsed.hashes()):
+        m = match_line(line, candidates)
+        status = "unmatched" if m.status == "unmatched" else "suggested"
+        row = conn.execute(
+            "insert into bank_lines (statement, line_no, line_date, amount, narration, reference, line_hash, status, "
+            "account_id, match_reason) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) on conflict (line_hash) do nothing "
+            f"returning {_BANK_LINE_COLUMNS}",
+            (statement_name, line.line_no, line.line_date, line.amount, line.narration, line.reference, line_hash,
+             status, m.account_id, m.reason),
+        ).fetchone()
+        if row is None:
+            summary["already_uploaded"] += 1
+            continue
+        saved = _bank_line(row)
+        if m.status == "auto":
+            hold = None
+            if saved["amount"] > _payable_ceiling(get_account_or_raise(m.account_id)):
+                hold = f"{m.reason}, but ₹{saved['amount']:,.0f} is more than this account could owe -- check it"
+            else:
+                try:
+                    with conn.transaction() as tx:
+                        _post_line_in(tx, saved, m.account_id, "bank statement (automatic)", m.reason, m.dispute_id, False)
+                except PossibleDuplicatePaymentError as e:
+                    first = e.existing[0]
+                    hold = (f"{m.reason}, but ₹{first['amount']:,.0f} paid on {first['payment_date'].isoformat()} is "
+                            "already on record -- check this is a different payment before posting it")
+            if hold is None:
+                saved = get_bank_line(saved["id"])
+                summary["posted"] += 1
+                summary["lines"].append(saved)
+                log_event(m.account_id, "bank_credit_applied", {
+                    "bank_line_id": saved["id"], "amount": saved["amount"], "line_date": saved["line_date"],
+                    "reference": saved["reference"], "how": m.reason, "closed_claim_id": saved["dispute_id"],
+                })
+                continue
+            conn.execute("update bank_lines set match_reason = %s where id = %s", (hold, saved["id"]))
+            saved["match_reason"] = hold
+        summary[saved["status"]] += 1
+        summary["lines"].append(saved)
+    logger.info("bank statement %r: %d posted, %d suggested, %d unmatched, %d already uploaded", statement_name,
+                summary["posted"], summary["suggested"], summary["unmatched"], summary["already_uploaded"])
+    return summary
+
+
+def get_bank_line(line_id: int, ex=None) -> dict | None:
+    row = (ex or get_connection()).execute(f"select {_BANK_LINE_COLUMNS} from bank_lines where id = %s", (line_id,)).fetchone()
+    return _bank_line(row) if row else None
+
+
+def list_bank_lines(status: str = "open", limit: int = 200) -> list[dict]:
+    """Lines waiting for a person ('open': suggested + unmatched, oldest first so nothing sinks), or the most recently
+    decided ones ('done': posted + ignored, newest first). Bounded by limit."""
+    if status == "open":
+        where, order = "status in ('suggested', 'unmatched')", "line_date, id"
+    elif status == "done":
+        where, order = "status in ('posted', 'ignored')", "coalesce(decided_at, created_at) desc, id desc"
+    else:
+        raise ValueError(f"status must be 'open' or 'done', got {status!r}")
+    rows = get_connection().execute(
+        f"select {_BANK_LINE_COLUMNS} from bank_lines where {where} order by {order} limit %s", (limit,)
+    ).fetchall()
+    return [_bank_line(r) for r in rows]
+
+
+def post_bank_line(line_id: int, account_id: str, decided_by: str, record_even_if_duplicate: bool = False) -> dict:
+    """A person posts a waiting line to an account (the suggestion, or one they picked). Raises
+    BankLineAlreadyDecidedError if it was posted or ignored already, PossibleDuplicatePaymentError (see _post_line_in),
+    or ValueError for an unknown line or account."""
+    get_account_or_raise(account_id)
+    with get_connection().transaction() as tx:
+        line = tx.execute(f"select {_BANK_LINE_COLUMNS} from bank_lines where id = %s for update", (line_id,)).fetchone()
+        if line is None:
+            raise ValueError(f"no bank line {line_id}")
+        if line["status"] not in ("suggested", "unmatched"):
+            raise BankLineAlreadyDecidedError(f"bank line {line_id} is already {line['status']}")
+        line = _bank_line(line)
+        result = _post_line_in(tx, line, account_id, decided_by, None, None, record_even_if_duplicate)
+    log_event(account_id, "bank_credit_applied", {
+        "bank_line_id": line_id, "amount": line["amount"], "line_date": line["line_date"], "reference": line["reference"],
+        "how": f"posted by {decided_by}",
+    })
+    return {**result, "line": get_bank_line(line_id)}
+
+
+def ignore_bank_line(line_id: int, decided_by: str, note: str) -> dict:
+    """A person says a waiting line is not a loan payment (a refund, a transfer between the lender's own accounts).
+    Recorded with who and why, never deleted. Raises BankLineAlreadyDecidedError when already decided."""
+    row = get_connection().execute(
+        "update bank_lines set status = 'ignored', decided_by = %s, decided_note = %s, decided_at = now() "
+        f"where id = %s and status in ('suggested', 'unmatched') returning {_BANK_LINE_COLUMNS}",
+        (decided_by, note, line_id),
+    ).fetchone()
+    if row is None:
+        existing = get_bank_line(line_id)
+        if existing is None:
+            raise ValueError(f"no bank line {line_id}")
+        raise BankLineAlreadyDecidedError(f"bank line {line_id} is already {existing['status']}")
+    return _bank_line(row)
