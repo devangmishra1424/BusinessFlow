@@ -178,6 +178,49 @@ _FABRICATED_ACTION_RE = re.compile(
 )
 
 
+# The same three claims in Hindi and Hinglish, which the English patterns never read: a borrower who chats in Hindi got
+# no protection from them at all (found reading the patterns, 2026-10-24). Devanagari has no \b in Python's re (vowel
+# signs are not word characters), so word edges are explicit lookarounds over the Devanagari block. Each Hindi match
+# also goes through _negated_hi: "माफ़ नहीं किया जा सकता" (cannot be waived) is a refusal, not a claim.
+_HI = "\u0900-\u097F"
+_HI_DONE = rf"(?:कर\s*)?(?:दिया|दी|दिए|दिये)(?:\s*(?:गया|गई|गयी|गए|है|हैं))?(?![{_HI}])"
+_HINGLISH_DONE = r"(?:kar\s*)?(?:diya|di|diye|kardiya|kar diya)(?:\s*(?:gaya|gayi|gai|hai))?\b|\s*ho\s*(?:gaya|gayi|gai)\b"
+_FABRICATED_ACTION_HI_RE = re.compile(
+    rf"(?:ईमेल|ई-मेल|मेल)\s*(?:कर|भेज)\s*(?:दिया|दी|दिए)(?![{_HI}])"
+    rf"|(?:दस्तावेज़|दस्तावेज|एग्रीमेंट|अनुबंध|कॉपी|प्रति)[^।.!?\n]{{0,40}}?भेज\s*(?:दिया|दी|दिए)(?![{_HI}])"
+    r"|\b(?:e-?mail|mail)\s*(?:kar|bhej)\s*(?:diya|di|diye)\b"
+    r"|\b(?:document|agreement|copy|contract)\b[^.!?\n]{0,40}?\bbhej\s*(?:diya|di|diye)\b",
+    re.IGNORECASE,
+)
+_FABRICATED_WAIVER_HI_RE = re.compile(
+    rf"(?:शुल्क|फीस|फ़ीस|जुर्माना|पेनल्टी|ब्याज|चार्ज|बकाया)[^।.!?\n]{{0,60}}?(?:माफ़|माफ|हटा|रद्द|कम|खत्म|ख़त्म)\s*{_HI_DONE}"
+    rf"|(?:मैंने|हमने)[^।.!?\n]{{0,40}}?(?:माफ़|माफ|हटा|रद्द)\s*{_HI_DONE}"
+    rf"|\b(?:fee|fees|charge|charges|penalty|late fee|interest|jurmana)\b[^.!?\n]{{0,60}}?\b(?:waive|maaf|maf|hata|cancel|kam|khatam)\s*(?:{_HINGLISH_DONE})",
+    re.IGNORECASE,
+)
+_UNAPPLIED_RESTRUCTURING_HI_RE = re.compile(
+    rf"(?:अवधि|टेन्योर|टेनर|लोन|ईएमआई|EMI|किस्त|क़िस्त)[^।.!?\n]{{0,40}}?(?:बढ़ा|बढा|घटा|कम)\s*{_HI_DONE}"
+    rf"|\b(?:tenure|loan|emi|kist|kisht)\b[^.!?\n]{{0,40}}?\b(?:badha|badhaa|extend|ghata|kam)\s*(?:{_HINGLISH_DONE})",
+    re.IGNORECASE,
+)
+_NEGATION_OR_HEDGE_HI = re.compile(
+    rf"(?<![{_HI}])(?:नहीं|नही|न|मत|अगर|यदि|सकते|सकता|सकती|सकेंगे|शायद|क्या)(?![{_HI}])"
+    r"|\b(?:nahi|nahin|nhi|na|mat|agar|sakte|sakta|sakti|shayad|kya)\b",
+    re.IGNORECASE,
+)
+
+
+def _first_unhedged_hi(pattern: re.Pattern, text: str) -> str | None:
+    """The first match of a Hindi/Hinglish claim pattern whose own sentence, up to the match end, has no negation or
+    hedge in it -- the same rule as check_fabricated_waiver's English one."""
+    for match in pattern.finditer(text):
+        sentence_start = max(text.rfind(mark, 0, match.start()) for mark in ".!?\n।") + 1
+        if _NEGATION_OR_HEDGE_HI.search(text[sentence_start : match.end()]):
+            continue
+        return match.group(0)
+    return None
+
+
 class FabricatedActionClaim:
     def __init__(self, matched_phrase: str | None):
         self.matched_phrase = matched_phrase
@@ -196,8 +239,9 @@ def check_fabricated_action(reply_text: str) -> FabricatedActionClaim:
     """No conversation history needed, unlike check_grounding -- there is
     no tool call, ever, that could make this claim true, so it doesn't
     matter what happened earlier in the conversation."""
-    match = _FABRICATED_ACTION_RE.search(_plain_apostrophes(reply_text))
-    return FabricatedActionClaim(match.group(0) if match else None)
+    text = _plain_apostrophes(reply_text)
+    match = _FABRICATED_ACTION_RE.search(text)
+    return FabricatedActionClaim(match.group(0) if match else _first_unhedged_hi(_FABRICATED_ACTION_HI_RE, text))
 
 
 # Found live via a real Telegram conversation: calculate_hypothetical
@@ -237,8 +281,9 @@ class UnappliedRestructuringClaim:
 def check_unapplied_restructuring_claim(reply_text: str) -> UnappliedRestructuringClaim:
     """Same shape as check_fabricated_action -- no conversation history
     needed, since no tool call, ever, could make this claim true yet."""
-    match = _UNAPPLIED_RESTRUCTURING_RE.search(_plain_apostrophes(reply_text))
-    return UnappliedRestructuringClaim(match.group(0) if match else None)
+    text = _plain_apostrophes(reply_text)
+    match = _UNAPPLIED_RESTRUCTURING_RE.search(text)
+    return UnappliedRestructuringClaim(match.group(0) if match else _first_unhedged_hi(_UNAPPLIED_RESTRUCTURING_HI_RE, text))
 
 
 # Prompt injection often aims to make the agent promise something it has no power to give. There is no waiver, refund,
@@ -277,14 +322,25 @@ _NEGATION_OR_HEDGE = re.compile(
 )
 
 
-def check_fabricated_waiver(reply_text: str) -> FabricatedWaiverClaim:
+def _waiver_on_record(conversation: list[dict] | None) -> bool:
+    """A person on the team really did waive a fee, and the assistant was told so by a tool (get_payment_status's
+    recently_waived) -- then saying the fee was waived is true, not invented."""
+    return any(
+        m.get("role") == "tool" and isinstance(m.get("content"), str) and '"recently_waived": [{' in m["content"]
+        for m in conversation or []
+    )
+
+
+def check_fabricated_waiver(reply_text: str, conversation: list[dict] | None = None) -> FabricatedWaiverClaim:
+    if _waiver_on_record(conversation):
+        return FabricatedWaiverClaim(None)
     text = _plain_apostrophes(reply_text)
     for match in _FABRICATED_WAIVER_RE.finditer(text):
         sentence_start = max(text.rfind(mark, 0, match.start()) for mark in ".!?\n") + 1
         if _NEGATION_OR_HEDGE.search(text[sentence_start : match.end()].lower()):
             continue
         return FabricatedWaiverClaim(match.group(0))
-    return FabricatedWaiverClaim(None)
+    return FabricatedWaiverClaim(_first_unhedged_hi(_FABRICATED_WAIVER_HI_RE, text))
 
 
 # A reply must not repeat the system prompt. A run this long, word for word, is not a coincidence: the prompt's own

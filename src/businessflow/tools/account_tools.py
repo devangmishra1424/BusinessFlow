@@ -99,6 +99,14 @@ def get_payment_status(account_id: str) -> dict:
              "amount_still_owed": c.outstanding}
             for c in account.open_charges()
         ],
+        # Late fees a person on the team waived in the last 60 days, with their reason -- so "was my fee removed?" has
+        # a grounded answer, and saying it was is not blocked as an invented waiver (guardrail/grounding.py).
+        "recently_waived": [
+            {"for_emi_due_date": c.for_due_date.isoformat(), "amount_waived": round(c.amount - c.amount_paid, 2),
+             "waived_on": c.waived_on.isoformat(), "reason": c.waived_reason}
+            for c in account.charges
+            if c.status == "waived" and c.waived_on and (as_of - c.waived_on).days <= 60
+        ],
         # What the borrower owes right now -- one grounded figure for the
         # agent to quote (so it never has to add EMI + fee itself, which the
         # grounding guardrail would block as unverified arithmetic) and the

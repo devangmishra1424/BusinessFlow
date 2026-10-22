@@ -46,7 +46,8 @@ create table accounts (
     -- verified once at conversation start via
     -- accounts.store.verify_account_key, gating access to this account's
     -- data for that session.
-    access_key           text,
+    access_key           text,  -- legacy plain-text PIN: null once hashed (migration 2026-10-25_hashed_pins.sql)
+    access_key_hash      text,  -- "scrypt$salt$hash" of the 6-digit PIN (accounts/pins.py); the only copy kept
 
     -- The Telegram chat_id this account last verified from (see
     -- channels/telegram_bot.py's handle_incoming_message), so a decision
@@ -249,7 +250,7 @@ create table prompt_versions (
 create extension if not exists vector;
 
 create table document_chunks (
-    id               text primary key,  -- sha1(source_document :: chunk_index :: ingested_at), see ingest.py
+    id               text primary key,  -- sha1(source_document :: chunk_index :: upload generation), see ingest.py
     source_document  text not null,
     document_type    text not null,  -- 'policy' | 'loan_agreement' | 'kyc' | 'regulatory' | 'other'
 

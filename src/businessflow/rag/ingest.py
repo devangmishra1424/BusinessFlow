@@ -14,6 +14,7 @@ import logging
 import math
 import re
 import threading
+import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -177,13 +178,15 @@ def ingest_document(file_path: str, document_type: str, account_id: str | None =
     # normalize_source_document's docstring for why an absolute one
     # would be wrong now that this store is shared across machines.
     source_document = normalize_source_document(file_path)
-    now = datetime.now(timezone.utc)
+    # Each upload is its own generation: the previous one is kept (marked superseded, not deleted), so this one's ids
+    # must not collide with it. A random generation id, not the clock -- found on Windows, where the clock ticks every
+    # ~15 ms: two uploads of the same file read the same time, built the same ids, and the second failed on the
+    # primary key.
+    generation = uuid.uuid4().hex
 
     rows = [
         (
-            # Folds `now` in, not just source_document + index: the previous generation is kept (marked
-            # superseded, not deleted), so this generation's ids must not collide with it.
-            hashlib.sha1(f"{source_document}::{i}::{now.isoformat()}".encode()).hexdigest(),
+            hashlib.sha1(f"{source_document}::{i}::{generation}".encode()).hexdigest(),
             source_document, document_type, account_id or "general", i, record.headings, record.text,
             embedding_literal(embedding),
         )
@@ -191,6 +194,8 @@ def ingest_document(file_path: str, document_type: str, account_id: str | None =
     ]
     with get_connection().transaction() as tx:
         tx.execute("select pg_advisory_xact_lock(hashtext(%s))", (source_document,))
+        # Read under the lock, so generations are superseded in the order they were written.
+        now = tx.execute("select clock_timestamp() as now").fetchone()["now"]
         _supersede_existing_chunks(tx, source_document, now)
         with tx.cursor() as cursor:
             cursor.executemany(

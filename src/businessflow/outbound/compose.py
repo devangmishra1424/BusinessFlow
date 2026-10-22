@@ -8,12 +8,17 @@ a proactive reminder to a borrower who hasn't asked for anything, the
 other drafts a reply to an ops-initiated concern about an account's flags.
 """
 
+import logging
+
 from businessflow.accounts import store
 from businessflow.accounts.dues import reminder_amounts
 from businessflow.accounts.promises import promise_view_for
 from businessflow.accounts.models import Account
 from businessflow.agent.client import MODEL, groq_client
+from businessflow.guardrail import grounding
 from businessflow.outbound.decide import OutboundReminder
+
+logger = logging.getLogger(__name__)
 
 # Kept local rather than reusing agent/client.py's _LANGUAGE_INSTRUCTIONS --
 # that dict only has "en"/"hi" (a direct KeyError on "hinglish", since the
@@ -65,6 +70,7 @@ def compose_message(account: Account, reminder: OutboundReminder, risk_profile=N
     # emi_amount, which ignored credit and the fee.
     emi, late_fee, total = reminder_amounts(account, reminder.kind)
     emi_str = f"{emi:,.0f}"
+    view = None
     if reminder.kind == "promise_due":
         view = promise_view_for(account, store.current_date())
         part = view["next_part"] if view else None
@@ -93,20 +99,70 @@ def compose_message(account: Account, reminder: OutboundReminder, risk_profile=N
         f"{situation}\n"
         f"Ask them to pay, or contact us if there's a problem."
     )
+    # The only rupee figures this reminder may state: what the facts above gave it.
+    allowed = {round(x, 2) for x in (emi, late_fee, total) if x}
+    if view and view["next_part"]:
+        allowed |= {round(p["amount"], 2) for p in view["parts"]} | {round(view["next_part"]["amount_left"], 2)}
     tone_str = _TONE_INSTRUCTIONS.get(getattr(risk_profile, "recommended_tone", "neutral_reminder"), "")
     system_prompt = _REMINDER_SYSTEM_PROMPT.format(
         tone_instruction=tone_str,
         language_instruction=_LANGUAGE_INSTRUCTIONS.get(account.language_preference, _LANGUAGE_INSTRUCTIONS["en"])
     )
-    completion = groq_client().chat.completions.create(
-        model=MODEL,
-        temperature=0.4,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": facts},
-        ],
-    )
-    return (completion.choices[0].message.content or "").strip()
+    messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": facts}]
+    for attempt in range(2):
+        completion = groq_client().chat.completions.create(model=MODEL, temperature=0.4, messages=messages)
+        text = (completion.choices[0].message.content or "").strip()
+        problem = reminder_problem(text, allowed)
+        if problem is None:
+            return text
+        logger.warning("reminder for %s (%s) failed its check, attempt %d: %s", account.account_id, reminder.kind,
+                       attempt + 1, problem)
+        messages = [*messages, {"role": "assistant", "content": text},
+                    {"role": "user", "content": f"That draft cannot be sent: {problem}. Write it again using only the facts given."}]
+    # Twice wrong: send the plain, fixed wording instead of anything unchecked.
+    store.log_event(account.account_id, "reminder_fallback", {"kind": reminder.kind, "problem": problem})
+    return fallback_reminder(account, reminder, emi, late_fee, total, view)
+
+
+def reminder_problem(text: str, allowed: set[float]) -> str | None:
+    """Why a drafted reminder must not go out, or None. A reminder reaches the borrower with nobody reading it first,
+    so it gets the chat replies' checks (guardrail/grounding.py): every rupee figure must be one the facts gave
+    (within a rupee), and it must not claim a fee was waived, a restructuring applied, or a document sent."""
+    if not text:
+        return "the draft is empty"
+    stated = grounding.extract_rupee_amounts(text) | grounding.extract_shorthand_amounts(text)
+    invented = sorted(a for a in stated if not any(abs(a - ok) < 1 for ok in allowed))
+    if invented:
+        return f"it states {', '.join(f'₹{a:,.0f}' for a in invented)}, which is not in the facts"
+    for check in (grounding.check_fabricated_waiver, grounding.check_unapplied_restructuring_claim, grounding.check_fabricated_action):
+        failure = check(text)
+        if failure:
+            return failure.describe()
+    return None
+
+
+def _fmt_date(d) -> str:
+    return f"{d.day} {d.strftime('%b')} {d.year}"
+
+
+def fallback_reminder(account: Account, reminder: OutboundReminder, emi: float, late_fee: float, total: float,
+                      view: dict | None) -> str:
+    """Fixed wording with only the given figures, for when the model's draft fails its check twice. Hindi for a Hindi
+    borrower, English otherwise (Hinglish readers read either)."""
+    hi = account.language_preference == "hi"
+    name = account.borrower_name.split()[0]
+    if reminder.kind == "promise_due" and view and view["next_part"]:
+        amt, when = view["next_part"]["amount_left"], view["next_part"]["date"]
+        return (f"नमस्ते {name}, आपके वादे के अनुसार ₹{amt:,.0f} {when} तक देने हैं। कोई दिक्कत हो तो हमें बताएं।" if hi else
+                f"Hi {name}, as you promised, ₹{amt:,.0f} is due by {when}. Tell us if anything gets in the way.")
+    if reminder.kind == "heads_up":
+        return (f"नमस्ते {name}, आपकी ₹{emi:,.0f} की EMI {_fmt_date(account.emi_due_date)} को देय है।" if hi else
+                f"Hi {name}, your EMI of ₹{emi:,.0f} is due on {_fmt_date(account.emi_due_date)}.")
+    if late_fee > 0:
+        return (f"नमस्ते {name}, आपकी EMI {reminder.days} दिन से बकाया है और ₹{late_fee:,.0f} लेट फीस लगी है। कुल ₹{total:,.0f} देय है। कोई दिक्कत हो तो हमें बताएं।" if hi else
+                f"Hi {name}, your EMI is {reminder.days} day(s) overdue and a late fee of ₹{late_fee:,.0f} has been charged: ₹{total:,.0f} is due now. Tell us if there is a problem.")
+    return (f"नमस्ते {name}, आपकी ₹{total:,.0f} की EMI अब देय है। कोई दिक्कत हो तो हमें बताएं।" if hi else
+            f"Hi {name}, your EMI of ₹{total:,.0f} is due now. Tell us if there is a problem.")
 
 
 # ============================================================

@@ -59,6 +59,9 @@ Each layer assumes the one before it failed.
 | The recap was a system message built from raw borrower text | a stored injection was promoted one step in authority and outlived its session | quoted, flattened, bounded, labelled as data |
 | `check_policy` searched the borrower's agreement only if the model remembered to pass `account_id` | forgotten, the agreement was never searched | bound in code (a correctness fix as much as a security one) |
 | The "I've sent..." guardrail used a plain apostrophe | the model writes `I’ve`, which never matched | text normalised first (the same bypass existed for the restructuring check) |
+| The sent/waived/restructured claim checks were English only | a Hindi or Hinglish reply ("लेट फीस माफ़ कर दी गई है", "fee waive kar di gayi") passed unchecked | Hindi and Hinglish patterns, with Hindi negations and hedges treated as refusals |
+| Automated reminders were sent with no check | a model-drafted reminder with an invented figure or a "fee waived" claim reached the borrower | every ₹ figure must be one the reminder was given; claim checks run too; redrafted once, then a fixed template |
+| Access keys were stored as plain text | anyone able to read the accounts table could sign in as any borrower | salted scrypt hash only (`accounts/pins.py`); an old plain key is upgraded on first use; `scripts/hash_access_keys.py` backfills |
 
 ## Not done, on purpose or for lack of time
 

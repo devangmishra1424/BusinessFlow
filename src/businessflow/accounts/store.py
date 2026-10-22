@@ -20,7 +20,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import psycopg
 
-from businessflow.accounts import cases
+from businessflow.accounts import cases, pins
 from businessflow.accounts.db import get_connection
 from businessflow.accounts.dues import allocate_payment, emi_due_now
 from businessflow.accounts.escalation_kinds import classify_escalation
@@ -213,17 +213,17 @@ def create_account(
     the caller (ops/api.py) is responsible for showing it to whoever's
     opening this account."""
     account_id = _next_account_id()
-    access_key = f"{secrets.randbelow(1_000_000):06d}"
+    access_key = pins.new_pin()
     get_connection().execute(
         """
         insert into accounts (
             account_id, borrower_name, business_name, phone_number, language_preference,
             loan_type, principal_amount, emi_amount, tenure_months, months_remaining,
-            emi_due_date, nach_mandate_active, dispute_open, risk_tier, access_key
+            emi_due_date, nach_mandate_active, dispute_open, risk_tier, access_key_hash
         ) values (
             %(account_id)s, %(borrower_name)s, %(business_name)s, %(phone_number)s, %(language_preference)s,
             %(loan_type)s, %(principal_amount)s, %(emi_amount)s, %(tenure_months)s, %(tenure_months)s,
-            %(emi_due_date)s, %(nach_mandate_active)s, false, %(risk_tier)s, %(access_key)s
+            %(emi_due_date)s, %(nach_mandate_active)s, false, %(risk_tier)s, %(access_key_hash)s
         )
         """,
         {
@@ -231,7 +231,7 @@ def create_account(
             "phone_number": phone_number, "language_preference": language_preference, "loan_type": loan_type,
             "principal_amount": principal_amount, "emi_amount": emi_amount, "tenure_months": tenure_months,
             "emi_due_date": emi_due_date, "nach_mandate_active": nach_mandate_active, "risk_tier": risk_tier,
-            "access_key": access_key,
+            "access_key_hash": pins.hash_pin(access_key),  # only the hash is kept (accounts/pins.py)
         },
     )
     return get_account_or_raise(account_id), access_key
@@ -250,10 +250,10 @@ def reset_access_key(account_id: str) -> str:
     feature existed, without a direct database query."""
     if get_account(account_id) is None:
         raise ValueError(f"No account found for account_id={account_id!r}")
-    access_key = f"{secrets.randbelow(1_000_000):06d}"
+    access_key = pins.new_pin()
     get_connection().execute(
-        "update accounts set access_key = %s, updated_at = now() where account_id = %s",
-        (access_key, account_id),
+        "update accounts set access_key = null, access_key_hash = %s, updated_at = now() where account_id = %s",
+        (pins.hash_pin(access_key), account_id),
     )
     return access_key
 
@@ -1523,9 +1523,21 @@ def verify_account_key(account_id: str, access_key: str) -> bool:
     once, at conversation start, to gate access to that account's data;
     never returns the key itself, only whether it matched."""
     row = get_connection().execute(
-        "select access_key from accounts where account_id = %s", (account_id,)
+        "select access_key, access_key_hash from accounts where account_id = %s", (account_id,)
     ).fetchone()
-    return row is not None and row["access_key"] == access_key
+    if row is None:
+        return False
+    if row["access_key_hash"]:
+        return pins.verify_pin(access_key, row["access_key_hash"])
+    # A key from before hashing (accounts/pins.py), not yet backfilled: checked once as it was, then stored hashed and
+    # the plain text dropped, so it never needs checking this way again.
+    if row["access_key"] is not None and secrets.compare_digest(row["access_key"], access_key):
+        get_connection().execute(
+            "update accounts set access_key = null, access_key_hash = %s where account_id = %s and access_key = %s",
+            (pins.hash_pin(access_key), account_id, access_key),
+        )
+        return True
+    return False
 
 
 def log_event(account_id: str | None, event_type: str, details: dict) -> None:
