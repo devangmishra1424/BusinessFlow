@@ -48,6 +48,9 @@ create table accounts (
     -- data for that session.
     access_key           text,  -- legacy plain-text PIN: null once hashed (migration 2026-10-25_hashed_pins.sql)
     access_key_hash      text,  -- "scrypt$salt$hash" of the 6-digit PIN (accounts/pins.py); the only copy kept
+    -- The lender's own loan reference, for a loan imported from their loan book (ops/loan_book.py); a second import of
+    -- the same book skips it. Migration 2026-10-26_external_ref.sql.
+    external_ref         text unique,
 
     -- The Telegram chat_id this account last verified from (see
     -- channels/telegram_bot.py's handle_incoming_message), so a decision

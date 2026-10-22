@@ -1066,3 +1066,11 @@ a.voice-row .voice-row-value { color: var(--accent-strong); text-decoration: und
 .q-problems { margin: 6px 0 0; color: var(--danger); }
 .q-suite { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
 .q-suite-sum { color: var(--text-1); }
+
+/* Loan-book import: what is wrong row by row, then each new access key, once. */
+.loan-book { margin: 12px 0; }
+.loan-book-errors { margin: 8px 0; padding-left: 18px; font-size: 13px; color: var(--danger); display: grid; gap: 4px; }
+.loan-book-once { margin: 10px 0 6px; padding: 8px 12px; border-radius: 8px; background: var(--warning-solid-dim); color: var(--text-0); font-size: 13px; }
+.loan-book-keys { width: 100%; border-collapse: collapse; font-size: 13px; margin: 6px 0 10px; }
+.loan-book-keys th, .loan-book-keys td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.loan-book-keys code { font-size: 14px; font-weight: 700; letter-spacing: 0.06em; }

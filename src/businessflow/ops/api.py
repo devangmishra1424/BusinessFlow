@@ -21,6 +21,8 @@ import logging
 import os
 import re
 import shutil
+import subprocess
+import sys
 import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -1855,6 +1857,144 @@ def get_portfolio_health():
                "handing the borrower to a person.",
     }
     return health
+
+
+# ============================================================
+# The living demo: anyone trying the public demo can put the demo borrowers back to their starting story.
+# ============================================================
+
+_DEMO_RESET_COOLDOWN = timedelta(minutes=5)
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+class DemoStatusOut(BaseModel):
+    enabled: bool
+    last_reset_at: datetime | None
+
+
+class DemoResetIn(BaseModel):
+    confirm: Literal["reset"]  # typed, so a stray request cannot wipe what someone is in the middle of
+
+
+def _demo_reset_enabled() -> bool:
+    """On for this demo deployment; a real lender's deployment sets DEMO_RESET_ENABLED=0, and the endpoint is gone."""
+    return os.environ.get("DEMO_RESET_ENABLED", "1") != "0"
+
+
+def _last_demo_reset() -> datetime | None:
+    row = get_connection().execute(
+        "select created_at from events where event_type = 'demo_reset' order by created_at desc limit 1"
+    ).fetchone()
+    return row["created_at"] if row else None
+
+
+@app.get("/demo", response_model=DemoStatusOut, dependencies=[Depends(require_api_key)])
+def demo_status():
+    return DemoStatusOut(enabled=_demo_reset_enabled(), last_reset_at=_last_demo_reset())
+
+
+@app.post("/demo/reset", response_model=DemoStatusOut, dependencies=[Depends(require_api_key)])
+def reset_demo(body: DemoResetIn):
+    """Puts the demo borrowers back to their starting story (scripts/seed_accounts.py, dated from today): payments,
+    promises, fees, cases, messages and bank lines on those accounts are replaced. Accounts anyone opened themselves
+    are left alone. Once per _DEMO_RESET_COOLDOWN at most, so two people trying the demo at once do not keep wiping
+    each other; 404 when the deployment has it off.
+
+    The seed runs as its own process from the repository root (python -m scripts.seed_accounts), the way it is always
+    run: whether `scripts` is importable from inside this server depends on how the server was started. Bounded by a
+    timeout; a seed that fails is a 500 with its last error line, and nothing is half-reset (it is one transaction)."""
+    if not _demo_reset_enabled():
+        raise HTTPException(status_code=404, detail="demo reset is off on this deployment")
+    last = _last_demo_reset()
+    if last is not None and datetime.now(timezone.utc) - last < _DEMO_RESET_COOLDOWN:
+        minutes = max(1, int((datetime.now(timezone.utc) - last).total_seconds() // 60))
+        raise HTTPException(status_code=429, detail=f"the demo was reset {minutes} minute(s) ago -- try again in a few minutes")
+    try:
+        subprocess.run([sys.executable, "-m", "scripts.seed_accounts"], cwd=_REPO_ROOT, check=True, capture_output=True,
+                       text=True, timeout=120)
+    except subprocess.CalledProcessError as e:
+        last_line = (e.stderr or "").strip().splitlines()[-1:] or ["no error output"]
+        logger.error("demo reset failed: %s", last_line[0])
+        raise HTTPException(status_code=500, detail=f"the demo could not be reset: {last_line[0]}") from e
+    except subprocess.TimeoutExpired as e:
+        logger.error("demo reset timed out after 120 s")
+        raise HTTPException(status_code=500, detail="the demo reset took too long and was stopped") from e
+    store.log_event(None, "demo_reset", {})
+    logger.info("demo reset: the demo accounts are back to their starting story")
+    return DemoStatusOut(enabled=True, last_reset_at=_last_demo_reset())
+
+
+# ============================================================
+# Loan-book import: a lender's existing loans from a CSV export (ops/loan_book.py reads and checks every row).
+# ============================================================
+
+_MAX_LOAN_BOOK_BYTES = 2 * 1024 * 1024
+
+
+class LoanBookRowOut(BaseModel):
+    row: int
+    borrower_name: str | None = None
+    external_ref: str | None = None
+    errors: list[str] = []
+    account_id: str | None = None  # set when created, or when the loan was already on the books
+    access_key: str | None = None  # set only when created -- shown once, never stored in clear
+    telegram_invite_link: str | None = None
+
+
+class LoanBookOut(BaseModel):
+    dry_run: bool
+    imported: bool  # False whenever any row has an error: nothing is written then
+    rows: int
+    ready: int  # rows that would be (or were) opened
+    already_on_books: int
+    with_errors: int
+    details: list[LoanBookRowOut]
+
+
+@app.post("/loan-book", response_model=LoanBookOut, dependencies=[Depends(require_api_key)])
+async def import_loan_book(file: UploadFile = File(...), dry_run: bool = Form(True)):
+    """Imports a loan book (CSV): every row checked first (ops/loan_book.py). dry_run=true (the default) only says
+    what would happen. With dry_run=false the loans are opened -- all of them, or none if any row has an error; a loan
+    whose reference is already on the books is skipped, never opened twice. Each new account's access key is in the
+    response, once (the database keeps only its hash). 400 for a file that is not a loan book at all."""
+    from businessflow.ops.loan_book import LoanBookError, parse_loan_book
+
+    raw = await file.read(_MAX_LOAN_BOOK_BYTES + 1)
+    if len(raw) > _MAX_LOAN_BOOK_BYTES:
+        raise HTTPException(status_code=400, detail="the loan book is larger than 2 MB -- split it")
+    try:
+        rows = parse_loan_book(raw.decode("utf-8-sig"))
+    except UnicodeDecodeError as e:
+        raise HTTPException(status_code=400, detail="the file is not UTF-8 text -- export it as CSV") from e
+    except LoanBookError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    existing = store.accounts_by_external_ref([r.values["external_ref"] for r in rows if r.values.get("external_ref")])
+    details = []
+    for r in rows:
+        ref = r.values.get("external_ref")
+        details.append(LoanBookRowOut(row=r.row, borrower_name=r.values.get("borrower_name"), external_ref=ref,
+                                      errors=r.errors, account_id=existing.get(ref) if ref else None))
+    with_errors = sum(1 for d in details if d.errors)
+    to_open = [(r, d) for r, d in zip(rows, details) if not d.errors and d.account_id is None]
+    imported = not dry_run and with_errors == 0
+    if imported:
+        for r, d in to_open:
+            v = r.values
+            account, key = store.create_account(
+                v["borrower_name"], v["business_name"], v["phone_number"], v["language_preference"], v["loan_type"],
+                v["principal_amount"], v["emi_amount"], v["tenure_months"], v["emi_due_date"], v["nach_mandate_active"],
+                v["risk_tier"], months_remaining=v["months_remaining"], external_ref=v["external_ref"],
+            )
+            d.account_id, d.access_key = account.account_id, key
+            d.telegram_invite_link = _telegram_invite_link(account.account_id, key)
+        logger.info("loan book %r: %d opened, %d already on the books", file.filename, len(to_open),
+                    sum(1 for d in details if d.account_id and not d.access_key))
+    return LoanBookOut(
+        dry_run=dry_run, imported=imported, rows=len(rows), ready=len(to_open),
+        already_on_books=sum(1 for d in details if d.account_id and not d.access_key and not d.errors),
+        with_errors=with_errors, details=details,
+    )
 
 
 _EVAL_RESULTS_DIR = Path(__file__).resolve().parents[3] / "eval" / "results"

@@ -179,7 +179,7 @@ def get_account_by_phone(phone_number: str) -> Account | None:
     return _row_to_account(row) if row else None
 
 
-def _next_account_id() -> str:
+def _next_account_id(ex=None) -> str:
     """BF-1001, BF-1002, ... -- the next id after whatever's already the
     highest numbered account. Computed in Python from the existing rows
     rather than a real Postgres sequence (like escalation_seq) -- ops
@@ -187,7 +187,7 @@ def _next_account_id() -> str:
     not a hot concurrent path, so the small window between this read and
     the insert below racing another creation isn't worth a schema change
     to close. Starts at BF-1001 if the table is somehow empty."""
-    row = get_connection().execute(
+    row = (ex or get_connection()).execute(
         "select account_id from accounts where account_id ~ '^BF-[0-9]+$' order by (substring(account_id from 4))::int desc limit 1"
     ).fetchone()
     if row is None:
@@ -200,6 +200,7 @@ def create_account(
     borrower_name: str, business_name: str, phone_number: str, language_preference: str,
     loan_type: str, principal_amount: float, emi_amount: float, tenure_months: int,
     emi_due_date: date, nach_mandate_active: bool, risk_tier: str,
+    months_remaining: int | None = None, external_ref: str | None = None,
 ) -> tuple[Account, str]:
     """Opens a brand-new loan account -- months_remaining starts equal to
     tenure_months (nothing paid down yet) and dispute_open starts False;
@@ -211,30 +212,48 @@ def create_account(
     field on Account itself (see verify_account_key, which queries the
     column directly), so this is the only place it's ever handed back;
     the caller (ops/api.py) is responsible for showing it to whoever's
-    opening this account."""
-    account_id = _next_account_id()
+    opening this account.
+
+    months_remaining (default: the whole tenure) and external_ref (the lender's own loan reference) are for a loan
+    brought over mid-life from another system (ops/loan_book.py). The id is allocated and the row inserted under one
+    advisory lock, so two creations at once (a loan-book import beside the New account form) never take the same id."""
     access_key = pins.new_pin()
-    get_connection().execute(
-        """
-        insert into accounts (
-            account_id, borrower_name, business_name, phone_number, language_preference,
-            loan_type, principal_amount, emi_amount, tenure_months, months_remaining,
-            emi_due_date, nach_mandate_active, dispute_open, risk_tier, access_key_hash
-        ) values (
-            %(account_id)s, %(borrower_name)s, %(business_name)s, %(phone_number)s, %(language_preference)s,
-            %(loan_type)s, %(principal_amount)s, %(emi_amount)s, %(tenure_months)s, %(tenure_months)s,
-            %(emi_due_date)s, %(nach_mandate_active)s, false, %(risk_tier)s, %(access_key_hash)s
+    with get_connection().transaction() as tx:
+        tx.execute("select pg_advisory_xact_lock(hashtext('account-id'))")
+        account_id = _next_account_id(tx)
+        tx.execute(
+            """
+            insert into accounts (
+                account_id, borrower_name, business_name, phone_number, language_preference,
+                loan_type, principal_amount, emi_amount, tenure_months, months_remaining,
+                emi_due_date, nach_mandate_active, dispute_open, risk_tier, access_key_hash, external_ref
+            ) values (
+                %(account_id)s, %(borrower_name)s, %(business_name)s, %(phone_number)s, %(language_preference)s,
+                %(loan_type)s, %(principal_amount)s, %(emi_amount)s, %(tenure_months)s, %(months_remaining)s,
+                %(emi_due_date)s, %(nach_mandate_active)s, false, %(risk_tier)s, %(access_key_hash)s, %(external_ref)s
+            )
+            """,
+            {
+                "account_id": account_id, "borrower_name": borrower_name, "business_name": business_name,
+                "phone_number": phone_number, "language_preference": language_preference, "loan_type": loan_type,
+                "principal_amount": principal_amount, "emi_amount": emi_amount, "tenure_months": tenure_months,
+                "months_remaining": months_remaining or tenure_months,
+                "emi_due_date": emi_due_date, "nach_mandate_active": nach_mandate_active, "risk_tier": risk_tier,
+                "access_key_hash": pins.hash_pin(access_key),  # only the hash is kept (accounts/pins.py)
+                "external_ref": external_ref,
+            },
         )
-        """,
-        {
-            "account_id": account_id, "borrower_name": borrower_name, "business_name": business_name,
-            "phone_number": phone_number, "language_preference": language_preference, "loan_type": loan_type,
-            "principal_amount": principal_amount, "emi_amount": emi_amount, "tenure_months": tenure_months,
-            "emi_due_date": emi_due_date, "nach_mandate_active": nach_mandate_active, "risk_tier": risk_tier,
-            "access_key_hash": pins.hash_pin(access_key),  # only the hash is kept (accounts/pins.py)
-        },
-    )
     return get_account_or_raise(account_id), access_key
+
+
+def accounts_by_external_ref(refs: list[str]) -> dict[str, str]:
+    """{external_ref: account_id} for the lender's loan references already on the books."""
+    if not refs:
+        return {}
+    rows = get_connection().execute(
+        "select external_ref, account_id from accounts where external_ref = any(%s)", (list(refs),)
+    ).fetchall()
+    return {r["external_ref"]: r["account_id"] for r in rows}
 
 
 def reset_access_key(account_id: str) -> str:

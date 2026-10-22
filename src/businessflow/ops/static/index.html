@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/styles.css?v=29" />
+<link rel="stylesheet" href="/static/styles.css?v=30" />
 </head>
 <body>
 
@@ -56,6 +56,10 @@
       </button>
     </nav>
     <div class="sidebar-footer">
+      <button id="demo-reset-btn" class="lock-btn" title="Put the demo borrowers back to their starting story" hidden>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M4 12a8 8 0 1 0 2.3-5.6L4 8.7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 4v4.7h4.7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="tab-label">Reset demo</span>
+      </button>
       <button id="lock-btn" class="lock-btn" title="Lock">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" stroke-width="2"/><path d="M8 11V7a4 4 0 1 1 8 0v4" stroke="currentColor" stroke-width="2"/></svg>
         <span class="tab-label">Lock</span>
@@ -73,9 +77,21 @@
       </div>
       <div class="page-actions">
         <button class="btn btn-secondary" id="send-reminders-btn">Send reminders now</button>
+        <button class="btn btn-secondary" id="loan-book-btn">Import loan book</button>
         <button class="btn btn-primary" id="new-account-btn">+ New account</button>
       </div>
     </header>
+
+    <section class="loan-book section-block" id="loan-book-panel" hidden>
+      <p class="inline-form-title">Import a loan book (CSV)</p>
+      <p class="section-subtitle">One row per loan. Needed: borrower name, business name, phone, principal, EMI, tenure, next due date. Optional: loan reference, language, loan type, months remaining, NACH (yes/no), risk. Every row is checked first; nothing is opened unless every row is right, and a loan whose reference is already here is skipped.</p>
+      <div class="bank-upload-row">
+        <input type="file" id="loan-book-file" accept=".csv,text/csv" />
+        <button type="button" class="btn btn-secondary" id="loan-book-check">Check the file</button>
+        <button type="button" class="btn btn-primary" id="loan-book-import" hidden>Open the loans</button>
+      </div>
+      <div id="loan-book-result"></div>
+    </section>
 
     <section class="kpi-row" id="kpi-row"></section>
     <section class="health-row" id="health-row" aria-label="Collection health" hidden></section>
@@ -292,6 +308,6 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="/static/app.js?v=31"></script>
+<script src="/static/app.js?v=33"></script>
 </body>
 </html>
