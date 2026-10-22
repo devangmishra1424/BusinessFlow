@@ -341,7 +341,11 @@ _LATE_FEE_AMOUNT_VS_STATUS = (
     "late fee policy exists. A borrower asking what the late fee IS, or "
     "what it would be if they're late, is asking a policy question -- call "
     "check_policy for the real flat amount rather than treating "
-    "late_fee_applicable=false as a complete answer."
+    "late_fee_applicable=false as a complete answer. A late fee the account owes "
+    "is a real charge listed in get_payment_status's charges (with the EMI it is "
+    "for): it stays owed after the EMI is paid, until it is paid or our team "
+    "waives it -- never tell a borrower a fee is gone, removed or waived unless "
+    "it is no longer in charges."
 )
 
 # Found via eval/red_team.py's out_of_domain_legal scenario: asked

@@ -67,12 +67,40 @@ create table payment_history (
     payment_date  date not null,
     amount        numeric not null,
     on_time       boolean not null,
-    -- 'regular' | 'extra_unapplied' | 'extra_applied' | 'overpayment_applied' | 'principal_prepayment_reduce_emi' | 'principal_prepayment_reduce_tenure'
+    -- 'regular' | 'extra_unapplied' | 'extra_applied' | 'overpayment_applied' | 'principal_prepayment_reduce_emi' | 'principal_prepayment_reduce_tenure' | 'charge'
     -- -- see accounts/models.py's PaymentRecord.kind for what each means.
     kind          text not null default 'regular'
-                  check (kind in ('regular', 'extra_unapplied', 'extra_applied', 'overpayment_applied', 'principal_prepayment_reduce_emi', 'principal_prepayment_reduce_tenure')),
+                  constraint payment_history_kind_check
+                  check (kind in ('regular', 'extra_unapplied', 'extra_applied', 'overpayment_applied', 'principal_prepayment_reduce_emi', 'principal_prepayment_reduce_tenure', 'charge')),
+    -- How much of this payment went to charges (a late fee), not to the EMI: a payment of EMI + fee reads as exactly that.
+    -- See accounts/dues.py's allocate_payment for the order a payment is applied in. Migration 2026-10-22_charges.sql.
+    charges_paid  numeric not null default 0,
     created_at    timestamptz not null default now()
 );
+
+-- A charge on the account: today only the late fee (accounts/policy.py LATE_FEE_FLAT_AMOUNT), assessed once per missed
+-- instalment (for_due_date) once the grace period has passed -- never twice for the same instalment, never compounded,
+-- never charged interest. status: 'due' (amount_paid < amount), 'paid', or 'waived' (by whom, why: a recorded decision,
+-- never a deletion). Cascades with its account only so test clean-up can delete accounts; production never deletes one.
+-- Migration 2026-10-22_charges.sql.
+create table charges (
+    id                  bigint primary key generated always as identity,
+    account_id          text not null references accounts(account_id) on delete cascade,
+    kind                text not null check (kind in ('late_fee')),
+    for_due_date        date not null,
+    amount              numeric not null check (amount > 0),
+    amount_paid         numeric not null default 0 check (amount_paid >= 0),
+    assessed_on         date not null,
+    status              text not null default 'due' check (status in ('due', 'paid', 'waived')),
+    paid_on             date,
+    paid_by_payment_id  bigint references payment_history(id) on delete set null,
+    waived_on           date,
+    waived_by           text,
+    waived_reason       text,
+    created_at          timestamptz not null default now(),
+    unique (account_id, kind, for_due_date)
+);
+create index charges_account_due_idx on charges (account_id) where status = 'due';
 
 create table promises (
     id               bigint primary key generated always as identity,

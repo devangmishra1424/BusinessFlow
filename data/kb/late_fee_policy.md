@@ -1,21 +1,20 @@
 # Late fee policy
 
-An EMI paid after the 3-day grace period (see grace_period.md) is charged
-a flat late fee of ₹500, on top of the EMI amount itself. This is a flat
-amount, not a percentage of the EMI or the outstanding balance, and it
-applies once per EMI cycle that goes past the grace period — not once per
-day past due.
+An EMI still unpaid after the 3-day grace period (see grace_period.md) is
+charged a flat late fee of ₹500 — a flat amount, not a percentage, charged
+once per EMI that goes past the grace period, not once per day. It is never
+compounded and never charged interest. From day 4 past the due date it is a
+real charge on the account, shown with the EMI it is for until it is paid or
+waived. A payment made within the grace period never carries the fee.
 
-Within the 3-day grace period, no late fee applies at all. The fee only
-starts from day 4 past the due date onward.
+A payment goes to the EMI first, then to any late fee still owed; anything
+left is an extra payment. Paying the EMI keeps the loan up to date; the fee
+stays owed until paid.
 
-This ₹500 figure is real, current policy (see accounts/policy.py's
-LATE_FEE_FLAT_AMOUNT) -- safe to state directly since retrieving it here
-via check_policy already grounds it; don't defer to "we'll let you know
-later." get_payment_status's late_fee_applicable/late_fee_amount fields
-answer a different question -- whether THIS account owes it right now.
+This ₹500 figure is current policy (accounts/policy.py LATE_FEE_FLAT_AMOUNT),
+safe to state directly. get_payment_status's charges and late_fee_amount say
+which fees THIS account owes right now.
 
-A borrower who believes a late fee was charged incorrectly — for example,
-a payment that was actually made within the grace period — should be
-treated as a dispute (see dispute_handling.md), not talked out of it or
-waived on the spot.
+A borrower who believes a fee was charged wrongly is raising a dispute
+(see dispute_handling.md), not to be talked out of it. Only our team can waive a
+fee, with a reason the borrower is told.

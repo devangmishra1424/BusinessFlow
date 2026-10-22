@@ -985,3 +985,13 @@ a.voice-row .voice-row-value { color: var(--accent-strong); text-decoration: und
   .voice-menu { width: 36px; height: 36px; }
   .voice-run-item { flex-basis: 100%; order: 3; }
 }
+
+/* Late fees in the account's Payments tab (app.js chargesHtml). */
+.charge-list { list-style: none; margin: 8px 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.charge-item { border: 1px solid var(--border, #e3e7ee); border-radius: 8px; padding: 8px 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.charge-main { flex: 1 1 260px; font-size: 13px; }
+.charge-status { display: block; color: var(--muted, #667085); font-size: 12px; margin-top: 2px; }
+.charge-due .charge-status { color: var(--danger, #c0392b); }
+.waive-form { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; }
+.waive-form input { flex: 1 1 160px; min-width: 0; }
+.charge-item .btn-sm, .waive-form .btn-sm { padding: 4px 10px; font-size: 12px; }

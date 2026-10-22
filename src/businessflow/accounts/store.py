@@ -22,10 +22,10 @@ import psycopg
 
 from businessflow.accounts import cases
 from businessflow.accounts.db import get_connection
-from businessflow.accounts.dues import late_fee_due
+from businessflow.accounts.dues import allocate_payment, emi_due_now
 from businessflow.accounts.escalation_kinds import classify_escalation
-from businessflow.accounts.models import Account, Escalation, PaymentRecord, PromiseToPay
-from businessflow.accounts.policy import PAYMENT_TOKEN_TTL_HOURS, PROMISE_TOLERANCE_DAYS
+from businessflow.accounts.models import Account, Charge, Escalation, PaymentRecord, PromiseToPay
+from businessflow.accounts.policy import GRACE_PERIOD_DAYS, LATE_FEE_FLAT_AMOUNT, PAYMENT_TOKEN_TTL_HOURS, PROMISE_TOLERANCE_DAYS
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,21 @@ logger = logging.getLogger(__name__)
 # one screen now share one connection.
 
 def _payment_record(r: dict) -> PaymentRecord:
-    return PaymentRecord(date=r["payment_date"], amount=float(r["amount"]), on_time=r["on_time"], kind=r["kind"])
+    return PaymentRecord(
+        date=r["payment_date"], amount=float(r["amount"]), on_time=r["on_time"], kind=r["kind"],
+        charges_paid=float(r.get("charges_paid") or 0),
+    )
+
+
+def _charge(r: dict) -> Charge:
+    return Charge(
+        id=r["id"], kind=r["kind"], for_due_date=r["for_due_date"], amount=float(r["amount"]),
+        amount_paid=float(r["amount_paid"]), assessed_on=r["assessed_on"], status=r["status"], paid_on=r["paid_on"],
+        waived_on=r["waived_on"], waived_by=r["waived_by"], waived_reason=r["waived_reason"],
+    )
+
+
+_CHARGE_COLUMNS = "id, account_id, kind, for_due_date, amount, amount_paid, assessed_on, status, paid_on, waived_on, waived_by, waived_reason"
 
 
 def _promise(r: dict) -> PromiseToPay:
@@ -46,10 +60,17 @@ def _promise(r: dict) -> PromiseToPay:
 
 def _load_payment_history(account_id: str, ex=None) -> list[PaymentRecord]:
     rows = (ex or get_connection()).execute(
-        "select payment_date, amount, on_time, kind from payment_history where account_id = %s order by payment_date",
+        "select payment_date, amount, on_time, kind, charges_paid from payment_history where account_id = %s order by payment_date",
         (account_id,),
     ).fetchall()
     return [_payment_record(r) for r in rows]
+
+
+def _load_charges(account_id: str, ex=None) -> list[Charge]:
+    rows = (ex or get_connection()).execute(
+        f"select {_CHARGE_COLUMNS} from charges where account_id = %s order by for_due_date, id", (account_id,),
+    ).fetchall()
+    return [_charge(r) for r in rows]
 
 
 def _load_promises(account_id: str, ex=None) -> list[PromiseToPay]:
@@ -84,6 +105,7 @@ def _row_to_account(row: dict, with_history: bool = True, ex=None) -> Account:
         telegram_chat_id=row["telegram_chat_id"],
         payment_history=_load_payment_history(row["account_id"], ex) if with_history else [],
         promises=_load_promises(row["account_id"], ex) if with_history else [],
+        charges=_load_charges(row["account_id"], ex) if with_history else [],
     )
 
 
@@ -106,15 +128,19 @@ def get_account_or_raise(account_id: str) -> Account:
 
 
 def list_accounts() -> list[Account]:
-    """Every account with its payment history and promises, in three queries on one connection (not two more per
-    account: see the note above _payment_record). The three reads share one transaction, so they see one consistent
-    state of the books."""
+    """Every account with its payment history, promises and charges, in four queries on one connection (not three more
+    per account: see the note above _payment_record). The reads share one transaction, so they see one consistent state
+    of the books. Callers that show what is owed today run assess_late_fees() first."""
     with get_connection().transaction() as conn:
         rows = conn.execute("select * from accounts order by account_id").fetchall()
         ids = [r["account_id"] for r in rows]
         history_rows = conn.execute(
-            "select account_id, payment_date, amount, on_time, kind from payment_history "
+            "select account_id, payment_date, amount, on_time, kind, charges_paid from payment_history "
             "where account_id = any(%s) order by account_id, payment_date",
+            (ids,),
+        ).fetchall()
+        charge_rows = conn.execute(
+            f"select {_CHARGE_COLUMNS} from charges where account_id = any(%s) order by account_id, for_due_date, id",
             (ids,),
         ).fetchall()
         promise_rows = conn.execute(
@@ -128,11 +154,15 @@ def list_accounts() -> list[Account]:
     promises: dict[str, list[PromiseToPay]] = {i: [] for i in ids}
     for r in promise_rows:
         promises[r["account_id"]].append(_promise(r))
+    charges: dict[str, list[Charge]] = {i: [] for i in ids}
+    for r in charge_rows:
+        charges[r["account_id"]].append(_charge(r))
     accounts = []
     for r in rows:
         account = _row_to_account(r, with_history=False)
         account.payment_history = history[r["account_id"]]
         account.promises = promises[r["account_id"]]
+        account.charges = charges[r["account_id"]]
         accounts.append(account)
     return accounts
 
@@ -797,6 +827,67 @@ def get_account_by_telegram_chat_id(chat_id: int) -> Account | None:
     return _row_to_account(row) if row else None
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# Charges: the late fee on the books (schema.sql's charges table, accounts/dues.py).
+# ---------------------------------------------------------------------------------------------------------------------
+
+def assess_late_fees(as_of: date | None = None, account_id: str | None = None, ex=None) -> int:
+    """Assesses the late fee on every account whose current instalment is past the grace period unpaid as of as_of
+    (default today), or on just account_id. One statement, safe to run any number of times: the charges table's unique
+    (account_id, kind, for_due_date) means an instalment is charged once, ever. Returns how many fees were added.
+
+    Run by the daily outbound pass, by record_payment (as of the payment's date, inside its transaction), and by every
+    screen that shows what is owed, so a fee is on the books the first time anyone looks, not only after the next
+    nightly pass. The condition is the same as dues.late_fee_assessable (days past due > GRACE_PERIOD_DAYS on a loan
+    with EMIs left), written in SQL so one round trip covers every account."""
+    as_of = as_of or current_date()
+    params = {"fee": LATE_FEE_FLAT_AMOUNT, "as_of": as_of, "grace": GRACE_PERIOD_DAYS, "account_id": account_id}
+    rows = (ex or get_connection()).execute(
+        """
+        insert into charges (account_id, kind, for_due_date, amount, assessed_on)
+        select account_id, 'late_fee', emi_due_date, %(fee)s, %(as_of)s
+        from accounts
+        where months_remaining > 0 and (%(as_of)s::date - emi_due_date) > %(grace)s
+          and (%(account_id)s::text is null or account_id = %(account_id)s::text)
+        on conflict (account_id, kind, for_due_date) do nothing
+        returning account_id, for_due_date
+        """,
+        params,
+    ).fetchall()
+    for r in rows:
+        logger.info("late fee assessed: account %s, instalment due %s, %.2f", r["account_id"], r["for_due_date"], LATE_FEE_FLAT_AMOUNT)
+    return len(rows)
+
+
+class ChargeNotFoundError(ValueError):
+    pass
+
+
+class ChargeNotOpenError(ValueError):
+    """The charge was already paid or waived: there is nothing left to waive."""
+
+
+def waive_charge(account_id: str, charge_id: int, waived_by: str, reason: str) -> Charge:
+    """Waives what is still owed on a charge: a recorded decision (who, why, when), never a deletion. Only a charge of
+    this account that is still due can be waived; one paid in part keeps what was paid (amount_paid) and the rest is
+    waived. Validated at the edge (ops API): waived_by and reason are non-empty, trimmed text."""
+    with get_connection().transaction() as tx:
+        row = tx.execute(
+            f"select {_CHARGE_COLUMNS} from charges where id = %s and account_id = %s for update", (charge_id, account_id),
+        ).fetchone()
+        if row is None:
+            raise ChargeNotFoundError(f"no charge {charge_id} on account {account_id}")
+        if row["status"] != "due":
+            raise ChargeNotOpenError(f"charge {charge_id} is already {row['status']}")
+        tx.execute(
+            "update charges set status = 'waived', waived_on = %s, waived_by = %s, waived_reason = %s where id = %s",
+            (current_date(), waived_by, reason, charge_id),
+        )
+        row = tx.execute(f"select {_CHARGE_COLUMNS} from charges where id = %s", (charge_id,)).fetchone()
+    logger.info("charge %s on account %s waived by %s", charge_id, account_id, waived_by)
+    return _charge(row)
+
+
 class ExtraPaymentDecisionRequiredError(ValueError):
     """Raised when amount doesn't cover what's actually due this cycle and
     the caller didn't say whether to credit it toward the next cycle. See
@@ -813,41 +904,35 @@ def record_payment(
     apply_extra_to_next: bool | None = None,
     payment_scheme: str | None = None,
 ) -> dict:
-    """The one place a payment actually LANDS: records regular EMI payments
-    as well as off-cycle prepayments.
+    """The one place a payment actually LANDS: EMI payments, late fees, and off-cycle prepayments.
 
-    What's due THIS cycle is emi_amount minus pending_emi_credit.
+    How the amount is split is accounts/dues.py's allocate_payment: when the current instalment is due, the EMI comes
+    first (what is due this cycle is emi_amount minus pending_emi_credit), then open charges oldest first (a late
+    fee), then anything left is extra; when the instalment is not due yet, open charges come first. Then:
 
-    - amount covers it: the cycle retires -- one month off, due date rolls
-      forward. Anything above what was due is then either
-        * exactly the late fee (accounts/dues.py) -- the borrower paid
-          "EMI + fee", the figure the dashboard and reminders quote. That is
-          NOT a prepayment: it is recorded as a regular payment with nothing
-          credited (late_fee_paid says so), or
-        * a genuine extra, applied per payment_scheme:
-          1. credit_next_emi (default): pending_emi_credit, so next cycle's
-             EMI is smaller.
-          2. reduce_emi: against the remaining balance, lowering the EMI for
-             the months that are left.
-          3. reduce_tenure: against the remaining balance, removing as many
-             whole EMIs from the end as the extra pays for; a remainder
-             smaller than one EMI stays as credit rather than disappearing.
-      Both schemes measure "remaining balance" the way the rest of the
-      product does (emi_amount x months left, see get_payment_status and
-      calculate_hypothetical), *after* this cycle's EMI is retired -- so the
-      EMI just paid is never also counted as prepayment, and never lost.
-    - amount falls short: a partial payment toward THIS cycle. The cycle is
-      not retired (months_remaining/emi_due_date untouched) and
-      apply_extra_to_next must be True (credit it -- what is still due this
-      cycle is emi_amount - credit) or False (record only, no effect on the
-      schedule); None raises ExtraPaymentDecisionRequiredError.
+    - The EMI is covered: the cycle retires -- one month off, due date rolls forward. Extra is applied per
+      payment_scheme:
+        1. credit_next_emi (default): pending_emi_credit, so next cycle's EMI is smaller.
+        2. reduce_emi: against the remaining balance, lowering the EMI for the months that are left.
+        3. reduce_tenure: against the remaining balance, removing as many whole EMIs from the end as the extra pays
+           for; a remainder smaller than one EMI stays as credit rather than disappearing.
+      Both schemes measure "remaining balance" the way the rest of the product does (emi_amount x months left, see
+      get_payment_status and calculate_hypothetical), *after* this cycle's EMI is retired -- so the EMI just paid is
+      never also counted as prepayment, and never lost.
+    - The EMI is not covered: a part-payment toward THIS cycle (months_remaining/emi_due_date untouched), and
+      apply_extra_to_next must be True (credit it -- what is still due this cycle is emi_amount - credit) or False
+      (record only, no effect on the schedule); None raises ExtraPaymentDecisionRequiredError.
+    - A payment that only paid charges (the late fee left over after an EMI paid earlier) is recorded as kind
+      'charge'; charges_paid on every payment row says how much went to charges.
 
-    Atomic, and serialised per account: the payment row and the account
-    update commit together, and the account row is locked (FOR UPDATE) from
-    the read to the commit. Before, they were separate autocommit statements
-    after an unlocked read, so two payments on one account at the same moment
-    (two payment links, or a link and an ops entry) both started from the same
-    balance and one update was lost.
+    The late fee is assessed as of the payment's date first (assess_late_fees), so a late payment pays the fee it
+    incurred. A payment dated within the grace period that covers the EMI waives any fee already assessed for that
+    instalment (recorded as such): the fee was charged before the money was seen, and the money was on time.
+
+    Atomic, and serialised per account: the payment row, the charges and the account update commit together, and
+    the account row is locked (FOR UPDATE) from the read to the commit. Before, they were separate autocommit
+    statements after an unlocked read, so two payments on one account at the same moment (two payment links, or a
+    link and an ops entry) both started from the same balance and one update was lost.
     """
     with get_connection().transaction() as tx:
         return _record_payment_in(tx, account_id, amount, payment_date, apply_extra_to_next, payment_scheme)
@@ -881,24 +966,26 @@ def _record_payment_in(
     if payment_date is None:
         payment_date = current_date()
     account = _lock_account(conn, account_id)
+    assess_late_fees(payment_date, account_id, ex=conn)
+    account.charges = _load_charges(account_id, conn)
+    instalment_due_date = account.emi_due_date
+    waived_in_grace = _waive_fee_paid_within_grace(conn, account, amount, payment_date)
+    if waived_in_grace:
+        account.charges = _load_charges(account_id, conn)
 
-    due_this_cycle = round(account.emi_amount - account.pending_emi_credit, 2)
+    alloc = allocate_payment(account, amount, payment_date)
     on_time = payment_date <= account.emi_due_date
     new_principal = account.principal_amount
     new_emi_amount = account.emi_amount
-    late_fee_paid = 0.0
+    new_months_remaining = account.months_remaining
+    next_due_date = account.emi_due_date
+    new_credit = account.pending_emi_credit
 
-    if amount + 0.01 >= due_this_cycle:
-        excess = round(amount - due_this_cycle, 2)
+    if alloc.emi_retired:
+        excess = alloc.extra
         months_after = max(0, account.months_remaining - 1)
         new_months_remaining = months_after
         next_due_date = add_one_month(account.emi_due_date)
-
-        fee = late_fee_due(account, payment_date)
-        if fee and excess > 0.01 and abs(excess - fee) <= 0.01:
-            late_fee_paid = fee
-            excess = 0.0
-
         outstanding_after = round(account.emi_amount * months_after, 2)
         kind = "regular"
         new_credit = 0.0
@@ -919,21 +1006,43 @@ def _record_payment_in(
                     new_months_remaining = months_after - whole_emis
                     new_principal = max(0.0, round(account.principal_amount - applied, 2))
                     new_credit = round(excess - applied, 2)
-    else:
+    elif alloc.short_of_emi > 0.01:
         if apply_extra_to_next is None:
             raise ExtraPaymentDecisionRequiredError(
-                f"amount {amount} is less than the {due_this_cycle} due this cycle for account_id={account_id!r} -- "
-                "apply_extra_to_next must be True or False"
+                f"amount {amount} does not cover the {emi_due_now(account)} EMI due this cycle for account_id={account_id!r} "
+                f"(after {alloc.charges_total} to charges) -- apply_extra_to_next must be True or False"
             )
         kind = "extra_applied" if apply_extra_to_next else "extra_unapplied"
-        new_months_remaining = account.months_remaining
-        next_due_date = account.emi_due_date
-        new_credit = round(account.pending_emi_credit + amount, 2) if apply_extra_to_next else account.pending_emi_credit
+        if apply_extra_to_next:
+            new_credit = round(account.pending_emi_credit + alloc.to_emi, 2)
+    elif alloc.to_charges:
+        # Everything went to charges (the instalment is not due yet, or the loan is repaid and only a fee was left).
+        kind = "charge"
+        if alloc.extra > 0.01:
+            # Repaid loan, fee paid, money left over: kept as credit, never lost (there is no EMI to retire).
+            new_credit = round(account.pending_emi_credit + alloc.extra, 2)
+    else:
+        # Nothing was owed this payment could go to (a repaid loan with no open charge): kept as credit, never lost.
+        kind = "overpayment_applied"
+        new_credit = round(account.pending_emi_credit + alloc.extra, 2)
 
-    conn.execute(
-        "insert into payment_history (account_id, payment_date, amount, on_time, kind) values (%s, %s, %s, %s, %s)",
-        (account_id, payment_date, amount, on_time, kind),
-    )
+    payment_id = conn.execute(
+        "insert into payment_history (account_id, payment_date, amount, on_time, kind, charges_paid) "
+        "values (%s, %s, %s, %s, %s, %s) returning id",
+        (account_id, payment_date, amount, on_time, kind, alloc.charges_total),
+    ).fetchone()["id"]
+    late_fee_paid = 0.0
+    by_id = {c.id: c for c in account.charges}
+    for charge_id, part in alloc.to_charges:
+        charge = by_id[charge_id]
+        paid_now = round(charge.amount_paid + part, 2)
+        fully = paid_now + 0.005 >= charge.amount
+        conn.execute(
+            "update charges set amount_paid = %s, status = %s, paid_on = %s, paid_by_payment_id = %s where id = %s",
+            (paid_now, "paid" if fully else "due", payment_date if fully else None, payment_id, charge_id),
+        )
+        if charge.kind == "late_fee":
+            late_fee_paid = round(late_fee_paid + part, 2)
     conn.execute(
         "update accounts set principal_amount = %s, emi_amount = %s, months_remaining = %s, emi_due_date = %s, pending_emi_credit = %s, updated_at = now() where account_id = %s",
         (new_principal, new_emi_amount, new_months_remaining, next_due_date, new_credit, account_id),
@@ -949,8 +1058,30 @@ def _record_payment_in(
         "months_remaining": new_months_remaining,
         "next_emi_due_date": next_due_date.isoformat(),
         "pending_emi_credit": new_credit,
+        "to_emi": alloc.to_emi,
+        "charges_paid": alloc.charges_total,
         "late_fee_paid": late_fee_paid,
+        "late_fee_waived_paid_in_grace": waived_in_grace,
+        "instalment_due_date": instalment_due_date.isoformat(),
     }
+
+
+def _waive_fee_paid_within_grace(conn, account: Account, amount: float, payment_date: date) -> bool:
+    """A payment dated within the grace period that covers the current EMI means no late fee was ever owed for that
+    instalment -- even when one was assessed before the payment was entered (an ops entry or a bank statement line
+    recorded days later). Waives it, saying why, and returns True; False when there was nothing to waive."""
+    if emi_due_now(account) <= 0 or (payment_date - account.emi_due_date).days > GRACE_PERIOD_DAYS:
+        return False
+    if amount + 0.01 < emi_due_now(account):
+        return False
+    rows = conn.execute(
+        "update charges set status = 'waived', waived_on = %s, waived_by = 'system', "
+        "waived_reason = %s where account_id = %s and kind = 'late_fee' and for_due_date = %s and status = 'due' "
+        "and amount_paid = 0 returning id",
+        (current_date(), f"paid within the grace period (payment dated {payment_date.isoformat()})",
+         account.account_id, account.emi_due_date),
+    ).fetchall()
+    return bool(rows)
 
 
 def add_one_month(d: date) -> date:
@@ -1158,6 +1289,7 @@ _BORROWER_MESSAGE_KINDS = {
     "clarification_request_sent": "message",
     "restructuring_decision_notified": "decision",
     "dispute_resolution_notified": "dispute",
+    "charge_waived_notified": "fee",
     "reminder_sent": "reminder",
 }
 _MAX_BORROWER_MESSAGES = 50  # an explicit bound on an otherwise unbounded history
@@ -1166,7 +1298,7 @@ _MAX_BORROWER_MESSAGES = 50  # an explicit bound on an otherwise unbounded histo
 def get_borrower_messages(account_id: str, ex=None) -> list[dict]:
     """Messages sent to this borrower that don't belong to a case, newest
     first, bounded. Each is {message, delivered_via_telegram, created_at,
-    kind} with kind one of message | decision | dispute | reminder.
+    kind} with kind one of message | decision | dispute | fee | reminder.
 
     A message about a case (it carries a case_ref, see accounts/cases.py)
     is shown in that case's own thread instead -- listing it here too was
@@ -1242,7 +1374,7 @@ def borrower_names(account_ids: list[str], ex=None) -> dict[str, str]:
 def changes_since_last_status_check(account_id: str) -> dict:
     """What changed on this account after the agent last looked it up (its latest get_payment_status call): payments
     recorded (through a payment link or by ops), restructurings approved, and corrections by the team (a
-    "data_correction" event, e.g. a duplicate payment removed). {"payments": n, "restructurings": n, "corrections": n,
+    "data_correction" event, e.g. a duplicate payment removed, or a late fee waived). {"payments": n, "restructurings": n, "corrections": n,
     "since": <that call's time>}; all 0 when nothing changed, or when it was never looked up.
 
     Found live: a borrower paid through the link the agent had just sent, then asked "do I have any dues right now?"
@@ -1260,7 +1392,7 @@ def changes_since_last_status_check(account_id: str) -> dict:
                  where account_id = %(a)s and status = 'approved' and proposed_changes is not null
                    and resolved_at > last_check.at) as restructurings,
                (select count(*) from events, last_check
-                 where account_id = %(a)s and event_type = 'data_correction' and created_at > last_check.at) as corrections
+                 where account_id = %(a)s and event_type in ('data_correction', 'charge_waived_notified') and created_at > last_check.at) as corrections
         """,
         {"a": account_id},
     ).fetchone()

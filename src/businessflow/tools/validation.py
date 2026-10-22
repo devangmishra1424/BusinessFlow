@@ -34,9 +34,12 @@ def finite_number(value, field: str) -> float:
 
 
 def max_payable(account) -> float:
-    """The most this account could plausibly owe: every remaining EMI plus one late fee. A real settlement or prepayment
-    is below this; an amount above it is a mistake or an attempt to record something that never happened."""
-    return round(float(account.emi_amount) * max(account.months_remaining, 1) + LATE_FEE_FLAT_AMOUNT, 2)
+    """The most this account could plausibly owe: every remaining EMI, plus the charges already on it (or one late fee
+    when none is, so an amount that includes this month's fee is never refused before the fee is assessed). A real
+    settlement or prepayment is below this; an amount above it is a mistake or an attempt to record something that
+    never happened."""
+    charges = sum(c.outstanding for c in getattr(account, "charges", []) if c.status == "due")
+    return round(float(account.emi_amount) * max(account.months_remaining, 1) + max(charges, LATE_FEE_FLAT_AMOUNT), 2)
 
 
 def money(value, field: str, *, ceiling: float) -> float:

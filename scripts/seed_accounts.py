@@ -344,6 +344,7 @@ def main():
         conn.execute("delete from escalations where account_id = any(%s)", (_ACCOUNT_IDS,))
         conn.execute("delete from disputes where account_id = any(%s)", (_ACCOUNT_IDS,))
         conn.execute("delete from promises where account_id = any(%s)", (_ACCOUNT_IDS,))
+        conn.execute("delete from charges where account_id = any(%s)", (_ACCOUNT_IDS,))
         conn.execute("delete from payment_history where account_id = any(%s)", (_ACCOUNT_IDS,))
         conn.execute("delete from payment_tokens where account_id = any(%s)", (_ACCOUNT_IDS,))
 
@@ -374,6 +375,9 @@ def main():
                     dispute_open = excluded.dispute_open,
                     risk_tier = excluded.risk_tier,
                     access_key = excluded.access_key,
+                    -- A reseed starts every demo loan clean: credit left by an earlier overpayment used to survive it,
+                    -- so a reseeded account could show less due than its seeded story (found by a local test re-run).
+                    pending_emi_credit = 0,
                     telegram_chat_id = null,
                     updated_at = now()
                 """,

@@ -63,10 +63,10 @@ def run_daily_outbound_pass(account_ids: list[str] | None = None) -> list[dict]:
             escalate_to_human(reminder.account_id, _CHRONIC_DELINQUENCY_REASON)
         account = store.get_account_or_raise(reminder.account_id)
         # What the reminder quotes and the link is minted for: EMI still due
-        # this cycle (less any credit) plus the late fee for a follow_up --
-        # see accounts/dues.py. Previously the bare emi_amount, which ignored
-        # credit and the fee and sent borrowers to a pay page that called the
-        # difference an "extra payment".
+        # this cycle (less any credit) plus every charge still owed (a late
+        # fee) -- see accounts/dues.py. Previously the bare emi_amount, which
+        # ignored credit and the fee and sent borrowers to a pay page that
+        # called the difference an "extra payment".
         _emi, _late_fee, amount_due = reminder_amounts(account, reminder.kind)
         if _emi <= 0:
             # This cycle's EMI is already covered by credit from an earlier
@@ -130,10 +130,14 @@ def run_daily_pass(account_ids: list[str] | None = None) -> dict:
     today's reminders go out -- a promise broken just now should already
     count toward broken_promise_count() for anything reminders/flags
     compute later in this same pass, not stale data from before today's
-    evaluation."""
+    evaluation. Late fees are assessed next (store.assess_late_fees), so a
+    follow-up past the grace period quotes the fee that is actually on the
+    books, and its payment link covers it."""
     promises_result = resolve_promises()
+    fees_assessed = store.assess_late_fees()
     sent = run_daily_outbound_pass(account_ids)
     return {
+        "late_fees_assessed": fees_assessed,
         "promises_resolved": promises_result["resolved"],
         "escalated_for_broken_promises": promises_result["escalated"],
         "reminders_sent": sent,

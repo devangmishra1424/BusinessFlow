@@ -416,3 +416,13 @@ def test_one_borrowers_documents_are_not_visible_to_another():
         # real ingested documents.
         delete_chunks_for_document(temp_path)
         os.unlink(temp_path)
+
+
+def test_a_reference_wrapped_onto_the_next_line_is_still_followed():
+    # A KB editor re-wrapping a paragraph can put "(see" at a line's end and the filename on the next line. That is the
+    # same reference; it used to be dropped silently, because the pattern allowed exactly one space.
+    from businessflow.rag.retriever import _find_referenced_documents
+
+    known = {"data/kb/dispute_handling.md": "Dispute handling policy", "data/kb/grace_period.md": "Grace period policy"}
+    text = "A borrower raising a fee dispute (see\ndispute_handling.md) is not talked out of it (see  grace_period.md)."
+    assert _find_referenced_documents(text, known, exclude="data/kb/late_fee_policy.md") == set(known)

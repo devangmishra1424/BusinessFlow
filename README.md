@@ -157,6 +157,18 @@ borrower's own account view -- each redesigned this session against real
 reference points (not a default AI-generated look) until they read like a
 real fintech product, not a demo.
 
+**Money on the books, applied in a stated order.** What a borrower owes is one
+definition (`accounts/dues.py`): this month's EMI less any credit, plus every
+charge still open. The late fee is a real charge (the `charges` table), assessed
+once per EMI still unpaid after the 3-day grace period, never compounded and
+never charged interest. A payment is applied by one pure function,
+`allocate_payment`: the EMI first, then the fee, then anything extra (which the
+borrower chooses how to use) -- so paying the EMI keeps the loan current, and a
+fee left unpaid stays visibly owed. The pay page shows that split before the
+borrower confirms. A payment dated within the grace period removes a fee
+charged before it was recorded; ops can waive a fee only with their name and a
+reason, which the borrower is sent.
+
 ## Architecture, in one paragraph
 
 One Groq-hosted LLM (`openai/gpt-oss-20b`) with a belt of tools in a single

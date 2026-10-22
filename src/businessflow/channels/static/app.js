@@ -1126,6 +1126,14 @@ const WARNING_ACTIONS = {
     refreshAfterResolve: false,
     contestPrefix: "Disputing the overdue status",
   },
+  // A late fee still owed after the EMI was paid (the account is no longer overdue). Paying it now pays the fee first:
+  // the next EMI isn't due yet (accounts/dues.py's allocate_payment).
+  fee_due: {
+    resolveLabel: (account) => `Pay the ${fmtInr(account.late_fee_amount || 0)} late fee`,
+    resolve: (account, $result) => startPayment(account.late_fee_amount || 0, $result),
+    refreshAfterResolve: false,
+    contestPrefix: "Disputing the late fee",
+  },
   broken_promises: {
     resolveLabel: "Talk to our team",
     resolve: async () => {
@@ -1138,7 +1146,7 @@ const WARNING_ACTIONS = {
 };
 
 // Only money owed is red. A dispute is information; a promise history is a notice.
-const WARNING_STYLE = { overdue: "", disputed: "info", broken_promises: "notice" };
+const WARNING_STYLE = { overdue: "", fee_due: "", disputed: "info", broken_promises: "notice" };
 
 // Set fresh by every renderDashboard call below -- the warning-action
 // click handler (wired once, outside renderDashboard) reads these at
@@ -1155,6 +1163,7 @@ const MESSAGE_KIND_LABELS = {
   message: "Message from our team",
   decision: "Decision on your request",
   dispute: "Update on your dispute",
+  fee: "Update on a late fee",
   reminder: "Reminder",
 };
 
@@ -1172,8 +1181,9 @@ function renderDueCard(account) {
     left = `<div><p class="due-card-label">Due now</p><p class="due-card-amount">${fmtInr(0)}</p><p class="due-card-sub">This month's EMI is already covered by your earlier extra payment. Next EMI of ${fmtInr(account.emi_amount)} is due ${fmtDate(account.emi_due_date)}.</p></div>`;
   } else {
     const overdue = account.days_past_due > 0;
+    const feeFor = (account.charges || []).map((c) => fmtDate(c.for_emi_due_date)).join(", ");
     const composition = account.late_fee_applicable
-      ? `EMI ${fmtInr(account.amount_due_now - account.late_fee_amount)} + late fee ${fmtInr(account.late_fee_amount)}`
+      ? `EMI ${fmtInr(account.amount_due_now - account.late_fee_amount)} + late fee ${fmtInr(account.late_fee_amount)}${feeFor ? ` (for the ${feeFor} EMI)` : ""}`
       : credit > 0.01
         ? `EMI ${fmtInr(account.emi_amount)} less ${fmtInr(credit)} already credited`
         : "This month's EMI";

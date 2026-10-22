@@ -212,6 +212,7 @@ class PaymentRecordOut(BaseModel):
     date: date
     amount: float
     on_time: bool
+    charges_paid: float = 0.0  # how much of it went to a late fee
     kind: str  # "regular" | "extra_unapplied" | "extra_applied" | "overpayment_applied"
 
 
@@ -294,6 +295,46 @@ class RecordPaymentOut(BaseModel):
     next_emi_due_date: date
     pending_emi_credit: float
     late_fee_paid: float = 0.0  # >0 when the amount included the late fee (not a prepayment)
+    charges_paid: float = 0.0  # how much of this payment went to charges (accounts/dues.py's allocate_payment)
+    # A late fee charged for this EMI was removed: the payment is dated within the grace period.
+    late_fee_waived_paid_in_grace: bool = False
+
+
+class ChargeOut(BaseModel):
+    """A charge on the account (schema.sql's charges table): today only the late fee."""
+    id: int
+    kind: str
+    for_due_date: date
+    amount: float
+    amount_paid: float
+    outstanding: float
+    status: str  # "due" | "paid" | "waived"
+    assessed_on: date
+    paid_on: date | None = None
+    waived_on: date | None = None
+    waived_by: str | None = None
+    waived_reason: str | None = None
+
+
+class WaiveChargeIn(BaseModel):
+    """Who is waiving it and why -- both required: a waiver is a recorded decision, and the reason is sent to the
+    borrower. case_ref (optional) puts the borrower's message in that case's thread (e.g. the dispute about the fee)."""
+    waived_by: str = Field(min_length=2, max_length=80)
+    reason: str = Field(min_length=3, max_length=500)
+    case_ref: str | None = Field(default=None, max_length=40)
+
+
+class WaiveChargeOut(BaseModel):
+    charge: ChargeOut
+    borrower_notified: bool
+
+
+def _charge_out(c) -> ChargeOut:
+    return ChargeOut(
+        id=c.id, kind=c.kind, for_due_date=c.for_due_date, amount=c.amount, amount_paid=c.amount_paid,
+        outstanding=c.outstanding, status=c.status, assessed_on=c.assessed_on, paid_on=c.paid_on,
+        waived_on=c.waived_on, waived_by=c.waived_by, waived_reason=c.waived_reason,
+    )
 
 
 class ResolveDisputeIn(BaseModel):
@@ -572,6 +613,8 @@ class RunOutboundOut(BaseModel):
 
 
 class AccountDetailOut(AccountSummaryOut):
+    # Every charge assessed on the account (late fees), oldest first, with what happened to each.
+    charges: list[ChargeOut] = []
     phone_number: str
     language_preference: str
     tenure_months: int
@@ -704,6 +747,7 @@ def list_accounts(flag: str | None = None):
     would actually work from, not the full unfiltered list every time."""
     # Three queries for the accounts and one for the dispute reasons, however many accounts there are (store.list_accounts
     # explains why per-account reads were too slow: 12 s for 10 accounts).
+    store.assess_late_fees()  # one statement: every fee due today is on the books before anything is shown
     accounts = store.list_accounts()
     reasons = store.latest_open_dispute_reasons([a.account_id for a in accounts if a.dispute_open])
     summaries = [_summarize(a, compute_flags(a, open_dispute_reasons=reasons)) for a in accounts]
@@ -768,6 +812,7 @@ def get_account(account_id: str):
     # Every read for this page on one connection: about 8 reads, each of which used to check out (and ping) its own
     # pooled connection, took 5 s on the live server (see store.py, the note above _payment_record).
     with get_connection().transaction() as conn:
+        store.assess_late_fees(store.current_date(), account_id, ex=conn)
         account = store.get_account(account_id, ex=conn)
         if account is None:
             raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
@@ -786,6 +831,7 @@ def get_account(account_id: str):
     )
     return AccountDetailOut(
         **summary.model_dump(),
+        charges=[_charge_out(c) for c in account.charges],
         phone_number=account.phone_number,
         language_preference=account.language_preference,
         tenure_months=account.tenure_months,
@@ -795,7 +841,8 @@ def get_account(account_id: str):
         dispute_open=account.dispute_open,
         pending_emi_credit=account.pending_emi_credit,
         payment_history=[
-            PaymentRecordOut(date=p.date, amount=p.amount, on_time=p.on_time, kind=p.kind) for p in account.payment_history
+            PaymentRecordOut(date=p.date, amount=p.amount, on_time=p.on_time, kind=p.kind, charges_paid=p.charges_paid)
+            for p in account.payment_history
         ],
         promises=[
             PromiseOut(made_on=p.made_on, promised_date=p.promised_date, promised_amount=p.promised_amount, kept=p.kept)
@@ -1253,6 +1300,34 @@ def record_account_payment(account_id: str, body: RecordPaymentIn):
         raise HTTPException(status_code=422, detail=str(e)) from e
     store.log_event(account_id, "tool_called", {"tool": "record_payment_ops", "arguments": body.model_dump(mode="json"), "result": result})
     return RecordPaymentOut(**result)
+
+
+@app.post(
+    "/accounts/{account_id}/charges/{charge_id}/waive",
+    response_model=WaiveChargeOut,
+    dependencies=[Depends(require_api_key)],
+)
+async def waive_account_charge(account_id: str, charge_id: int, body: WaiveChargeIn):
+    """Waives what is still owed on a charge (a late fee): who and why are required and kept on the charge, and the
+    borrower is told, with the reason. 404 for a charge that is not this account's; 409 if it is already paid or
+    waived. A partly paid fee keeps what was paid; the rest is waived."""
+    waived_by, reason = body.waived_by.strip(), body.reason.strip()
+    if len(waived_by) < 2 or len(reason) < 3:
+        raise HTTPException(status_code=400, detail="say who is waiving it and why -- the reason is sent to the borrower")
+    try:
+        charge = store.waive_charge(account_id, charge_id, waived_by, reason)
+    except store.ChargeNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except store.ChargeNotOpenError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    store.log_event(account_id, "tool_called", {"tool": "waive_charge", "arguments": {"charge_id": charge_id, "waived_by": waived_by, "reason": reason}, "result": {"status": charge.status}})
+    due = charge.for_due_date
+    message = (
+        f"Our team has removed the late fee of ₹{charge.amount - charge.amount_paid:,.0f} for your "
+        f"{due.day} {due.strftime('%b')} {due.year} EMI. Reason: {reason}"
+    )
+    notified = await notify.notify_charge_waived(account_id, message, case_ref=body.case_ref)
+    return WaiveChargeOut(charge=_charge_out(charge), borrower_notified=notified)
 
 
 @app.post(
