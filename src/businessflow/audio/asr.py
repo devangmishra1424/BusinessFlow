@@ -13,6 +13,9 @@ import numpy as np
 import torch
 from faster_whisper import WhisperModel
 
+from businessflow.observability import trace
+from businessflow.rag.tokenize import dominant_script
+
 # The real fine-tuned model (Hindi-English code-switched, full corpus,
 # LoRA rank 32) -- trained on Kaggle, converted to CTranslate2, benchmarked
 # against the base "small" model on real MUCS test audio (see
@@ -64,5 +67,17 @@ def transcribe(audio: torch.Tensor, model_size: str = _DEFAULT_MODEL_SIZE, langu
     language=None lets Whisper auto-detect; pass "hi" or "en" to force it.
     See _DECODE_KWARGS above for why each decode-time override is set."""
     audio_np: np.ndarray = audio.numpy() if isinstance(audio, torch.Tensor) else audio
-    segments, _info = _model(model_size).transcribe(audio_np, language=language, **_DECODE_KWARGS)
-    return " ".join(segment.text.strip() for segment in segments)
+    with trace.span("stt", language=language, audio_seconds=round(len(audio_np) / 16000, 2)) as rec:
+        segments, info = _model(model_size).transcribe(audio_np, language=language, **_DECODE_KWARGS)
+        segments = list(segments)
+        text = " ".join(segment.text.strip() for segment in segments)
+        # Whisper scores every segment it decodes; these were computed and thrown away. Weighted by segment length,
+        # they are the cheapest honest signal of a mis-hearing (observability/checks.py's stt.* rules).
+        lengths = [max(len(seg.text), 1) for seg in segments]
+        if segments:
+            rec["avg_logprob"] = round(sum(seg.avg_logprob * n for seg, n in zip(segments, lengths)) / sum(lengths), 3)
+            rec["no_speech_prob"] = round(max(seg.no_speech_prob for seg in segments), 3)
+        rec["chars"] = len(text)
+        rec["script"] = dominant_script(text)
+        rec["detected_language"] = getattr(info, "language", None)
+        return text

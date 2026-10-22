@@ -89,7 +89,8 @@ def run_daily_outbound_pass(account_ids: list[str] | None = None) -> list[dict]:
         # reminder (accounts.store.create_payment_token) -- never reused
         # across sends, so an old reminder's link can't outlive this one.
         link = generate_payment_link(reminder.account_id, amount_due)
-        delivered = send_reminder(reminder.account_id, reminder.kind, message, link["payment_link"], amount_due)
+        delivered = send_reminder(reminder.account_id, reminder.kind, message, link["payment_link"], amount_due,
+                                  tone=risk_profile.recommended_tone.value)
         sent.append({
             "account_id": reminder.account_id,
             "kind": reminder.kind,
@@ -143,7 +144,9 @@ def run_daily_pass(account_ids: list[str] | None = None) -> dict:
     promises_result = resolve_promises()
     fees_assessed = store.assess_late_fees()
     sent = run_daily_outbound_pass(account_ids)
+    traces_purged = store.purge_old_traces()
     return {
+        "traces_purged": traces_purged,
         "late_fees_assessed": fees_assessed,
         "promises_resolved": promises_result["resolved"],
         "escalated_for_broken_promises": promises_result["escalated"],

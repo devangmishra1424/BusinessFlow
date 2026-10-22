@@ -83,6 +83,7 @@ from businessflow.audio.vad import trim_to_speech
 from businessflow.audio.verbalizer import verbalize
 from businessflow.channels.abilities import abilities_for, intro
 from businessflow.channels.credentials import looks_like_credentials, parse_credentials
+from businessflow.observability import trace
 from businessflow.ops.flags import Flag, compute_flags
 from businessflow.rate_limit import RateLimiter
 from businessflow.tools import validation
@@ -719,7 +720,8 @@ def send_message_endpoint(request: Request, conversation_id: str, req: SendMessa
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message must not be empty")
     client_ip = request.client.host if request.client else "unknown"
-    return _process_text_turn(conversation_id, session, req.message, client_ip)
+    with trace.turn("web_text", account_id=session["account_id"]):
+        return _process_text_turn(conversation_id, session, req.message, client_ip)
 
 
 def _decode_and_transcribe_voice(
@@ -771,6 +773,13 @@ def _transcript_echo(transcript: str) -> str:
 
 @app.post("/conversations/{conversation_id}/messages/voice", response_model=SendMessageResponse)
 def send_voice_message_endpoint(request: Request, conversation_id: str, audio: UploadFile = File(...)):
+    """One voice turn, traced as one chain (observability/trace.py): speech-to-text, the agent, its tools and checks."""
+    session = _conversations.get(conversation_id)
+    with trace.turn("web_voice", account_id=session["account_id"] if session else None):
+        return _voice_turn(request, conversation_id, audio)
+
+
+def _voice_turn(request: Request, conversation_id: str, audio: UploadFile):
     """Browser equivalent of telegram_bot.py's handle_incoming_voice: the
     frontend records via MediaRecorder, re-encodes to WAV client-side (see
     this file's module docstring for why), and uploads it here. Same
@@ -838,12 +847,13 @@ def speech_endpoint(conversation_id: str, req: SpeechRequest):
     # Matching that same deliberate, already-established pattern rather than
     # a narrower catch: an unhandled failure here was a bare 500 with nothing
     # logged server-side to explain it.
-    try:
-        speech = speak_hindi(verbalize(req.text, language)) if language == "hi" else speak_english(verbalize(req.text, language))
-        audio_bytes = encode_ogg_opus(speech)
-    except Exception as e:
-        logger.warning("TTS synthesis failed for conversation_id=%s: %s", conversation_id, e, exc_info=True)
-        raise HTTPException(status_code=502, detail="text-to-speech is temporarily unavailable -- please try again") from e
+    with trace.turn("web_speak", account_id=session["account_id"]):
+        try:
+            speech = speak_hindi(verbalize(req.text, language)) if language == "hi" else speak_english(verbalize(req.text, language))
+            audio_bytes = encode_ogg_opus(speech)
+        except Exception as e:
+            logger.warning("TTS synthesis failed for conversation_id=%s: %s", conversation_id, e, exc_info=True)
+            raise HTTPException(status_code=502, detail="text-to-speech is temporarily unavailable -- please try again") from e
     return Response(content=audio_bytes, media_type="audio/ogg")
 
 

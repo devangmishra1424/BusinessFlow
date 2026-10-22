@@ -1559,6 +1559,20 @@ def verify_account_key(account_id: str, access_key: str) -> bool:
     return False
 
 
+def purge_old_traces(older_than_days: int | None = None) -> int:
+    """Deletes turn traces (observability/trace.py) older than the retention period; returns how many. Bounded per
+    call so one run never holds a long lock -- the daily pass removes the rest the next day."""
+    from businessflow.observability.trace import TRACE_RETENTION_DAYS
+
+    days = older_than_days or TRACE_RETENTION_DAYS
+    row = get_connection().execute(
+        "with gone as (delete from events where id in (select id from events where event_type = 'trace' "
+        "and created_at < now() - make_interval(days => %s) limit 50000) returning 1) select count(*) as n from gone",
+        (days,),
+    ).fetchone()
+    return row["n"]
+
+
 def log_event(account_id: str | None, event_type: str, details: dict) -> None:
     """account_id is a foreign key -- a value that doesn't correspond to
     a real account (e.g. a hallucinated account_id the model passed to
@@ -1687,6 +1701,15 @@ def import_bank_statement(statement_name: str, parsed) -> dict:
 
     Each line is its own transaction: one line that cannot be posted never undoes the others. Returns
     {posted, suggested, unmatched, already_uploaded, lines: [...]}."""
+    from businessflow.observability import trace
+
+    with trace.turn("bank_import"), trace.span("bank_match", lines=len(parsed.lines)) as rec:
+        summary = _import_bank_lines(statement_name, parsed)
+        rec.update({k: summary[k] for k in ("posted", "suggested", "unmatched", "already_uploaded")})
+        return summary
+
+
+def _import_bank_lines(statement_name: str, parsed) -> dict:
     from businessflow.accounts.bank_statement import match_line
 
     conn = get_connection()
@@ -1772,6 +1795,9 @@ def post_bank_line(line_id: int, account_id: str, decided_by: str, record_even_i
     log_event(account_id, "bank_credit_applied", {
         "bank_line_id": line_id, "amount": line["amount"], "line_date": line["line_date"], "reference": line["reference"],
         "how": f"posted by {decided_by}",
+        # What the matcher had guessed (None for an unmatched line), so its suggestions can be scored against what
+        # people actually decided (observability/trace_report.py).
+        "suggested_account_id": line["account_id"], "was_status": line["status"],
     })
     return {**result, "line": get_bank_line(line_id)}
 

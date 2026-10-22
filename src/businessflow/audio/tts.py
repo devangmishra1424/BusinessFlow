@@ -32,6 +32,9 @@ from huggingface_hub.errors import LocalEntryNotFoundError
 from piper import PiperVoice
 from transformers import AutoTokenizer, VitsModel
 
+from businessflow.audio.verbalizer import has_unverbalized_pattern
+from businessflow.observability import trace
+
 logger = logging.getLogger(__name__)
 
 _PIPER_VOICE_PATH = (
@@ -158,7 +161,20 @@ def _join_with_gaps(chunks: list[torch.Tensor], sample_rate: int, gap_seconds: f
     return torch.cat(parts)
 
 
+def _traced(engine: str, text: str, synthesize) -> Speech:
+    """Runs one synthesis as a "tts" span (observability/trace.py): the engine, how much text, how much audio came out,
+    and whether symbols reached the voice unconverted."""
+    with trace.span("tts", engine=engine, chars=len(text), unverbalized=has_unverbalized_pattern(text)) as rec:
+        speech = synthesize(text)
+        rec["audio_seconds"] = round(speech.audio.shape[-1] / speech.sample_rate, 2)
+        return speech
+
+
 def speak_english(text: str) -> Speech:
+    return _traced("piper_en", text, _speak_english)
+
+
+def _speak_english(text: str) -> Speech:
     """English TTS via Piper. Fully local -- no network call at synthesis
     time, since the voice file is already on disk. Piper synthesizes one
     audio chunk per sentence -- joined here with a deliberate pause
@@ -248,6 +264,10 @@ def _speak_hindi_run(run: str) -> tuple[torch.Tensor, int] | None:
 
 
 def speak_hindi(text: str) -> Speech:
+    return _traced("hindi", text, _speak_hindi)
+
+
+def _speak_hindi(text: str) -> Speech:
     """Hindi TTS (Piper's hi_IN voice, falling back to Meta's MMS-TTS; see the module docstring), with any Latin-script runs (English words, acronyms, or a whole
     reply the model wrote in Roman script) spoken by the English voice instead of being dropped.
     Downloads model weights on first call (cached by huggingface_hub after that, not re-downloaded
@@ -268,7 +288,7 @@ def speak_hindi(text: str) -> Speech:
                 if hindi is not None:
                     pieces.append(hindi)
             else:
-                english = speak_english(run)
+                english = _speak_english(run)  # untraced: part of this Hindi reply's one "tts" span
                 pieces.append((english.audio, english.sample_rate))
                 english_runs += 1
         if pieces:

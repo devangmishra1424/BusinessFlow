@@ -28,6 +28,7 @@ from rank_bm25 import BM25Okapi
 from sentence_transformers import CrossEncoder
 
 from businessflow.accounts.db import get_connection
+from businessflow.observability import trace
 from businessflow.rag import query_llm
 from businessflow.rag.embeddings import embed_query
 from businessflow.rag.tokenize import dominant_script as _dominant_script
@@ -230,7 +231,24 @@ class DocumentRetriever:
         Each result carries score_kind: "rerank" (cross-encoder logit),
         "embedding" (negative cosine distance) or "mixed" (min-max
         normalised across both). Scores are only comparable within a kind.
+
+        Recorded as a "retrieval" span (observability/trace.py): how many passages, which scoring path, the top score
+        and its margin over the second (a near tie means the answer may come from the wrong passage).
         """
+        with trace.span("retrieval", account_scoped=account_id is not None) as rec:
+            results = self._retrieve(query, top_k, candidate_pool, account_id, expand, document_type,
+                                     follow_references, max_referenced_chunks, rec)
+            rec["results"] = len(results)
+            if results:
+                rec["kind"] = results[0]["score_kind"]
+                rec["top_score"] = round(float(results[0]["relevance_score"]), 3)
+                same_kind = [r for r in results[1:] if r["score_kind"] == results[0]["score_kind"]]
+                if same_kind:
+                    rec["margin"] = round(float(results[0]["relevance_score"]) - float(same_kind[0]["relevance_score"]), 3)
+            return results
+
+    def _retrieve(self, query, top_k, candidate_pool, account_id, expand, document_type, follow_references,
+                  max_referenced_chunks, rec) -> list[dict]:
         if not self._texts:
             return []
 
@@ -245,6 +263,7 @@ class DocumentRetriever:
 
         if query_llm.needs_translation(query):
             query = query_llm.translate_to_english(query)
+            rec["translated"] = True
 
         if not _tokenize(query):
             # Translation didn't run (query_llm.needs_translation said no)
@@ -268,7 +287,9 @@ class DocumentRetriever:
             results = self._hybrid_rerank_results(queries, eligible, top_k, candidate_pool)
 
         if follow_references and results:
+            before = len(results)
             results = self._expand_with_references(results, query, eligible, max_referenced_chunks)
+            rec["references_followed"] = len(results) - before
         return results
 
     def _result(self, i: int, score: float, score_kind: str, **extra) -> dict:

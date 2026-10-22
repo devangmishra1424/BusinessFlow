@@ -79,6 +79,7 @@ from businessflow.channels.abilities import intro as abilities_intro
 from businessflow.channels.credentials import looks_like_credentials, parse_credentials, parse_telegram_start_payload
 from businessflow.channels.reminder_actions import run_action as run_reminder_action
 from businessflow.markup import markdown_to_telegram_html, strip_markdown
+from businessflow.observability import trace
 from businessflow.tools.account_tools import flag_dispute, get_payment_history, get_payment_status
 from businessflow.tools.escalation_tools import escalate_to_human, request_closure_certificate
 from businessflow.tools.payment_tools import generate_payment_link
@@ -859,6 +860,13 @@ def _has_verified_session(chat_id: int) -> bool:
 
 
 async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """One typed turn, traced as one chain (observability/trace.py), including the spoken reply when voice is on."""
+    chat_id = update.effective_chat.id
+    with trace.turn("telegram_text", account_id=_sessions.get(chat_id, {}).get("account_id")):
+        await _on_text_message(update, context)
+
+
+async def _on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     was_verified = _has_verified_session(chat_id)
     reply = await _agent_reply(context, chat_id, update.message.text)
@@ -885,6 +893,13 @@ def _transcript_echo(transcript: str) -> str:
 
 
 async def on_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """One voice turn, traced as one chain (observability/trace.py): speech-to-text, the agent, and the spoken reply."""
+    chat_id = update.effective_chat.id
+    with trace.turn("telegram_voice", account_id=_sessions.get(chat_id, {}).get("account_id")):
+        await _on_voice_message(update, context)
+
+
+async def _on_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     voice = update.message.voice
     telegram_file = await voice.get_file()
