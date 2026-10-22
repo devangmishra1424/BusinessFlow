@@ -29,6 +29,16 @@ def event_counts_since(since: datetime | None = None) -> dict[str, int]:
     return {r["event_type"]: r["n"] for r in rows}
 
 
+def escalation_counts(since: datetime) -> tuple[int, int]:
+    """(agent tool-calling turns, of which ended in escalate_to_human) since `since`, counted in the database."""
+    row = get_connection().execute(
+        "select count(*) as calls, count(*) filter (where details->>'tool' = 'escalate_to_human') as escalations "
+        "from events where created_at >= %s and event_type = 'tool_called'",
+        (since,),
+    ).fetchone()
+    return row["calls"], row["escalations"]
+
+
 def escalation_rate(since: datetime | None = None) -> float:
     """Fraction of tool-calling turns that ended in escalate_to_human --
     a rising rate over time is a real signal that the agent is

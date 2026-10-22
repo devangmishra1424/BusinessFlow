@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/styles.css?v=27" />
+<link rel="stylesheet" href="/static/styles.css?v=28" />
 </head>
 <body>
 
@@ -74,6 +74,7 @@
     </header>
 
     <section class="kpi-row" id="kpi-row"></section>
+    <section class="health-row" id="health-row" aria-label="Collection health" hidden></section>
 
     <section class="toolbar">
       <div class="filter-pills" id="filter-pills"></div>
@@ -186,7 +187,7 @@
           </select>
         </label>
         <label class="clarify-label">Loan type<input required id="na-loan-type" type="text" placeholder="Working Capital Loan" /></label>
-        <label class="clarify-label">Risk tier
+        <label class="clarify-label">Onboarding risk rating
           <select id="na-risk-tier">
             <option value="low">Low</option>
             <option value="medium">Medium</option>
@@ -277,6 +278,6 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="/static/app.js?v=29"></script>
+<script src="/static/app.js?v=30"></script>
 </body>
 </html>

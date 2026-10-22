@@ -194,6 +194,22 @@ record. Re-uploading a statement records nothing twice, because each line is
 hashed. A line that is not a loan payment is set aside with who and why, never
 deleted.
 
+**One risk, with its reasons, and the book's health.** The ops tier, its sort,
+the reminder tone and the voice assistant all read one score
+(`outbound/risk_engine.py`). It is built from days past due, broken promises,
+recent late payments, an open dispute, and the onboarding rating, which is now
+just one input. Credit already paid ahead and an open promise lower it. Each
+factor is listed with its points on the account. The portfolio page shows
+collection health (`accounts/health.py`):
+- accounts by days past due (current, 1-30, 31-60, 61-90, 90+), with what each bucket owes;
+- collection efficiency over 30 days;
+- promises kept over 90 days;
+- cure rate over 90 days;
+- assistant containment.
+
+Each figure says how it was worked out, and a rate with nothing to measure
+shows "–", not 0%.
+
 ## Architecture, in one paragraph
 
 One Groq-hosted LLM (`openai/gpt-oss-20b`) with a belt of tools in a single

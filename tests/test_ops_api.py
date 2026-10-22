@@ -246,7 +246,7 @@ def test_update_account_endpoint_changes_only_the_given_fields(reseed_accounts):
 
     assert response.status_code == 200
     body = response.json()
-    assert body["risk_tier"] == "high"
+    assert body["onboarding_risk_tier"] == "high"  # the rating set at onboarding; risk_tier is the computed one
 
     after = client.get("/accounts/BF-1002", headers=_auth()).json()
     assert after["language_preference"] == before["language_preference"]  # untouched
