@@ -31,7 +31,9 @@ def retriever():
         # an automated offer" section -- either is a genuinely correct
         # answer, so both are accepted rather than assuming one canonical
         # document per query.
-        ("what happens if I break a promise to pay twice", ["Escalation policy", "What blocks an automated offer"]),
+        # The FAQ's promise section also answers it outright (a second broken promise goes to a person, and blocks
+        # automated offers), with a reference to escalation_policy.md.
+        ("what happens if I break a promise to pay twice", ["Escalation policy", "What blocks an automated offer", "Promise to pay"]),
         ("can you lower my monthly payment for a while", ["Restructuring options"]),
         # Pure Devanagari -- "can I get a few more days without a penalty."
         # Verified via eval/retrieval_benchmark.py that this specific query

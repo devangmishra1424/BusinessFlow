@@ -67,7 +67,7 @@ _PROMISE_COLUMNS = "id, account_id, made_on, promised_date, promised_amount, kep
 
 def _load_payment_history(account_id: str, ex=None) -> list[PaymentRecord]:
     rows = (ex or get_connection()).execute(
-        "select payment_date, amount, on_time, kind, charges_paid from payment_history where account_id = %s order by payment_date",
+        "select payment_date, amount, on_time, kind, charges_paid from payment_history where account_id = %s order by payment_date, id",
         (account_id,),
     ).fetchall()
     return [_payment_record(r) for r in rows]
@@ -143,7 +143,7 @@ def list_accounts() -> list[Account]:
         ids = [r["account_id"] for r in rows]
         history_rows = conn.execute(
             "select account_id, payment_date, amount, on_time, kind, charges_paid from payment_history "
-            "where account_id = any(%s) order by account_id, payment_date",
+            "where account_id = any(%s) order by account_id, payment_date, id",
             (ids,),
         ).fetchall()
         charge_rows = conn.execute(
