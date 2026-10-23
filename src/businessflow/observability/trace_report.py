@@ -53,14 +53,28 @@ def _rate(n: int, d: int) -> float | None:
     return round(n / d, 4) if d else None
 
 
-def _status(steps: int, failed_rate: float | None, critical_failures: int, critical_rate: float | None) -> str:
+def _status(steps: int, failed_rate: float | None, critical_failures: int, critical_rate: float | None,
+            slow_rate: float | None = None) -> str:
+    """Health from wrong answers only (correctness checks). A component that is right but often slow or waiting on a
+    quota is "slow" -- shown, never confused with wrong."""
     if steps < MIN_STEPS_FOR_VERDICT:
         return "not_enough_data"
     if (critical_rate or 0) >= AMBER_RATE or (failed_rate or 0) >= RED_RATE:
         return "red"
     if critical_failures or (failed_rate or 0) >= AMBER_RATE:
         return "amber"
+    if (slow_rate or 0) >= RED_RATE:
+        return "slow"
     return "green"
+
+
+def _kind(check_name: str) -> str:
+    return BY_NAME[check_name].kind if check_name in BY_NAME else "correctness"
+
+
+def _new_component() -> dict:
+    return {"steps": 0, "failed_steps": 0, "critical_steps": 0, "slow_steps": 0, "protections": 0, "seconds": [],
+            "tokens_in": 0, "tokens_out": 0, "checks": Counter(), "actions": defaultdict(list)}
 
 
 def _components(traces: list[dict]) -> dict[str, dict]:
@@ -70,8 +84,7 @@ def _components(traces: list[dict]) -> dict[str, dict]:
             comp = COMPONENT_OF_SPAN.get(s["name"])
             if comp is None:
                 continue
-            c = out.setdefault(comp, {"steps": 0, "failed_steps": 0, "critical_steps": 0, "seconds": [],
-                                      "tokens_in": 0, "tokens_out": 0, "checks": Counter(), "actions": defaultdict(list)})
+            c = out.setdefault(comp, _new_component())
             if s["name"] == "agent":  # the loop as a whole: counted for its checks, not as a model call
                 for f in s.get("failed", []):
                     c["checks"][f] += 1
@@ -82,9 +95,13 @@ def _components(traces: list[dict]) -> dict[str, dict]:
             c["tokens_in"] += a.get("tokens_in") or 0
             c["tokens_out"] += a.get("tokens_out") or 0
             failed = s.get("failed", [])
-            if failed:
+            wrong = [f for f in failed if _kind(f) == "correctness"]
+            if wrong:
                 c["failed_steps"] += 1
-            if any(BY_NAME[f].critical for f in failed if f in BY_NAME):
+            if any(_kind(f) in ("speed", "capacity") for f in failed):
+                c["slow_steps"] += 1
+            c["protections"] += sum(_kind(f) == "protection" for f in failed)
+            if any(BY_NAME[f].critical for f in wrong if f in BY_NAME):
                 c["critical_steps"] += 1
             for f in failed:
                 c["checks"][f] += 1
@@ -92,12 +109,11 @@ def _components(traces: list[dict]) -> dict[str, dict]:
             action = a.get(key) if key else s["name"]
             if s["name"] == "llm":
                 action = "with tools" if action else "final answer"
-            c["actions"][str(action if action is not None else "-")].append((s.get("seconds", 0), bool(failed)))
+            c["actions"][str(action if action is not None else "-")].append((s.get("seconds", 0), bool(wrong)))
         for f in t.get("turn_failed", []):
             comp = BY_NAME[f].component if f in BY_NAME else None
             if comp:
-                c = out.setdefault(comp, {"steps": 0, "failed_steps": 0, "critical_steps": 0, "seconds": [],
-                                          "tokens_in": 0, "tokens_out": 0, "checks": Counter(), "actions": defaultdict(list)})
+                c = out.setdefault(comp, _new_component())
                 c["checks"][f] += 1
     return out
 
@@ -110,14 +126,16 @@ def _chains(traces: list[dict]) -> list[dict]:
     for kind, ts in sorted(by_kind.items(), key=lambda kv: -len(kv[1])):
         time_by_step: Counter = Counter()
         first_fail: Counter = Counter()
-        ok = 0
+        ok = slowed = 0
         for t in ts:
             top = [s for s in t["spans"] if s.get("parent") in (None, "agent")]
             for s in top:
                 if s["name"] != "agent":
                     time_by_step[s["name"]] += s.get("seconds", 0)
-            failing = [s for s in t["spans"] if s.get("failed")]
-            if failing or t.get("turn_failed") or (t.get("attrs") or {}).get("error"):
+            failing = [s for s in t["spans"] if any(_kind(f) == "correctness" for f in s.get("failed", []))]
+            if any(_kind(f) in ("speed", "capacity") for s in t["spans"] for f in s.get("failed", [])):
+                slowed += 1
+            if failing or any(_kind(f) == "correctness" for f in t.get("turn_failed", [])) or (t.get("attrs") or {}).get("error"):
                 first = min(failing, key=lambda s: s.get("at", 0))["name"] if failing else "turn"
                 first_fail[first] += 1
             else:
@@ -125,7 +143,7 @@ def _chains(traces: list[dict]) -> list[dict]:
         total_time = sum(time_by_step.values()) or 1
         secs = [t.get("seconds", 0) for t in ts]
         chains.append({
-            "kind": kind, "turns": len(ts), "success_rate": _rate(ok, len(ts)),
+            "kind": kind, "turns": len(ts), "success_rate": _rate(ok, len(ts)), "slowed_rate": _rate(slowed, len(ts)),
             "p50_seconds": _pct(secs, 0.5), "p90_seconds": _pct(secs, 0.9),
             "time_share": {k: round(v / total_time, 3) for k, v in time_by_step.most_common()},
             "failures_start_at": dict(first_fail.most_common()),
@@ -145,28 +163,38 @@ def build_report(traces: list[dict], previous: list[dict] | None = None, outcome
             continue
         failed_rate = _rate(c["failed_steps"], c["steps"])
         critical_rate = _rate(c["critical_steps"], c["steps"])
+        slow_rate = _rate(c["slow_steps"], c["steps"])
         p = prev.get(name)
         checks = [{
             "name": n, "count": k, "rate": _rate(k, c["steps"]), "means": BY_NAME[n].means, "action": BY_NAME[n].action,
-            "critical": BY_NAME[n].critical,
+            "critical": BY_NAME[n].critical, "kind": BY_NAME[n].kind,
         } for n, k in c["checks"].most_common() if n in BY_NAME]
         actions = [{
             "name": a, "count": len(v), "failed_rate": _rate(sum(f for _, f in v), len(v)),
             "p50_seconds": _pct([s for s, _ in v], 0.5),
         } for a, v in sorted(c["actions"].items(), key=lambda kv: -len(kv[1]))]
         components.append({
-            "component": name, "status": _status(c["steps"], failed_rate, c["critical_steps"], critical_rate),
-            "steps": c["steps"], "failed_rate": failed_rate, "previous_failed_rate": _rate(p["failed_steps"], p["steps"]) if p else None,
+            "component": name, "status": _status(c["steps"], failed_rate, c["critical_steps"], critical_rate, slow_rate),
+            "steps": c["steps"], "failed_rate": failed_rate, "slow_rate": slow_rate, "protections": c["protections"], "previous_failed_rate": _rate(p["failed_steps"], p["steps"]) if p else None,
             "p50_seconds": _pct(c["seconds"], 0.5), "p90_seconds": _pct(c["seconds"], 0.9),
             "tokens_in": c["tokens_in"] or None, "tokens_out": c["tokens_out"] or None,
             "checks": checks, "actions": actions,
         })
-    severity = {"red": 0, "amber": 1, "green": 2, "not_enough_data": 3}
+    severity = {"red": 0, "amber": 1, "slow": 2, "green": 3, "not_enough_data": 4}
+
+    def why(c: dict) -> str:
+        if c["status"] == "not_enough_data":
+            return f"only {c['steps']} step(s) so far -- too few to judge"
+        wrong = [k for k in c["checks"] if k["kind"] == "correctness"]
+        if c["status"] in ("red", "amber") and wrong:
+            return f"{wrong[0]['count']} × {wrong[0]['means']}"
+        slow = [k for k in c["checks"] if k["kind"] in ("speed", "capacity")]
+        if c["status"] == "slow" and slow:
+            return f"answers right, but slow: {slow[0]['count']} × {slow[0]['means']}"
+        return "no wrong answers" + (f"; {c['protections']} protection(s) worked" if c["protections"] else "")
+
     verdict = sorted(
-        ({"component": c["component"], "status": c["status"],
-          "why": (f"{c['checks'][0]['count']} × {c['checks'][0]['means']}" if c["checks"] else
-                  ("too few steps to judge" if c["status"] == "not_enough_data" else "every step passed its checks"))}
-         for c in components),
+        ({"component": c["component"], "status": c["status"], "why": why(c)} for c in components),
         key=lambda v: (severity[v["status"]], COMPONENT_ORDER.index(v["component"])),
     )
     evidence = sorted(
@@ -183,7 +211,8 @@ def build_report(traces: list[dict], previous: list[dict] | None = None, outcome
         "evidence": [{"id": t.get("id"), "at": t.get("created_at"), "kind": t["kind"], "account_id": t.get("account_id"),
                       "seconds": t.get("seconds"), "failed": t.get("failed", []), "error": (t.get("attrs") or {}).get("error")}
                      for t in evidence],
-        "checks_defined": [{"name": c.name, "component": c.component, "means": c.means, "critical": c.critical} for c in CHECKS],
+        "checks_defined": [{"name": c.name, "component": c.component, "means": c.means, "critical": c.critical, "kind": c.kind}
+                           for c in CHECKS],
     }
 
 
@@ -327,7 +356,7 @@ def collect(days: int = 7, conn=None, since: datetime | None = None) -> dict:
 
 def summary_lines(report: dict) -> list[str]:
     """The verdict as short lines for the nightly Telegram message, weakest first."""
-    icon = {"red": "🔴", "amber": "🟠", "green": "🟢", "not_enough_data": "⚪"}
+    icon = {"red": "🔴", "amber": "🟠", "slow": "🐢", "green": "🟢", "not_enough_data": "⚪"}
     lines = [f"{icon[v['status']]} {v['component']}: {v['why']}" for v in report["verdict"]]
     for g in report["gates"]:
         if not g["passed"]:

@@ -1100,3 +1100,23 @@ a.voice-row .voice-row-value { color: var(--accent-strong); text-decoration: und
 .q-retrieval { background: #0369a1; } .q-guardrail { background: #475569; } .q-compose { background: #7c3aed; } .q-bank_match { background: #15803d; }
 .q-outcomes { margin: 0; padding-left: 18px; font-size: 13px; display: grid; gap: 4px; }
 .q-evidence { font-size: 12px; margin-top: 8px; }
+
+/* Quality page clarity: check types, freshness, the reading guide. */
+.q-chip.slow { background: var(--surface-2); color: var(--text-1); border: 1px dashed var(--border-strong); }
+.q-comp.slow .q-dot { background: var(--text-3); }
+.q-kind { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 999px; white-space: nowrap; }
+.q-kind.correctness { background: var(--danger-solid-dim); color: var(--danger); }
+.q-kind.speed, .q-kind.capacity { background: var(--surface-2); color: var(--text-1); border: 1px solid var(--border); }
+.q-kind.protection { background: var(--success-solid-dim); color: var(--success); }
+.q-fresh { font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 999px; margin-left: 4px; }
+.q-fresh.ok { background: var(--success-solid-dim); color: var(--success); }
+.q-fresh.stale { background: var(--warning-solid-dim); color: var(--warning); }
+.q-raw { margin-top: 4px; font-size: 12px; }
+.q-raw summary { cursor: pointer; color: var(--text-3); }
+.q-raw code, .q-raw pre { display: block; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; color: var(--text-2); margin: 4px 0 0; max-height: 260px; overflow: auto; }
+.q-guide { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; margin: 0 0 16px; font-size: 13px; }
+.q-guide summary { cursor: pointer; font-weight: 700; color: var(--accent-strong); }
+.q-guide dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 10px 0 0; }
+.q-guide dt { font-weight: 700; color: var(--text-0); }
+.q-guide dd { margin: 0; color: var(--text-1); }
+@media (max-width: 640px) { .q-guide dl { grid-template-columns: 1fr; } .q-guide dd { margin-bottom: 6px; } }
