@@ -203,7 +203,10 @@ def test_prompt_with_account_id_names_the_account():
 def test_prompt_without_account_id_says_no_account_access():
     prompt = build_system_prompt(language="en", account_id=None)
 
-    assert "You do not yet have access to any real account data" in prompt
+    assert "cannot look up or change any account" in prompt
+    # ...but general policy questions are still answered (check_policy works with no account) -- the facts eval found
+    # the old wording made the model refuse "how many days after my due date?" in an unverified chat.
+    assert "call check_policy, which works without an account" in prompt
 
 
 @pytest.fixture
