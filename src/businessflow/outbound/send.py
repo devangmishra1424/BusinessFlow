@@ -49,8 +49,12 @@ async def _send_telegram_message(
     payment_url: str | None = None,
     payment_amount: float | None = None,
     actions: list[list[tuple[str, str]]] | None = None,
+    sent: dict | None = None,
 ) -> bool:
-    """Returns True only if Telegram actually accepted the message --
+    """sent, when given, gets the Telegram message id ("telegram_message_id"), so a borrower's reply to it can be
+    matched to what it answers.
+
+    Returns True only if Telegram actually accepted the message --
     False (not raised) if the token is missing, or Telegram itself
     rejects delivery (e.g. the borrower blocked the bot), so the caller
     can fall back to a logged event instead of losing the notification
@@ -72,7 +76,9 @@ async def _send_telegram_message(
     reply_markup = _build_reply_markup(payment_url, payment_amount, actions)
     try:
         async with Bot(token=token) as bot:
-            await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+            message = await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+        if sent is not None:
+            sent["telegram_message_id"] = message.message_id
         return True
     except TelegramError:
         logger.warning("notify: Telegram delivery failed for chat_id=%s", chat_id, exc_info=True)
@@ -105,7 +111,9 @@ async def _deliver_and_log(
         # A chat holding several loans (channels/telegram_bot.py /loans) has to be told which one this is about.
         if len(store.get_accounts_by_telegram_chat_id(account.telegram_chat_id)) > 1:
             text = f"[{account_id} · {account.business_name}]\n{text}"
-        delivered = await _send_telegram_message(account.telegram_chat_id, text, payment_url, payment_amount, actions)
+        sent: dict = {}
+        delivered = await _send_telegram_message(account.telegram_chat_id, text, payment_url, payment_amount, actions, sent)
+        extra_details = {**extra_details, **sent}
 
     store.log_event(account_id, event_type, {**extra_details, "message": message, "delivered_via_telegram": delivered})
     return delivered

@@ -931,8 +931,25 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await _on_text_message(update, context)
 
 
+def _reply_to_team(chat_id: int, telegram_message_id: int, text: str) -> str | None:
+    """A Telegram reply that quotes a message from our team goes to the team (accounts/store.py
+    reply_to_team_message), not to the assistant. None when the quoted message is not one of those."""
+    found = store.find_team_message_by_telegram_id(chat_id, telegram_message_id)
+    if found is None:
+        return None
+    result = store.reply_to_team_message(found["account_id"], found["id"], text, via="telegram")
+    return (f"Thanks -- your reply went to our team as request {result['case_ref']}. Their answer will come here."
+            if result["opened"] else f"Added to your request {result['case_ref']}. Our team will answer here.")
+
+
 async def _on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
+    quoted = update.message.reply_to_message
+    if quoted is not None and quoted.from_user is not None and quoted.from_user.is_bot:
+        answer = await asyncio.to_thread(_reply_to_team, chat_id, quoted.message_id, update.message.text)
+        if answer is not None:
+            await update.message.reply_text(answer)
+            return
     was_verified = _has_verified_session(chat_id)
     reply = await _agent_reply(context, chat_id, update.message.text)
     # Just verified by typing the credentials: show what can be done now (the in-memory session is checked on purpose, so

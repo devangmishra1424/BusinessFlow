@@ -63,7 +63,7 @@ from businessflow.accounts import cases
 from businessflow.accounts.db import check_database
 from businessflow.accounts.dues import allocate_payment, charges_due
 from businessflow.accounts.escalation_kinds import (
-    CALLBACK, CLOSURE, FRAUD, RESTRUCTURING, SYSTEM, classify_escalation,
+    CALLBACK, CLOSURE, FRAUD, REPLY_REASON_PREFIX, RESTRUCTURING, SYSTEM, classify_escalation,
 )
 from businessflow.accounts.policy import GRACE_PERIOD_DAYS, PAYMENT_CLAIM_REVIEW_WORKING_DAYS
 from businessflow.accounts.documents import list_documents_for_account, resolve_document_path
@@ -271,6 +271,8 @@ class MessageOut(BaseModel):
     delivered_via_telegram: bool
     created_at: datetime
     kind: str = "message"  # message | decision | dispute | fee | reminder
+    id: int | None = None
+    replied_case_ref: str | None = None  # the request the borrower's reply opened, if they replied
 
 
 class DashboardResponse(BaseModel):
@@ -525,6 +527,8 @@ def _build_requests(escalations: list, disputes: list[dict], threads: dict[str, 
         if kind == SYSTEM:
             continue
         title, detail = _request_title(kind, e.proposed_changes)
+        if (e.reason or "").startswith(REPLY_REASON_PREFIX):  # their answer to a message from us: show what they said
+            title, detail = "Your reply to our message", e.reason[len(REPLY_REASON_PREFIX):].removeprefix(" of ")[:400]
         if e.status == "queued_for_human":
             status, label = "open", "In progress"
         elif e.status == "rejected":
@@ -1100,6 +1104,28 @@ def add_case_note_endpoint(conversation_id: str, case_ref: str, req: CaseNoteReq
         raise HTTPException(status_code=429, detail="too many notes in a short time -- please wait a few minutes")
     store.add_case_message(account_id, case_ref, "borrower", message)
     return {"case_ref": case_ref, "author": "borrower", "message": message}
+
+
+class MessageReplyRequest(BaseModel):
+    message: str
+
+
+@app.post("/conversations/{conversation_id}/messages-from-us/{message_id}/reply")
+def reply_to_message_endpoint(conversation_id: str, message_id: int, req: MessageReplyRequest) -> dict:
+    """The borrower answers a message from our team: it becomes a request in the ops Inbox (quoting what it answers),
+    or joins that request's thread if they replied before (accounts/store.py reply_to_team_message). 404 for a
+    message that is not a team message on this conversation's account."""
+    account_id = _require_verified_account(conversation_id)
+    try:
+        text = validation.free_text(req.message, "message")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if not _case_note_limiter.check(account_id):
+        raise HTTPException(status_code=429, detail="too many messages in a short time -- please wait a few minutes")
+    try:
+        return store.reply_to_team_message(account_id, message_id, text, via="web")
+    except store.MessageNotReplyableError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 _DEFAULT_AGENT_REASON = "Borrower requested a human agent from the dashboard"

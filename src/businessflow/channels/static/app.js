@@ -1377,6 +1377,22 @@ function requestCardHtml(r) {
   </div>`;
 }
 
+// What the borrower can do with a message: answer a message from our team (it becomes a request our team works on,
+// or joins the one their earlier reply opened), or act on a reminder (pay what is due now, or ask about it).
+function messageActionsHtml(m) {
+  if (m.kind === "message" && m.id) {
+    if (m.replied_case_ref) {
+      return `<p class="dash-msg-replied">You replied \u2014 it's request ${escapeHtml(m.replied_case_ref)} under Your requests, where our answer will appear.</p>
+        <form class="msg-reply-form" data-message-id="${m.id}"><textarea rows="2" maxlength="1000" placeholder="Add to your reply\u2026" aria-label="Add to your reply"></textarea><button type="submit" class="btn-cancel">Send</button></form>`;
+    }
+    return `<form class="msg-reply-form" data-message-id="${m.id}"><textarea rows="2" maxlength="1000" placeholder="Reply to our team\u2026" aria-label="Reply to our team"></textarea><button type="submit" class="btn-primary">Reply</button></form>`;
+  }
+  if (m.kind === "reminder") {
+    return `<div class="dash-msg-actions"><button type="button" class="btn-primary" data-msg-action="pay">Pay what's due now</button><button type="button" class="btn-cancel" data-msg-action="ask" data-msg-date="${escapeHtml(fmtDateTime(m.created_at))}">Ask about this</button></div><div class="action-result" hidden></div>`;
+  }
+  return "";
+}
+
 function renderMessages() {
   const messages = _lastMessages;
   const $toggle = document.getElementById("messages-toggle-btn");
@@ -1386,7 +1402,7 @@ function renderMessages() {
       shown
         .map(
           (m) =>
-            `<div class="dash-msg-card"><div><p class="dash-msg-kind">${escapeHtml(MESSAGE_KIND_LABELS[m.kind] || "Message")}</p><p class="dash-msg-text">${escapeHtml(m.message)}</p><p class="dash-msg-meta">${fmtDateTime(m.created_at)}</p></div>${m.delivered_via_telegram ? `<span class="dash-msg-badge yes">Also sent on Telegram</span>` : ""}</div>`
+            `<div class="dash-msg-card"><div class="dash-msg-body"><p class="dash-msg-kind">${escapeHtml(MESSAGE_KIND_LABELS[m.kind] || "Message")}</p><p class="dash-msg-text">${escapeHtml(m.message)}</p><p class="dash-msg-meta">${fmtDateTime(m.created_at)}${m.kind === "reminder" ? " \u00b7 figures as of that day" : ""}</p>${messageActionsHtml(m)}</div>${m.delivered_via_telegram ? `<span class="dash-msg-badge yes">Also sent on Telegram</span>` : ""}</div>`
         )
         .join("")
     : "";
@@ -1414,6 +1430,53 @@ document.getElementById("messages-toggle-btn").addEventListener("click", () => {
 });
 
 // Delegated, like the warnings below: the list is re-rendered on every load.
+document.getElementById("dash-messages").addEventListener("submit", async (e) => {
+  const form = e.target.closest(".msg-reply-form");
+  if (!form) return;
+  e.preventDefault();
+  const $text = form.querySelector("textarea");
+  const text = $text.value.trim();
+  if (!text) {
+    $text.focus();
+    return;
+  }
+  const $btn = form.querySelector("button[type=submit]");
+  $btn.disabled = true;
+  $btn.textContent = "Sending\u2026";
+  try {
+    await api(`/conversations/${state.conversationId}/messages-from-us/${form.dataset.messageId}/reply`, { method: "POST", body: JSON.stringify({ message: text }) });
+    await loadDashboard(); // the reply now shows as a request, with its thread
+  } catch (err) {
+    $btn.disabled = false;
+    $btn.textContent = "Reply";
+    let $err = form.querySelector(".case-note-error");
+    if (!$err) {
+      $err = document.createElement("p");
+      $err.className = "case-note-error";
+      form.appendChild($err);
+    }
+    $err.innerHTML = friendlyActionError(err);
+  }
+});
+
+document.getElementById("dash-messages").addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-msg-action]");
+  if (!btn) return;
+  if (btn.dataset.msgAction === "pay") {
+    btn.disabled = true;
+    try {
+      await startPayment(_lastAccount.amount_due_now, btn.closest(".dash-msg-body").querySelector(".action-result"));
+    } finally {
+      btn.disabled = false;
+    }
+    return;
+  }
+  const $input = document.getElementById("message-input");
+  $input.value = `About your reminder of ${btn.dataset.msgDate}: `;
+  $input.scrollIntoView({ behavior: "smooth", block: "center" });
+  $input.focus();
+});
+
 document.getElementById("dash-escalations").addEventListener("submit", async (e) => {
   const form = e.target.closest(".case-note-form");
   if (!form) return;

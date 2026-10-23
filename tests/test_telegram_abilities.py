@@ -23,6 +23,7 @@ class FakeMessage:
         self.sent = []  # (text, reply_markup)
         self.parse_modes = []  # one per sent message: "HTML" for an agent reply, None for plain text
         self.voices = 0
+        self.reply_to_message = None  # a real telegram Message always has it: None unless the user replied to one
 
     async def reply_text(self, text, reply_markup=None, parse_mode=None):
         self.sent.append((text, reply_markup))
