@@ -168,6 +168,19 @@ CASES: list[LabCase] = [
                             Step(content="I can only help with your own account.")]),
         ],
     ),
+    LabCase(
+        "policy_question_answered_without_an_account", None, "en",
+        "agent/client.py _NO_ACCOUNT_CONTEXT: general policy questions are answered with check_policy, no account needed "
+        "(data/kb/grace_period.md: 3 days, no fee inside them).",
+        "A borrower who has not signed in still gets the grace period answered from the policy, not 'send your account'.",
+        [
+            LabTurn("How many days do I get after my due date before anything bad happens?",
+                    Expect(tools=["check_policy"], tool_result_contains={"check_policy": ["3"]}, reply_contains=["3 days"]),
+                    script=[Step(tool_calls=[("check_policy", {"query": "grace period after due date"})]),
+                            Step(content="You get a 3 days grace period after the due date; no late fee is charged inside it.")]),
+        ],
+        verified=False,
+    ),
     # --- twins: the same rule from the other side, and in Hindi --------------------------------------------------
     LabCase(
         "vague_intent_records_no_promise", "BF-1002", "en",
