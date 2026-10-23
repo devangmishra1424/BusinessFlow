@@ -1102,10 +1102,16 @@ async def _receive_and_ingest(
             _rollback_upload(saved_path, previous, folder)
             detail = f"could not parse this file as {extension}: {e}" if isinstance(e, ConversionError) else str(e)
             raise HTTPException(status_code=422, detail=detail) from e
-        except Exception:
+        except Exception as e:
             # Ingestion is one transaction, so the index still holds the previous version; keep the disk in step.
+            # Not a bad-input case (those are the 422s above), so it stays a 500 -- but a 500 that names what broke
+            # (a model that could not load, a full disk, a database error), for the operator holding the ops key,
+            # instead of a bare "Internal Server Error" that needs the server log to read. The log has the traceback.
             _rollback_upload(saved_path, previous, folder)
-            raise
+            logger.exception("document ingestion failed: %s", filename)
+            raise HTTPException(
+                status_code=500, detail=f"the document could not be ingested -- {type(e).__name__}: {str(e)[:300]}"
+            ) from e
     finally:
         shutil.rmtree(staging, ignore_errors=True)  # best effort: only a leftover staging folder if this fails
     return filename, saved_path, chunks_stored

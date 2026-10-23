@@ -99,3 +99,14 @@ def test_the_lenders_policy_pdfs_are_real_text_that_states_the_enforced_numbers(
     text = " ".join(r.text for r in records)
     assert f"₹{LATE_FEE_FLAT_AMOUNT}" in text and f"{GRACE_PERIOD_DAYS}-day grace period" in text
     assert any(r.headings.startswith("4. Late payment charge") for r in records)
+
+
+def test_an_unexpected_ingestion_failure_names_what_broke_and_leaves_nothing_behind(policy_file, monkeypatch):
+    def broken(*args, **kwargs):
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(ops_api, "ingest_document", broken)
+    r = client.post("/policy-documents", files={"file": (policy_file, b"# Fees\n\nA flat charge.", "text/markdown")}, headers=_auth())
+    assert r.status_code == 500
+    assert "OSError" in r.json()["detail"] and "No space left on device" in r.json()["detail"]
+    assert not (LIBRARY / policy_file).exists()
