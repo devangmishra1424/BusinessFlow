@@ -75,6 +75,7 @@ from businessflow.agent.loop import (
     index_of_last_user_message,
     run_turn_with_memory,
     start_conversation,
+    start_conversation_with_recap,
     verify_and_start_conversation,
 )
 from businessflow.audio.asr import transcribe
@@ -145,8 +146,33 @@ def _get_conversation_lock(conversation_id: str) -> threading.Lock:
 
 class StartConversationRequest(BaseModel):
     account_id: str | None = None
-    access_key: str | None = None  # required if account_id is given
+    access_key: str | None = None  # required if account_id is given, unless demo_open on a demo deployment
     language: str = "en"
+    # The public demo's one-click sign-in (GET /demo/accounts lists every account): no key asked. Refused unless the
+    # deployment is a demo -- see _demo_open_access.
+    demo_open: bool = False
+
+
+def _demo_open_access() -> bool:
+    """On for the public demo, where every account is a demo account and the page opens any of them in one click;
+    a real lender's deployment sets DEMO_OPEN_ACCESS=0, and then every account needs its access key."""
+    return os.environ.get("DEMO_OPEN_ACCESS", "1") != "0"
+
+
+class DemoAccountOut(BaseModel):
+    account_id: str
+    borrower_name: str
+    business_name: str
+
+
+@app.get("/demo/accounts", response_model=list[DemoAccountOut])
+def demo_accounts_endpoint():
+    """Every account, for the demo's sign-in list -- one opened from ops or a loan-book import shows up by itself.
+    404 when the deployment is not a demo."""
+    if not _demo_open_access():
+        raise HTTPException(status_code=404, detail="not available on this deployment")
+    return [DemoAccountOut(account_id=a.account_id, borrower_name=a.borrower_name, business_name=a.business_name)
+            for a in store.list_accounts()]
 
 
 class StartConversationResponse(BaseModel):
@@ -590,7 +616,14 @@ def start_conversation_endpoint(request: Request, req: StartConversationRequest)
     if req.language not in ("en", "hi"):
         raise HTTPException(status_code=400, detail="language must be 'en' or 'hi'")
 
-    if req.account_id:
+    if req.account_id and req.demo_open and not req.access_key:
+        if not _demo_open_access():
+            raise HTTPException(status_code=401, detail=f"access_key is required to talk about account {req.account_id}")
+        if store.get_account(req.account_id) is None:
+            raise HTTPException(status_code=404, detail=f"no account {req.account_id}")
+        conversation = start_conversation_with_recap(req.language, req.account_id)
+        store.log_event(req.account_id, "demo_open_sign_in", {})
+    elif req.account_id:
         if not req.access_key:
             raise HTTPException(status_code=401, detail=f"access_key is required to talk about account {req.account_id}")
         try:

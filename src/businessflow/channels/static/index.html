@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/styles.css?v=22" />
+<link rel="stylesheet" href="/static/styles.css?v=23" />
 </head>
 <body>
 
@@ -80,13 +80,6 @@
           <select id="start-account-picker">
             <option value="" selected disabled>Select a borrower…</option>
           </select>
-          <details class="own-account" id="own-account">
-            <summary>Use my own account</summary>
-            <div class="own-account-fields">
-              <input id="own-account-id" type="text" placeholder="Account ID, e.g. BF-1011" autocomplete="off" />
-              <input id="own-access-key" type="password" inputmode="numeric" maxlength="6" placeholder="6-digit access key" autocomplete="off" />
-            </div>
-          </details>
         </div>
 
         <div id="lang-field">
@@ -149,16 +142,7 @@
           <p id="dash-business-name"></p>
         </div>
         <div class="loan-switch" id="loan-switch">
-          <select id="loan-switch-select" aria-label="Switch loan"></select>
-          <details class="add-loan">
-            <summary>+ Add another loan</summary>
-            <form id="add-loan-form" class="add-loan-form">
-              <input id="add-loan-id" type="text" placeholder="Account ID" autocomplete="off" required />
-              <input id="add-loan-key" type="password" inputmode="numeric" maxlength="6" placeholder="Access key" autocomplete="off" required />
-              <button type="submit" class="btn-primary">Add</button>
-              <p class="case-note-error" id="add-loan-error" hidden></p>
-            </form>
-          </details>
+          <select id="loan-switch-select" aria-label="Switch to another account"></select>
         </div>
       </section>
 
@@ -336,6 +320,6 @@
 
 <script src="/static/naturalvoice.js?v=2"></script>
 <script src="/static/richtext.js?v=3"></script>
-<script src="/static/app.js?v=18"></script>
+<script src="/static/app.js?v=19"></script>
 </body>
 </html>

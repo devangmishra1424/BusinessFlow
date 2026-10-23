@@ -792,15 +792,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .dash-msg-replied { margin: 8px 0 0; font-size: 13px; color: var(--success); }
 .dash-msg-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 
-/* Your own account on the sign-in screen; switching between several loans on the dashboard. */
-.own-account { margin-top: 10px; font-size: 14px; }
-.own-account summary { cursor: pointer; color: var(--accent-strong); font-weight: 600; }
-.own-account-fields { display: grid; gap: 8px; margin-top: 8px; }
-.own-account-fields input, .add-loan-form input { padding: 9px 11px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); font: inherit; font-size: 14px; background: var(--surface); color: var(--text-0); }
-.loan-switch { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
-.loan-switch select { padding: 6px 10px; border-radius: var(--radius-md); border: 1px solid var(--border-strong); font: inherit; font-size: 13px; background: var(--surface); color: var(--text-0); }
-.add-loan summary { cursor: pointer; font-size: 13px; color: var(--accent-strong); font-weight: 600; }
-.add-loan-form { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; justify-content: flex-end; }
-.add-loan-form input { width: 130px; }
-.add-loan-form .case-note-error { flex-basis: 100%; text-align: right; margin: 0; }
-@media (max-width: 640px) { .loan-switch { margin-left: 0; align-items: flex-start; width: 100%; } .add-loan-form { justify-content: flex-start; } }
+/* Switching account from the dashboard. */
+.loan-switch { margin-left: auto; }
+.loan-switch select { padding: 6px 10px; border-radius: var(--radius-md); border: 1px solid var(--border-strong); font: inherit; font-size: 13px; background: var(--surface); color: var(--text-0); max-width: 260px; }
+@media (max-width: 640px) { .loan-switch { margin-left: 0; width: 100%; } .loan-switch select { max-width: 100%; width: 100%; } }
