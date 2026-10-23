@@ -368,7 +368,9 @@ function setView(view) {
   document.getElementById("view-inbox").hidden = view !== "inbox";
   document.getElementById("view-bank").hidden = view !== "bank";
   document.getElementById("view-quality").hidden = view !== "quality";
+  document.getElementById("view-library").hidden = view !== "library";
   if (view === "bank") loadBank();
+  if (view === "library") loadLibrary();
   if (view === "quality") loadQuality();
 }
 
@@ -695,6 +697,122 @@ async function loadBank() {
     toast(err.message, true);
   }
 }
+
+/* ============================================================
+   Policy library -- GET/POST /policy-documents, POST /policy-documents/retire
+   ============================================================ */
+const LIBRARY_TYPES = { policy: "Policy", regulatory: "Regulator's circular", other: "Other reference" };
+
+function libraryRowHtml(d) {
+  const download = d.uploaded_here
+    ? `<button type="button" class="btn btn-secondary" data-library-download="${escapeHtml(d.filename)}">Download</button>`
+    : `<span class="bank-ref">ships with the software</span>`;
+  return `<div class="bank-line" data-source="${escapeHtml(d.source_document)}">
+    <div class="bank-line-main">
+      <div class="bank-line-amount">${d.chunks}<small> parts</small></div>
+      <div class="bank-line-text">
+        <div><b>${escapeHtml(d.filename)}</b> <span class="bank-ref">${escapeHtml(LIBRARY_TYPES[d.document_type] || d.document_type)}</span></div>
+        <div class="bank-line-meta">Added ${fmtDate(d.added_at)} · ${escapeHtml(d.source_document)}</div>
+      </div>
+    </div>
+    <div class="bank-line-actions">
+      ${download}
+      <input type="text" class="library-reason" placeholder="Why retire it?" maxlength="300" />
+      <button type="button" class="btn btn-secondary" data-library-action="retire">Retire</button>
+      <p class="mini-form-error" hidden></p>
+    </div>
+  </div>`;
+}
+
+async function loadLibrary() {
+  try {
+    const docs = await api("/policy-documents");
+    document.getElementById("library-list").innerHTML = docs.map(libraryRowHtml).join("");
+    document.getElementById("library-empty").hidden = docs.length > 0;
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function downloadLibraryDocument(filename) {
+  const res = await fetch(`/policy-documents/files/${encodeURIComponent(filename)}`, { headers: { "X-API-Key": state.apiKey } });
+  if (!res.ok) throw new Error(`download failed (${res.status})`);
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+(function initLibrary() {
+  document.getElementById("library-upload-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const $result = document.getElementById("library-upload-result");
+    const $btn = document.getElementById("library-upload-btn");
+    const file = document.getElementById("library-file").files[0];
+    if (!file) return;
+    $btn.disabled = true;
+    $btn.textContent = "Reading…";
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("document_type", document.getElementById("library-type").value);
+      const r = await api("/policy-documents", { method: "POST", body: form });
+      $result.textContent = `${r.filename}: read into ${r.chunks_stored} searchable parts. The assistant answers from it within a minute.`;
+      $result.hidden = false;
+      await loadLibrary();
+    } catch (err) {
+      toast(err.message, true);
+    } finally {
+      $btn.disabled = false;
+      $btn.textContent = "Add to library";
+    }
+  });
+  document.getElementById("library-list").addEventListener("click", async (e) => {
+    const dl = e.target.closest("[data-library-download]");
+    if (dl) {
+      try {
+        await downloadLibraryDocument(dl.dataset.libraryDownload);
+      } catch (err) {
+        toast(err.message, true);
+      }
+      return;
+    }
+    const btn = e.target.closest("[data-library-action]");
+    if (!btn) return;
+    const $row = btn.closest(".bank-line");
+    const $err = $row.querySelector(".mini-form-error");
+    $err.hidden = true;
+    let name;
+    try {
+      name = bankName();
+    } catch (err) {
+      $err.textContent = "Enter your name on the Bank page first -- it is kept with every retirement.";
+      $err.hidden = false;
+      return;
+    }
+    const reason = $row.querySelector(".library-reason").value.trim();
+    if (reason.length < 3) {
+      $err.textContent = "Say why it is being retired.";
+      $err.hidden = false;
+      return;
+    }
+    btn.disabled = true;
+    try {
+      await api("/policy-documents/retire", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source_document: $row.dataset.source, retired_by: name, reason }),
+      });
+      toast("Retired: the assistant no longer answers from it.");
+      await loadLibrary();
+    } catch (err) {
+      $err.textContent = err.message;
+      $err.hidden = false;
+      btn.disabled = false;
+    }
+  });
+})();
 
 (function initBank() {
   try {
@@ -2016,6 +2134,7 @@ function naRenderReview(payload) {
     naReviewRow("Phone", payload.phone_number),
     naReviewRow("Language", payload.language_preference),
     naReviewRow("Loan type", payload.loan_type),
+    ...(payload.external_ref ? [naReviewRow("Loan number", payload.external_ref)] : []),
     naReviewRow("Onboarding risk rating", payload.risk_tier),
     naReviewRow("Principal", `₹${payload.principal_amount.toLocaleString("en-IN")}`),
     naReviewRow("EMI", `₹${payload.emi_amount}/month`),
@@ -2047,6 +2166,7 @@ $newAccountForm.addEventListener("submit", (e) => {
     loan_type: document.getElementById("na-loan-type").value.trim(),
     risk_tier: document.getElementById("na-risk-tier").value,
     nach_mandate_active: document.getElementById("na-nach").checked,
+    external_ref: document.getElementById("na-external-ref").value.trim() || null,
     ...naFinancial,
   };
   if (!payload.borrower_name || !payload.business_name || !payload.phone_number || !payload.loan_type) {
@@ -2446,7 +2566,7 @@ function renderDetail(a, documents, conversation = []) {
 ${a.telegram_linked
           ? `<span class="badge risk-low">Telegram linked</span><button type="button" class="badge badge-edit-btn" id="unlink-telegram-btn" title="Stop sending to this chat; it must verify again">Unlink</button>`
           : `<span class="badge" title="Reminders and decisions are logged but not delivered until the borrower links Telegram (Reset key gives a fresh invite link)">Not on Telegram</span>`}
-        <button type="button" class="badge badge-edit-btn" id="edit-account-btn" title="Edit phone, language, or onboarding risk rating">✎ Edit</button>
+        <button type="button" class="badge badge-edit-btn" id="edit-account-btn" title="Edit phone, language, onboarding risk rating or NACH mandate">✎ Edit</button>
       </div>
       ${riskWhyHtml(a)}
 
@@ -2462,6 +2582,10 @@ ${a.telegram_linked
             <option value="low" ${a.onboarding_risk_tier === "low" ? "selected" : ""}>Onboarding rating: low</option>
             <option value="medium" ${a.onboarding_risk_tier === "medium" ? "selected" : ""}>Onboarding rating: medium</option>
             <option value="high" ${a.onboarding_risk_tier === "high" ? "selected" : ""}>Onboarding rating: high</option>
+          </select>
+          <select id="ea-nach" title="As the bank last reported the auto-debit mandate">
+            <option value="true" ${a.nach_mandate_active ? "selected" : ""}>NACH mandate active</option>
+            <option value="false" ${a.nach_mandate_active ? "" : "selected"}>NACH mandate not active</option>
           </select>
         </div>
         <div class="clarify-actions-row">
@@ -2694,6 +2818,7 @@ ${a.telegram_linked
               <div class="upload-row">
                 <select id="upload-type">
                   <option value="loan_agreement">Loan agreement</option>
+                  <option value="kfs">Key Fact Statement</option>
                   <option value="kyc">KYC</option>
                   <option value="regulatory">Regulatory</option>
                   <option value="other">Other</option>
@@ -3063,6 +3188,7 @@ ${a.telegram_linked
       phone_number: document.getElementById("ea-phone").value.trim(),
       language_preference: document.getElementById("ea-language").value,
       risk_tier: document.getElementById("ea-risk").value,
+      nach_mandate_active: document.getElementById("ea-nach").value === "true",
     };
     const submitBtn = editAccountForm.querySelector('button[type="submit"]');
     submitBtn.disabled = true;

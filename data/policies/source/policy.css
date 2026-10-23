@@ -1,0 +1,32 @@
+/* Print stylesheet for the lender's policy documents (scripts/build_policy_pdfs.py prints each page to PDF with a
+   headless Chromium browser). A4, one column, real text (never an image), so the ingestion pipeline reads the text
+   layer and not OCR. */
+@page {
+  size: A4;
+  margin: 20mm 18mm 22mm 18mm;
+  @bottom-right { content: "Page " counter(page) " of " counter(pages); font: 8pt "Segoe UI", Arial, sans-serif; color: #555; }
+  @bottom-center { content: "BusinessFlow Finance - demonstration lender. Not issued by a real lender."; font: 7.5pt "Segoe UI", Arial, sans-serif; color: #777; }
+}
+html { font: 10.2pt/1.45 Georgia, "Times New Roman", serif; color: #111; }
+body { margin: 0; }
+.masthead { border-bottom: 2px solid #1d3a5f; padding-bottom: 6pt; margin-bottom: 10pt; display: flex; justify-content: space-between; align-items: flex-end; }
+.masthead .lender { font: 600 13pt "Segoe UI", Arial, sans-serif; color: #1d3a5f; }
+.masthead .lender small { display: block; font-weight: 400; font-size: 8pt; color: #444; }
+.masthead .meta { font: 8pt "Segoe UI", Arial, sans-serif; text-align: right; color: #333; }
+h1 { font: 600 17pt "Segoe UI", Arial, sans-serif; color: #1d3a5f; margin: 6pt 0 4pt; }
+h2 { font: 600 12pt "Segoe UI", Arial, sans-serif; color: #1d3a5f; margin: 14pt 0 4pt; border-bottom: 0.6pt solid #b9c6d6; padding-bottom: 2pt; break-after: avoid; }
+h3 { font: 600 10.5pt "Segoe UI", Arial, sans-serif; margin: 10pt 0 3pt; break-after: avoid; }
+p { margin: 0 0 6pt; }
+ul, ol { margin: 0 0 6pt 16pt; padding: 0; }
+li { margin: 0 0 3pt; }
+table { border-collapse: collapse; width: 100%; margin: 4pt 0 8pt; font-size: 9.2pt; break-inside: avoid; }
+th, td { border: 0.6pt solid #8a9bb0; padding: 3pt 5pt; vertical-align: top; text-align: left; }
+th { background: #e8eef5; font-family: "Segoe UI", Arial, sans-serif; font-weight: 600; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+.summary { border: 0.8pt solid #1d3a5f; background: #f4f7fb; padding: 6pt 9pt; margin: 6pt 0 10pt; }
+.summary p { margin: 0 0 3pt; }
+.note { font-size: 9pt; color: #333; border-left: 2pt solid #b9c6d6; padding-left: 7pt; margin: 6pt 0; }
+.sign { margin-top: 18pt; display: flex; gap: 30pt; }
+.sign div { flex: 1; border-top: 0.6pt solid #333; padding-top: 3pt; font-size: 9pt; }
+.small { font-size: 8.6pt; }
+.pagebreak { break-before: page; }

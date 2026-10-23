@@ -78,6 +78,10 @@ const postCaseNote = (conversationId, caseRef, message) =>
   api(`/conversations/${conversationId}/cases/${encodeURIComponent(caseRef)}/notes`, { method: "POST", body: JSON.stringify({ message }) });
 const postAgent = (conversationId, reason) =>
   api(`/conversations/${conversationId}/quick-actions/agent`, { method: "POST", body: JSON.stringify({ reason: reason || null }) });
+const postFeeWaiver = (conversationId, reason) =>
+  api(`/conversations/${conversationId}/quick-actions/fee-waiver`, { method: "POST", body: JSON.stringify({ reason }) });
+const postClosureCertificate = (conversationId) =>
+  api(`/conversations/${conversationId}/quick-actions/closure-certificate`, { method: "POST" });
 const postPaymentLink = (conversationId, amount) =>
   api(`/conversations/${conversationId}/quick-actions/payment-link`, { method: "POST", body: JSON.stringify({ amount }) });
 
@@ -1218,7 +1222,7 @@ function renderDueCard(account) {
   let left;
   let cta = "";
   if (account.months_remaining <= 0) {
-    left = `<div><p class="due-card-label">Loan status</p><p class="due-card-amount">Fully repaid</p><p class="due-card-sub">Nothing is due on this loan. Ask in chat if you need your closure certificate.</p></div>`;
+    left = `<div><p class="due-card-label">Loan status</p><p class="due-card-amount">Fully repaid</p><p class="due-card-sub">Nothing is due on this loan. Get help \u2192 Closure certificate asks our team for it.</p></div>`;
   } else if (account.amount_due_now <= 0) {
     left = `<div><p class="due-card-label">Due now</p><p class="due-card-amount">${fmtInr(0)}</p><p class="due-card-sub">This month's EMI is already covered by your earlier extra payment. Next EMI of ${fmtInr(account.emi_amount)} is due ${fmtDate(account.emi_due_date)}.</p></div>`;
   } else {
@@ -1303,6 +1307,8 @@ function renderDashboard(data) {
   _lastAccount = account;
 
   renderDueCard(account);
+  document.getElementById("help-choice-waiver").hidden = !(account.charges || []).length;
+  document.getElementById("help-choice-closure").hidden = account.months_remaining > 0;
 
   // Warnings -- text is rendered exactly as the backend wrote it, never
   // re-worded; label decides which action(s) (if any) the expanded body
@@ -1708,6 +1714,21 @@ const HELP_CHOICES = {
     hint: "A person on our team picks this up and replies under Requests & messages.",
     required: false,
   },
+  // Shown only while a late fee is owed (renderDashboard): a request to a person, never a waiver by itself.
+  waiver: {
+    label: "Why should we remove the late fee?",
+    placeholder: "e.g. My auto-debit failed because of a bank error; I paid by UPI the same day",
+    hint: "A person on our team decides and replies under Requests & messages. The fee is still owed until then.",
+    required: true,
+  },
+  // Shown only once the loan is fully repaid: nothing to type, the team checks the account and issues it.
+  closure: {
+    label: "",
+    placeholder: "",
+    hint: "Our team checks that everything is paid and issues your closure certificate (no-dues certificate). You'll see it under Requests & messages.",
+    required: false,
+    noText: true,
+  },
 };
 
 const $helpBtn = document.getElementById("action-help-btn");
@@ -1724,6 +1745,7 @@ function selectHelpChoice(choice) {
   $helpFields.hidden = !cfg;
   if (!cfg) return;
   document.getElementById("help-label").textContent = cfg.label;
+  $helpText.hidden = Boolean(cfg.noText);
   $helpText.placeholder = cfg.placeholder;
   document.getElementById("help-hint").textContent = cfg.hint;
   $helpText.focus();
@@ -1758,6 +1780,16 @@ document.getElementById("help-cancel-btn").addEventListener("click", () => {
 });
 
 function helpResultText(choice, result) {
+  if (choice === "waiver") {
+    return result.no_fee_owed
+      ? "There is no late fee on your loan right now, so there is nothing to remove."
+      : "Sent \u2014 a person on our team decides and replies under Requests & messages. Until then the fee is still owed.";
+  }
+  if (choice === "closure") {
+    return result.eligible
+      ? `Requested (${result.escalation_id}) \u2014 our team checks your loan and issues the certificate. Follow it under Requests & messages.`
+      : `Your loan still has ${result.months_remaining} EMI${result.months_remaining === 1 ? "" : "s"} left; the certificate is issued once they are paid.`;
+  }
   if (choice === "person") return "Request sent \u2014 a person on our team will pick it up. You can follow it under Requests & messages.";
   if (result.already_open) {
     return result.kind === "payment_claim"
@@ -1787,6 +1819,8 @@ $helpForm.addEventListener("submit", async (e) => {
   try {
     let result;
     if (choice === "paid") result = await postPaymentClaim(state.conversationId, text);
+    else if (choice === "waiver") result = await postFeeWaiver(state.conversationId, text);
+    else if (choice === "closure") result = await postClosureCertificate(state.conversationId);
     else if (choice === "wrong") result = await postDispute(state.conversationId, helpContext ? `${helpContext}: ${text}` : text);
     else result = await postAgent(state.conversationId, text);
     showActionResult($helpResult, escapeHtml(helpResultText(choice, result)), true);

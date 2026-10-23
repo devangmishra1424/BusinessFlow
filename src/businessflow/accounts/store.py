@@ -256,6 +256,50 @@ def accounts_by_external_ref(refs: list[str]) -> dict[str, str]:
     return {r["external_ref"]: r["account_id"] for r in rows}
 
 
+# Every table that holds what happened on an account, children first. Neither list is ever built from input.
+_ACTIVITY_TABLES = ("bank_lines", "charges", "payment_tokens", "events", "escalations", "disputes", "promises",
+                    "payment_history")
+
+
+def _delete_activity(tx, account_ids: list[str], statement_prefix: str | None) -> dict[str, int]:
+    removed: dict[str, int] = {}
+    if statement_prefix:
+        removed["bank_lines (statements)"] = len(tx.execute(
+            "delete from bank_lines where statement like %s returning id", (statement_prefix + "%",)).fetchall())
+    for table in _ACTIVITY_TABLES if account_ids else ():
+        removed[table] = len(tx.execute(
+            f"delete from {table} where account_id = any(%s) returning 1", (list(account_ids),)).fetchall())
+    return removed
+
+
+def clear_account_activity(account_ids: list[str], statement_prefix: str | None = None) -> dict[str, int]:
+    """Deletes everything that has happened on these accounts -- payments, charges, promises, cases, messages,
+    reminders, bank lines -- and every bank line from statements named statement_prefix*, in one transaction. The
+    accounts and their documents stay. Returns rows removed per table.
+
+    Not a lender's operation (a real loan's history is never deleted): the public demo's reset (scripts/build_demo.py)
+    clears its own demo loans this way before entering their history again."""
+    with get_connection().transaction() as tx:
+        removed = _delete_activity(tx, account_ids, statement_prefix)
+    logger.info("cleared activity on %s: %s", ", ".join(account_ids), removed)
+    return removed
+
+
+def remove_accounts(account_ids: list[str], statement_prefix: str | None = None) -> dict[str, int]:
+    """clear_account_activity, then the accounts themselves and their document chunks, in one transaction. For
+    clearing seeded test accounts out of a live demo database; the uploaded files under data/documents/<account_id>
+    are the caller's."""
+    with get_connection().transaction() as tx:
+        removed = _delete_activity(tx, account_ids, statement_prefix)
+        if account_ids:
+            removed["document_chunks"] = len(tx.execute(
+                "delete from document_chunks where account_id = any(%s) returning 1", (list(account_ids),)).fetchall())
+            removed["accounts"] = len(tx.execute(
+                "delete from accounts where account_id = any(%s) returning 1", (list(account_ids),)).fetchall())
+    logger.info("removed accounts %s: %s", ", ".join(account_ids), removed)
+    return removed
+
+
 def reset_access_key(account_id: str) -> str:
     """Mints a fresh 6-digit access key for an EXISTING account, replacing
     whatever it had -- the old key stops working the instant this commits.

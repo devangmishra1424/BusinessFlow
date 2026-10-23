@@ -54,6 +54,10 @@
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6l-8-3Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="m8.5 12 2.5 2.5 4.5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span class="tab-label">Quality</span>
       </button>
+      <button class="tab" data-view="library">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M5 4h4v16H5zM10 4h4v16h-4z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="m15.5 5.2 3.9-1 3.6 14.6-3.9 1z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        <span class="tab-label">Library</span>
+      </button>
     </nav>
     <div class="sidebar-footer">
       <button id="demo-reset-btn" class="lock-btn" title="Put the demo borrowers back to their starting story" hidden>
@@ -171,6 +175,30 @@
     <section class="bank-list" id="bank-done"></section>
   </main>
 
+  <main id="view-library" class="view" hidden>
+    <header class="page-head">
+      <div class="page-head-text">
+        <h1>Policy library</h1>
+        <p>The documents every borrower's answers come from. Upload a policy as a PDF, Word or Markdown file: it is read, checked for text written to instruct an AI, split by its headings, and the assistant answers from it within a minute. A borrower's own loan agreement goes on their profile instead.</p>
+      </div>
+    </header>
+    <section class="bank-upload section-block">
+      <form id="library-upload-form" class="bank-upload-row">
+        <input type="file" id="library-file" accept=".pdf,.docx,.md" required />
+        <select id="library-type" aria-label="Kind of document">
+          <option value="policy">Policy</option>
+          <option value="regulatory">Regulator's circular</option>
+          <option value="other">Other reference</option>
+        </select>
+        <button type="submit" class="btn btn-primary" id="library-upload-btn">Add to library</button>
+      </form>
+      <p class="upload-result" id="library-upload-result" hidden></p>
+    </section>
+    <h2 class="bank-subhead">In use now</h2>
+    <section class="bank-list" id="library-list"></section>
+    <p class="empty-state" id="library-empty" hidden>The library is empty: the assistant has no written policy to answer from.</p>
+  </main>
+
   </div>
 
   <!-- Ask by voice or typing (ops/voice.py). Floats above the profile panel, so "this account" works while one is open. -->
@@ -217,6 +245,7 @@
           </select>
         </label>
         <label class="clarify-label">Loan type<input required id="na-loan-type" type="text" placeholder="Working Capital Loan" /></label>
+        <label class="clarify-label">Loan number (optional)<input id="na-external-ref" type="text" maxlength="60" placeholder="As in your loan system" /></label>
         <label class="clarify-label">Onboarding risk rating
           <select id="na-risk-tier">
             <option value="low">Low</option>

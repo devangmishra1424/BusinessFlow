@@ -35,6 +35,8 @@ _COLUMNS = {
     "emi_due_date": ("next due date", "next emi date", "due date", "emi due date"),
     "nach_mandate_active": ("nach", "nach active", "nach mandate", "auto debit", "mandate active"),
     "risk_tier": ("risk", "risk tier", "risk rating", "rating", "onboarding risk"),
+    "interest_rate_pct": ("interest rate", "rate", "roi", "rate of interest", "int rate", "interest rate %",
+                          "interest rate (%)", "interest rate (% pa)", "interest rate % pa", "rate (% pa)"),
 }
 _REQUIRED = ("borrower_name", "business_name", "phone_number", "principal_amount", "emi_amount", "tenure_months", "emi_due_date")
 _LANGUAGES = {"en": "en", "english": "en", "hi": "hi", "hindi": "hi", "hinglish": "hinglish"}
@@ -142,6 +144,15 @@ def parse_loan_book(text: str) -> list[LoanRow]:
         v["risk_tier"] = risk if risk in ("low", "medium", "high") else "low"
         ref = cell("external_ref")
         v["external_ref"] = ref[:60] or None
+        rate = cell("interest_rate_pct").replace("%", "").replace("p.a.", "").strip()
+        v["interest_rate_pct"] = None
+        if rate:
+            try:
+                v["interest_rate_pct"] = round(float(rate), 2)
+                if not 0 < v["interest_rate_pct"] <= 60:
+                    row.errors.append(f"interest rate {rate}% is not between 0 and 60% a year")
+            except ValueError:
+                row.errors.append(f"interest rate {rate!r} is not a number")
         tenure = v.get("tenure_months")
         if isinstance(tenure, int):
             if not 1 <= tenure <= 360:

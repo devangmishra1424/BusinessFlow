@@ -71,7 +71,14 @@ from businessflow.outbound.risk_engine import calculate_account_risk
 from businessflow.outbound.run import run_daily_pass
 from businessflow.rag.extraction import extract_loan_terms
 from businessflow.rate_limit import RateLimiter
-from businessflow.rag.ingest import SuspiciousDocumentError, UnreadableDocumentError, extract_document_text, ingest_document
+from businessflow.rag.ingest import (
+    SuspiciousDocumentError,
+    UnreadableDocumentError,
+    extract_document_text,
+    ingest_document,
+    list_active_documents,
+    retire_document,
+)
 from businessflow.tools import validation
 from businessflow.tools.escalation_tools import escalate_to_human
 
@@ -578,6 +585,14 @@ class AccountCreateIn(BaseModel):
     # same column via document-extracted rates) -- a manually-entered
     # account has no rate to derive, so this stays None for those.
     interest_rate_pct: float | None = None
+    # The lender's own loan number from its loan system, if it has one (a loan-book import always carries it). A loan
+    # number already on the books is refused, so the same loan is never opened twice.
+    external_ref: str | None = Field(default=None, max_length=60)
+
+    @field_validator("external_ref")
+    @classmethod
+    def _blank_ref_is_none(cls, v: str | None) -> str | None:
+        return (v or "").strip() or None
 
     @field_validator("borrower_name", "business_name", "loan_type")
     @classmethod
@@ -628,6 +643,9 @@ class AccountUpdateIn(BaseModel):
     phone_number: str | None = None
     language_preference: Literal["hi", "en", "hinglish"] | None = None
     risk_tier: Literal["low", "medium", "high"] | None = None
+    # The NACH mandate's state as the bank last reported it: a mandate lapses or is cancelled (the borrower closed that
+    # account), and a new one is registered. Before this there was no way to record either after opening the loan.
+    nach_mandate_active: bool | None = None
 
     @field_validator("phone_number")
     @classmethod
@@ -812,7 +830,9 @@ def create_account(body: AccountCreateIn):
     create_account). A freshly created account has no payment history, no
     promises, and no flags yet -- it enters the portfolio exactly the way
     a real newly-issued loan would, and only accumulates real activity
-    from here."""
+    from here. 409 when the loan number given is already on the books."""
+    if body.external_ref and store.accounts_by_external_ref([body.external_ref]):
+        raise HTTPException(status_code=409, detail=f"loan number {body.external_ref!r} is already on the books")
     account, access_key = store.create_account(
         borrower_name=body.borrower_name,
         business_name=body.business_name,
@@ -825,6 +845,7 @@ def create_account(body: AccountCreateIn):
         emi_due_date=body.emi_due_date,
         nach_mandate_active=body.nach_mandate_active,
         risk_tier=body.risk_tier,
+        external_ref=body.external_ref,
     )
     if body.interest_rate_pct is not None:
         store.set_interest_rate_pct(account.account_id, body.interest_rate_pct)
@@ -999,6 +1020,86 @@ def trigger_outbound_run(body: RunOutboundIn):
     )
 
 
+async def _receive_and_ingest(
+    file: UploadFile, folder: Path, document_type: str, account_id: str | None
+) -> tuple[str, Path, int]:
+    """Saves one uploaded document into folder and ingests it (rag/ingest.py), all or nothing: the upload is streamed
+    into staging, size-capped, put in place with any previous version set aside, and rolled back -- on disk and in the
+    index -- if parsing or ingestion fails. account_id None is the policy library (every borrower's answers draw on
+    it). Returns (filename, saved_path, chunks_stored). 400 for a type ingest cannot read, 413 too large, 422 for a
+    file that is unreadable or contains text written to instruct an AI."""
+    # Only the basename -- a client-supplied filename is untrusted input,
+    # and stripping any directory components keeps the save path confined
+    # to the folder instead of wherever "../../x" points.
+    filename = Path(file.filename or "").name
+    extension = Path(filename).suffix.lower()
+    if extension not in _ALLOWED_DOCUMENT_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"unsupported file extension {extension!r} -- must be one of "
+                f"{sorted(_ALLOWED_DOCUMENT_EXTENSIONS)}"
+            ),
+        )
+
+    # Overwrite-by-filename is deliberate: re-uploading a corrected version
+    # of the same document is the expected case, and ingest_document()
+    # already handles safe re-ingestion at the same file_path.
+    saved_path = folder / filename
+
+    staging = _STAGING_DIR / uuid.uuid4().hex
+    staging.mkdir(parents=True)
+    incoming = staging / filename
+    try:
+        size = 0
+        with open(incoming, "wb") as out:
+            while chunk := await file.read(_UPLOAD_READ_CHUNK_BYTES):
+                size += len(chunk)
+                if size > _MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"file exceeds the {_MAX_UPLOAD_BYTES // (1024 * 1024)}MB upload limit",
+                    )
+                out.write(chunk)
+
+        folder.mkdir(parents=True, exist_ok=True)
+        previous = _install_upload(incoming, saved_path, staging)
+        try:
+            # Found live: this ran directly on the event loop despite the
+            # route being `async def` -- ingest_document does real CPU-bound
+            # work (docling parsing, local embedding), and the extraction
+            # step below makes a genuinely blocking, synchronous Groq HTTP
+            # call. Either one running in-loop blocks EVERY other request
+            # this single server process is handling (this app has no other
+            # worker to fall back to) until it returns -- confirmed live: a
+            # slow/rate-limited extraction call froze the entire ops API,
+            # including plain GETs, until the process was restarted.
+            # asyncio.to_thread moves the blocking work off the event loop
+            # without changing ingest_document/extract_loan_terms themselves.
+            chunks_stored = await asyncio.to_thread(
+                ingest_document, str(saved_path), document_type=document_type, account_id=account_id
+            )
+        except (ConversionError, UnreadableDocumentError, SuspiciousDocumentError) as e:
+            # ConversionError: the extension passed our allow-list check, but the bytes behind it aren't a real,
+            # parseable document of that type (corrupt file, wrong content under this extension). Docling raises its
+            # own error for exactly this -- caught specifically, not via a bare `except Exception`, so a genuinely
+            # unexpected failure still propagates as a 500 instead of being misreported as "bad input".
+            # UnreadableDocumentError: it parsed, but nothing usable came out (a blank page, a scan the OCR cannot
+            # read, Hindi script). SuspiciousDocumentError: it contains text written to instruct an AI (indirect prompt
+            # injection). In every case ingest_document() wrote nothing to the index, and the previous version of this
+            # document, if any, is put back.
+            _rollback_upload(saved_path, previous, folder)
+            detail = f"could not parse this file as {extension}: {e}" if isinstance(e, ConversionError) else str(e)
+            raise HTTPException(status_code=422, detail=detail) from e
+        except Exception:
+            # Ingestion is one transaction, so the index still holds the previous version; keep the disk in step.
+            _rollback_upload(saved_path, previous, folder)
+            raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)  # best effort: only a leftover staging folder if this fails
+    return filename, saved_path, chunks_stored
+
+
 @app.post(
     "/accounts/{account_id}/documents",
     response_model=DocumentUploadOut,
@@ -1031,76 +1132,9 @@ async def upload_account_document(
     if account is None:
         raise HTTPException(status_code=404, detail=f"no account found for account_id={account_id!r}")
 
-    # Only the basename -- a client-supplied filename is untrusted input,
-    # and stripping any directory components keeps the save path confined
-    # to data/documents/{account_id}/ instead of wherever "../../x" points.
-    filename = Path(file.filename or "").name
-    extension = Path(filename).suffix.lower()
-    if extension not in _ALLOWED_DOCUMENT_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"unsupported file extension {extension!r} -- must be one of "
-                f"{sorted(_ALLOWED_DOCUMENT_EXTENSIONS)}"
-            ),
-        )
-
-    account_dir = _DOCUMENTS_DIR / account_id
-    # Overwrite-by-filename is deliberate: re-uploading a corrected version
-    # of the same document is the expected case, and ingest_document()
-    # already handles safe re-ingestion at the same file_path.
-    saved_path = account_dir / filename
-
-    staging = _STAGING_DIR / uuid.uuid4().hex
-    staging.mkdir(parents=True)
-    incoming = staging / filename
-    try:
-        size = 0
-        with open(incoming, "wb") as out:
-            while chunk := await file.read(_UPLOAD_READ_CHUNK_BYTES):
-                size += len(chunk)
-                if size > _MAX_UPLOAD_BYTES:
-                    raise HTTPException(
-                        status_code=413,
-                        detail=f"file exceeds the {_MAX_UPLOAD_BYTES // (1024 * 1024)}MB upload limit",
-                    )
-                out.write(chunk)
-
-        account_dir.mkdir(parents=True, exist_ok=True)
-        previous = _install_upload(incoming, saved_path, staging)
-        try:
-            # Found live: this ran directly on the event loop despite the
-            # route being `async def` -- ingest_document does real CPU-bound
-            # work (docling parsing, local embedding), and the extraction
-            # step below makes a genuinely blocking, synchronous Groq HTTP
-            # call. Either one running in-loop blocks EVERY other request
-            # this single server process is handling (this app has no other
-            # worker to fall back to) until it returns -- confirmed live: a
-            # slow/rate-limited extraction call froze the entire ops API,
-            # including plain GETs, until the process was restarted.
-            # asyncio.to_thread moves the blocking work off the event loop
-            # without changing ingest_document/extract_loan_terms themselves.
-            chunks_stored = await asyncio.to_thread(
-                ingest_document, str(saved_path), document_type=document_type, account_id=account_id
-            )
-        except (ConversionError, UnreadableDocumentError, SuspiciousDocumentError) as e:
-            # ConversionError: the extension passed our allow-list check, but the bytes behind it aren't a real,
-            # parseable document of that type (corrupt file, wrong content under this extension). Docling raises its
-            # own error for exactly this -- caught specifically, not via a bare `except Exception`, so a genuinely
-            # unexpected failure still propagates as a 500 instead of being misreported as "bad input".
-            # UnreadableDocumentError: it parsed, but nothing usable came out (a blank page, a scan the OCR cannot
-            # read, Hindi script). SuspiciousDocumentError: it contains text written to instruct an AI (indirect prompt
-            # injection). In every case ingest_document() wrote nothing to the index, and the previous version of this
-            # document, if any, is put back.
-            _rollback_upload(saved_path, previous, account_dir)
-            detail = f"could not parse this file as {extension}: {e}" if isinstance(e, ConversionError) else str(e)
-            raise HTTPException(status_code=422, detail=detail) from e
-        except Exception:
-            # Ingestion is one transaction, so the index still holds the previous version; keep the disk in step.
-            _rollback_upload(saved_path, previous, account_dir)
-            raise
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)  # best effort: only a leftover staging folder if this fails
+    filename, saved_path, chunks_stored = await _receive_and_ingest(
+        file, _DOCUMENTS_DIR / account_id, document_type=document_type, account_id=account_id
+    )
 
     # Structured extraction only applies to a signed loan agreement --
     # there's no interest rate to find in a KYC document, say. Best-effort
@@ -1214,6 +1248,97 @@ def download_account_document(account_id: str, filename: str):
         raise HTTPException(status_code=404, detail=f"no document found for filename={filename!r}")
 
     return FileResponse(file_path, filename=requested_name)
+
+
+# ============================================================
+# Policy library: the documents every borrower's answers are grounded in (document_chunks.account_id = 'general').
+# ============================================================
+
+# Uploaded library documents live here, beside the per-account folders (an account id never starts with "_"). The
+# documents that ship with the code (data/kb, the test fixtures) are listed too, but they are not downloadable here.
+_LIBRARY_DIR = _DOCUMENTS_DIR / "_library"
+
+
+class LibraryDocumentOut(BaseModel):
+    source_document: str  # the stored name, what /policy-documents/retire takes
+    filename: str
+    document_type: str
+    chunks: int
+    added_at: datetime
+    uploaded_here: bool  # uploaded through the library (downloadable from it), not shipped with the code
+
+
+class LibraryUploadOut(BaseModel):
+    filename: str
+    document_type: str
+    chunks_stored: int
+
+
+class RetireDocumentIn(BaseModel):
+    source_document: str = Field(min_length=3, max_length=300)
+    retired_by: str = Field(min_length=2, max_length=80)
+    reason: str = Field(min_length=3, max_length=300)
+
+
+class RetireDocumentOut(BaseModel):
+    source_document: str
+    chunks_retired: int
+
+
+def _library_relative(source_document: str) -> bool:
+    return Path(source_document).parent.as_posix().endswith("data/documents/_library")
+
+
+@app.get("/policy-documents", response_model=list[LibraryDocumentOut], dependencies=[Depends(require_api_key)])
+def list_policy_documents():
+    """The policy library: every general document retrieval uses right now, newest first."""
+    return [
+        LibraryDocumentOut(
+            source_document=d["source_document"], filename=Path(d["source_document"]).name,
+            document_type=d["document_type"], chunks=d["chunks"], added_at=d["added_at"],
+            uploaded_here=_library_relative(d["source_document"]),
+        )
+        for d in list_active_documents("general")
+    ]
+
+
+@app.post("/policy-documents", response_model=LibraryUploadOut, dependencies=[Depends(require_api_key)])
+async def upload_policy_document(
+    file: UploadFile = File(...), document_type: Literal["policy", "regulatory", "other"] = Form("policy")
+):
+    """Adds a document to the policy library (a policy PDF, a regulator's circular): saved under data/documents/_library
+    and ingested for every borrower, picked up by the chat processes within policy_tools' fingerprint check (15 s). A
+    file with the same name replaces the earlier version, which is kept on record, not deleted. Same checks as a
+    borrower's document: 400 type, 413 size, 422 unreadable or written to instruct an AI."""
+    filename, _, chunks_stored = await _receive_and_ingest(file, _LIBRARY_DIR, document_type=document_type, account_id=None)
+    store.log_event(None, "policy_document_added", {"filename": filename, "document_type": document_type, "chunks": chunks_stored})
+    return LibraryUploadOut(filename=filename, document_type=document_type, chunks_stored=chunks_stored)
+
+
+@app.get("/policy-documents/files/{filename}", dependencies=[Depends(require_api_key)])
+def download_policy_document(filename: str):
+    """One document uploaded to the library, for download. Same confinement as download_account_document."""
+    library = _LIBRARY_DIR.resolve()
+    requested_name = Path(filename).name
+    file_path = (library / requested_name).resolve()
+    if not file_path.is_relative_to(library) or not file_path.is_file():
+        raise HTTPException(status_code=404, detail=f"no library document named {filename!r}")
+    return FileResponse(file_path, filename=requested_name)
+
+
+@app.post("/policy-documents/retire", response_model=RetireDocumentOut, dependencies=[Depends(require_api_key)])
+def retire_policy_document(body: RetireDocumentIn):
+    """Takes a document out of what the assistant answers from, with who and why. Its chunks are kept on record
+    (superseded, as a corrected re-upload's earlier version is), and the file stays where it is; uploading it again
+    puts it back. 404 if the document has nothing active in the library."""
+    retired = retire_document(body.source_document, "general")
+    if retired == 0:
+        raise HTTPException(status_code=404, detail=f"{body.source_document!r} is not in the policy library")
+    store.log_event(None, "policy_document_retired", {
+        "source_document": body.source_document, "chunks": retired,
+        "retired_by": body.retired_by.strip(), "reason": body.reason.strip(),
+    })
+    return RetireDocumentOut(source_document=body.source_document, chunks_retired=retired)
 
 
 @app.post(
@@ -2011,6 +2136,8 @@ async def import_loan_book(file: UploadFile = File(...), dry_run: bool = Form(Tr
                 v["principal_amount"], v["emi_amount"], v["tenure_months"], v["emi_due_date"], v["nach_mandate_active"],
                 v["risk_tier"], months_remaining=v["months_remaining"], external_ref=v["external_ref"],
             )
+            if v.get("interest_rate_pct") is not None:  # the rate from the lender's own system, when the export has it
+                store.set_interest_rate_pct(account.account_id, v["interest_rate_pct"])
             d.account_id, d.access_key = account.account_id, key
             d.telegram_invite_link = _telegram_invite_link(account.account_id, key)
         logger.info("loan book %r: %d opened, %d already on the books", file.filename, len(to_open),

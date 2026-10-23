@@ -36,7 +36,10 @@ _RULES: list[tuple[str, re.Pattern]] = [
         re.MULTILINE)),
     ("role_reassignment", re.compile(
         r"\byou are (?:now|no longer)\b[^.]{0,15}?\b(?:an? |the )?(?:ai|assistant|chatbot|bot|agent|language model|dan|unrestricted|different)\b"
-        r"|\bact as (?:an? |the )?(?:unrestricted|different|new|evil|dan)\b|\bpretend (?:that )?(?:to be|you are)\b"
+        r"|\bact as (?:an? |the )?(?:unrestricted|different|new|evil|dan)\b|\bpretend (?:that )?you are\b"
+        # "pretend to be" only as an order (sentence start, or after "now/please/and/must/will..."): a lender's Fair
+        # Practices Code says "messages that pretend to be from a court are never sent", and that is not an attack.
+        r"|(?:^|[.!?;:\n]\s*|\b(?:now|please|and|then|must|should|will|always)\s+)pretend (?:that )?to be\b"
         r"|\bnew (?:instructions?|role|persona)\s*:|\bdeveloper mode\b|\bjailbreak")),
     ("prompt_exfiltration", re.compile(
         r"\b(?:reveal|show|print|repeat|output|disclose|leak|tell me)\b[^.]{0,30}?\b(?:system prompt|your instructions|your prompt|hidden instructions|initial prompt|tool definitions?)\b")),
@@ -100,11 +103,12 @@ def scan(text: str) -> list[Finding]:
     if hidden:
         findings.append(Finding("hidden_characters", f"U+{ord(hidden.group(0)):04X} at position {hidden.start()}"))
     variants = _variants(text)
-    # The chat-template rule anchors on the start of a line ("system: ..."), so it reads the text with its line breaks;
-    # every other rule reads the flattened text.
+    # The chat-template rule anchors on the start of a line ("system: ..."), and role reassignment treats a line start as
+    # where an order begins ("pretend to be ..."), so those two also read the text with its line breaks; every other
+    # rule reads the flattened text.
     line_aware = unicodedata.normalize("NFKC", text).translate(_CONFUSABLES).lower()
     for rule, pattern in _RULES:
-        candidates = [line_aware] + variants if rule == "chat_template_tokens" else variants
+        candidates = [line_aware] + variants if rule in ("chat_template_tokens", "role_reassignment") else variants
         for candidate in candidates:
             match = pattern.search(candidate)
             if match:
