@@ -8,6 +8,7 @@ from businessflow.tools import (  # noqa: F401 -- imported for registration side
     payment_tools,
     policy_tools,
     escalation_tools,
+    request_tools,
 )
 
 __all__ = ["mcp"]

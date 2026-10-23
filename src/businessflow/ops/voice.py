@@ -68,11 +68,11 @@ class EscalationRateArgs(_Args):
 
 class AccountDetailsArgs(_Args):
     account: AccountRef = "current"
-    topic: Literal["summary", "dues", "payments", "promises", "cases", "calls", "contact", "loan", "documents", "conversation"] = "summary"
+    topic: Literal["summary", "dues", "payments", "promises", "cases", "calls", "contact", "loan", "documents", "conversation", "risk"] = "summary"
 
 
 class OpenPageArgs(_Args):
-    page: Literal["portfolio", "inbox", "new_account"]
+    page: Literal["portfolio", "inbox", "new_account", "bank", "quality"]
 
 
 class CannotHelpArgs(_Args):
@@ -171,6 +171,11 @@ class WorkflowControlArgs(_Args):
     command: Literal["next", "skip", "previous", "stop", "repeat"]
 
 
+class WaiveFeeArgs(_Args):
+    account: str | None = None
+    reason: str | None = None
+
+
 class CaseStepArgs(_Args):
     account: AccountRef
     case: str
@@ -214,6 +219,12 @@ ARGS: dict[str, type[_Args]] = {
     "workflow_control": WorkflowControlArgs,
     "call_step": AccountOnlyArgs,
     "case_step": CaseStepArgs,
+    # Added 2026-10-23 (the capabilities audit): what the dashboard could do but voice could not reach.
+    "bank_status": NoArgs,
+    "collection_health": NoArgs,
+    "quality_summary": NoArgs,
+    "waive_fee": WaiveFeeArgs,
+    "unlink_telegram": AccountOnlyArgs,
 }
 
 _ACCOUNT = {
@@ -260,13 +271,27 @@ MENU = [
     _tool("account_details", "Facts about ONE account (opens its profile).", {
         "account": _ACCOUNT,
         "topic": {"type": "string", "enum": list(AccountDetailsArgs.model_fields["topic"].annotation.__args__),
-                  "description": "summary = overall status; dues = what is owed now; loan = principal, EMI, tenure."},
+                  "description": "summary = overall status; dues = what is owed now; loan = principal, EMI, tenure; "
+                                 "risk = why it has the risk it has."},
     }, ["account"]),
-    _tool("open_page", "Just go to a page.", {"page": {"type": "string", "enum": ["portfolio", "inbox", "new_account"]}},
+    _tool("open_page", "Just go to a page.", {"page": {"type": "string",
+                                                        "enum": ["portfolio", "inbox", "new_account", "bank", "quality"]}},
           ["page"]),
+    _tool("bank_status", "The bank statement: how many credits are waiting to be matched to a borrower, and the "
+          "best guesses -- e.g. 'anything from the bank to post?', 'unmatched payments'."),
+    _tool("collection_health", "How the whole book is doing: accounts by days past due, collection efficiency, "
+          "promises kept, cure rate -- e.g. 'how are collections?', 'how many are 30+ days late?'."),
+    _tool("quality_summary", "How the AI assistant itself is doing: which part has wrong answers, which is slow, the "
+          "safeguards -- e.g. 'how is the AI doing?', 'any problems with the assistant?'."),
+    _tool("waive_fee", "Remove (waive) the late fee still owed on ONE account, with the reason the borrower is sent.", {
+        "account": _ACCOUNT, "reason": {"type": "string", "description": "Why, in the operator's words. " + _TEXT_FOR_BORROWER},
+    }, ["account"]),
+    _tool("unlink_telegram", "Stop sending to an account's Telegram chat (a lost phone, a tester done testing).",
+          {"account": _ACCOUNT}, ["account"]),
     _tool("help", "What this assistant can do."),
     _tool("cannot_help", "Use when no other function fits: unclear, outside this dashboard, or something these "
-          "functions can't do (e.g. opening an account, resetting an access key, uploading a document).",
+          "functions can't do (e.g. opening an account, resetting an access key, uploading a document or a bank "
+          "statement, importing a loan book).",
           {"reason": {"type": "string"}}),
     _tool("record_payment", "Record a payment the borrower made (cash, UPI, NEFT, cheque...).", {
         "account": _ACCOUNT, "amount": _AMOUNT, "full_amount_due": _FULL,

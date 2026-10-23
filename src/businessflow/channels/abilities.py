@@ -58,6 +58,18 @@ _ABILITIES: tuple[Ability, ...] = (
         prompt={"en": "Show me my recent payments.", "hi": "मेरे हाल के भुगतान दिखाइए।"},
     ),
     Ability(
+        "promise", VERIFIED,
+        label={"en": "Make or check a promise to pay", "hi": "भुगतान का वादा करें या देखें"},
+        prompt={"en": "What promise to pay do I have on record, and how do I make one?",
+                "hi": "मेरा भुगतान का कौन-सा वादा दर्ज है, और नया वादा कैसे करूँ?"},
+    ),
+    Ability(
+        "requests", VERIFIED,
+        label={"en": "My requests and your replies", "hi": "मेरे अनुरोध और आपके जवाब"},
+        prompt={"en": "What has happened to my requests, and has your team replied?",
+                "hi": "मेरे अनुरोधों का क्या हुआ, और क्या आपकी टीम ने जवाब दिया?"},
+    ),
+    Ability(
         "more_time", VERIFIED,
         label={"en": "Ask about more time to pay", "hi": "भुगतान के लिए और समय के बारे में पूछें"},
         prompt={"en": "I need more time to pay my EMI. What are my options?", "hi": "मुझे EMI भरने के लिए और समय चाहिए। मेरे पास क्या विकल्प हैं?"},
@@ -66,6 +78,12 @@ _ABILITIES: tuple[Ability, ...] = (
         "dispute", VERIFIED,
         label={"en": "Report a problem or dispute", "hi": "कोई समस्या या विवाद बताएँ"},
         prompt={"en": "I want to report a problem with a charge on my account.", "hi": "मुझे अपने अकाउंट में एक चार्ज को लेकर समस्या बतानी है।"},
+    ),
+    Ability(
+        "fee_waiver", VERIFIED,
+        label={"en": "Ask to remove a late fee", "hi": "लेट फ़ीस हटाने का अनुरोध करें"},
+        prompt={"en": "Can you remove the late fee on my account? I have a reason.",
+                "hi": "क्या आप मेरे अकाउंट की लेट फ़ीस हटा सकते हैं? मेरे पास कारण है।"},
     ),
     Ability(
         "closure", VERIFIED,

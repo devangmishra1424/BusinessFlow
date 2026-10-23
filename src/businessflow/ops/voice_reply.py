@@ -37,6 +37,7 @@ CASE_KIND_LABELS = {  # mirrors ops/static/app.js's KIND_LABELS, in the plural w
 _TOPIC_TABS = {
     "summary": "overview", "dues": "overview", "loan": "overview", "contact": "overview", "payments": "payments",
     "promises": "cases", "calls": "cases", "cases": "cases", "conversation": "cases", "documents": "documents",
+    "risk": "overview",
 }
 _SORTS = {"most_overdue": "urgency", "highest_risk": "risk", "account_id": "id"}
 _WINDOW_HOURS = {"24h": 24, "3d": 72, "7d": 168, "30d": 720}
@@ -62,12 +63,16 @@ class DashboardData(Protocol):
     def decision_message(self, case: dict, account: dict, approved: bool, reason: str | None) -> str | None: ...
     def claim_confirmed_message(self, amount: float, paid_on: date, note: str | None) -> str: ...
     def case_closed_message(self, kind: str, note: str | None) -> str: ...
+    # Added with the bank, health and quality answers: GET /bank-lines, /portfolio/health, /quality's live report.
+    def bank_lines(self) -> list[dict]: ...
+    def health(self) -> dict: ...
+    def quality(self) -> dict: ...
 
 
 class ScreenOut(BaseModel):
     """Where the page goes. Every field is optional: only what is set changes."""
 
-    view: Literal["overview", "inbox"] | None = None
+    view: Literal["overview", "inbox", "bank", "quality"] | None = None
     filter: str | None = None  # all | overdue | disputed | broken_promises | not_on_telegram
     sort: Literal["urgency", "risk", "id"] | None = None
     search: str | None = None
@@ -571,6 +576,14 @@ def _account_details(args, account: dict, data: DashboardData, today: date) -> V
                    f"{_day(_when(last['date']), today)}.")
             rows = [RowOut(label=_day(_when(p["date"]), today), value=inr(p["amount"]), detail="on time" if p["on_time"] else "late",
                            tone="ok" if p["on_time"] else "warn") for p in reversed(history[-_MAX_ROWS:])]
+    elif topic == "risk":
+        risk = a.get("risk") or {}
+        factors = risk.get("factors", [])
+        named = [f["label"] for f in factors if f["points"] > 0][:3]
+        say = (f"{head} {risk.get('tier', a['risk_tier'])} risk, score {round(risk.get('score', 0))} of 100"
+               + (f": {_list(named)}." if named else "."))
+        rows = [RowOut(label=f["label"], value=f"{'+' if f['points'] > 0 else ''}{round(f['points'])}",
+                       tone="danger" if f["points"] >= 30 else "ok" if f["points"] < 0 else None) for f in factors]
     elif topic == "promises":
         promises = a.get("promises", [])
         if not promises:
@@ -644,11 +657,114 @@ _MENU = [
     SuggestionOut(label="What's in the inbox?", tool="show_inbox", arguments={}, group="Ask"),
     SuggestionOut(label="Escalation rate this week", tool="escalation_rate", arguments={"window": "7d"}, group="Ask"),
     SuggestionOut(label="Who isn't on Telegram?", tool="show_accounts", arguments={"group": "not_on_telegram"}, group="Ask"),
+    SuggestionOut(label="How are collections?", tool="collection_health", arguments={}, group="Ask"),
+    SuggestionOut(label="Anything from the bank to post?", tool="bank_status", arguments={}, group="Ask"),
+    SuggestionOut(label="How is the AI doing?", tool="quality_summary", arguments={}, group="Ask"),
     SuggestionOut(label="Record a payment…", prompt="record a payment from  of ₹", group="Do (you confirm each)"),
     SuggestionOut(label="Log a promise…", prompt="log a promise from  to pay ₹ by ", group="Do (you confirm each)"),
     SuggestionOut(label="Message a borrower…", prompt="send  a message: ", group="Do (you confirm each)"),
     SuggestionOut(label="Send reminders to overdue", tool="send_reminders", arguments={"group": "overdue"}, group="Do (you confirm each)"),
+    SuggestionOut(label="Waive a late fee…", prompt="waive the late fee for  because ", group="Do (you confirm each)"),
 ]
+
+
+def _bank_status(data: DashboardData) -> VoiceReplyOut:
+    lines = data.bank_lines()
+    screen = ScreenOut(view="bank")
+    if not lines:
+        return _answer("Nothing from the bank is waiting: every credit on the statements uploaded is recorded or set aside.", screen)
+    guessed = [l for l in lines if l["status"] == "suggested"]
+    say = (f"{_n(len(lines), 'bank credit')} waiting: {len(guessed)} with a best guess, "
+           f"{len(lines) - len(guessed)} matching nobody. Each needs one click on the Bank page.")
+    rows = [RowOut(label=f"{inr(l['amount'])} on {l['line_date']}", value=l.get("account_id") or "no match",
+                   detail=(l.get("match_reason") or l.get("narration") or "")[:120], tone=None if l.get("account_id") else "warn")
+            for l in lines[:_MAX_ROWS]]
+    reply = _answer(say, screen)
+    reply.title, reply.rows = "Waiting on the bank page", rows
+    return reply
+
+
+def _collection_health(data: DashboardData) -> VoiceReplyOut:
+    h = data.health()
+    pct = lambda v: "no data" if v is None else f"{round(v * 100)}%"  # noqa: E731
+    late = [b for b in h["dpd_buckets"] if b["key"] != "current" and b["accounts"]]
+    late_txt = ", ".join(f"{b['accounts']} {b['label']}" for b in late) or "none late"
+    ce, pk, cr = h["collection_efficiency"], h["promises_kept"], h["cure_rate"]
+    say = (f"Collection efficiency {pct(ce['value'])} over 30 days. Promises kept {pct(pk['value'])}, cure rate "
+           f"{pct(cr['value'])}. Late accounts: {late_txt}.")
+    rows = [RowOut(label=b["label"], value=str(b["accounts"]), detail=f"{inr(b['owed_now'], whole=True)} owed now",
+                   tone="danger" if b["key"] in ("61_90", "90_plus") and b["accounts"] else None) for b in h["dpd_buckets"]]
+    rows += [
+        RowOut(label="Collection efficiency (30 days)", value=pct(ce["value"]), detail=ce["how"]),
+        RowOut(label="Promises kept (90 days)", value=pct(pk["value"]), detail=pk["how"]),
+        RowOut(label="Cure rate (90 days)", value=pct(cr["value"]), detail=cr["how"]),
+    ]
+    reply = _answer(say, ScreenOut(view="overview", filter="all"))
+    reply.title, reply.rows = "Collection health", rows
+    return reply
+
+
+def _quality_summary(data: DashboardData) -> VoiceReplyOut:
+    q = data.quality()
+    verdict, gates = q.get("verdict", []), q.get("gates", [])
+    broken = [g for g in gates if not g["passed"]]
+    worst = verdict[0] if verdict else None
+    if broken:
+        say = f"A safeguard was bypassed: {broken[0]['name']} -- {broken[0]['detail']}."
+    elif worst is None:
+        say = "No AI steps recorded in the last 7 days yet."
+    elif worst["status"] in ("red", "amber"):
+        say = f"Look at {worst['component']}: {worst['why']}."
+    else:
+        say = f"No wrong answers from the AI in the last 7 days; {worst['component'].lower()}: {worst['why']}."
+    labels = {"red": "wrong answers", "amber": "watch", "slow": "slow, not wrong", "green": "healthy",
+              "not_enough_data": "too few to judge"}
+    rows = [RowOut(label=v["component"], value=labels.get(v["status"], v["status"]), detail=v["why"],
+                   tone="danger" if v["status"] == "red" else "warn" if v["status"] == "amber" else None) for v in verdict]
+    rows += [RowOut(label=g["name"], value="held" if g["passed"] else "BROKEN", tone=None if g["passed"] else "danger")
+             for g in gates]
+    reply = _answer(say, ScreenOut(view="quality"))
+    reply.title, reply.rows = "How the AI is doing (last 7 days)", rows
+    return reply
+
+
+def _waive_fee(args, account, heard) -> VoiceReplyOut:
+    open_fees = [c for c in account.get("charges", []) if c["status"] == "due" and c["outstanding"] > 0]
+    if not open_fees:
+        raise _Unresolved(_clarify(f"{account['borrower_name']} has no late fee owed right now.",
+                                   screen=ScreenOut(account_id=account["account_id"], tab="payments")))
+    _check_drafted(args.reason, heard, "reason")
+    fee = open_fees[0]  # oldest first: a payment pays them in this order too
+    return _proposal(
+        f"Waive {account['borrower_name']}'s late fee of {inr(fee['outstanding'])}?",
+        ProposalOut(
+            action="waive_fee", title="Waive a late fee",
+            details=[DetailOut(label="Borrower", value=_who(account)),
+                     DetailOut(label="Fee", value=f"{inr(fee['outstanding'])} for the {fee['for_due_date']} EMI")]
+            + ([DetailOut(label="Also owed", value=_n(len(open_fees) - 1, "more fee"))] if len(open_fees) > 1 else []),
+            warnings=["The reason is sent to the borrower."],
+            method="POST", path=f"/accounts/{account['account_id']}/charges/{fee['id']}/waive",
+            body={"waived_by": "Ops (voice)", "reason": args.reason or ""},
+            editable="reason", editable_label="Reason (sent to the borrower)", editable_required=True,
+        ),
+        ScreenOut(account_id=account["account_id"], tab="payments"),
+    )
+
+
+def _unlink_telegram(account) -> VoiceReplyOut:
+    if not account.get("telegram_linked"):
+        raise _Unresolved(_clarify(f"{account['borrower_name']} isn't linked to a Telegram chat.",
+                                   screen=ScreenOut(account_id=account["account_id"], tab="overview")))
+    return _proposal(
+        f"Stop sending to {account['borrower_name']}'s Telegram chat?",
+        ProposalOut(
+            action="unlink_telegram", title="Unlink Telegram",
+            details=[DetailOut(label="Borrower", value=_who(account))],
+            warnings=["The chat is told; it must verify with the access key again to use it."],
+            method="POST", path=f"/accounts/{account['account_id']}/telegram/unlink",
+        ),
+        ScreenOut(account_id=account["account_id"], tab="overview"),
+    )
 
 
 def _help() -> VoiceReplyOut:
@@ -1092,7 +1208,15 @@ def respond(
                 "inbox": _answer("Here's the inbox.", ScreenOut(view="inbox")),
                 "new_account": _answer("Here's the new-account form. Accounts are opened from the form, not by voice.",
                                        ScreenOut(view="overview", open_form="new_account")),
+                "bank": _answer("Here's the bank statement page.", ScreenOut(view="bank")),
+                "quality": _answer("Here's how the assistant is checked.", ScreenOut(view="quality")),
             }[args.page]
+        elif tool == "bank_status":
+            reply = _bank_status(data)
+        elif tool == "collection_health":
+            reply = _collection_health(data)
+        elif tool == "quality_summary":
+            reply = _quality_summary(data)
         elif tool == "help":
             reply = _help()
         elif tool in voice_workflows.TOOLS:
@@ -1119,6 +1243,8 @@ def respond(
                 "hand_to_person": lambda: _hand_to_person(args, account, heard),
                 "update_account": lambda: _update_account(args, account, heard),
                 "mark_messages_handled": lambda: _mark_messages_handled(account),
+                "waive_fee": lambda: _waive_fee(args, account, heard),
+                "unlink_telegram": lambda: _unlink_telegram(account),
             }[tool]()
     except _Unresolved as e:
         reply = e.reply
