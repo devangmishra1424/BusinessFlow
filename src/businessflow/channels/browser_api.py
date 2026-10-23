@@ -1312,7 +1312,9 @@ def payment_page(token: str):
 
 @app.get("/", include_in_schema=False)
 def chat_ui():
-    return FileResponse(_STATIC_DIR / "index.html")
+    # The page names its scripts with a version (app.js?v=N); a browser that kept an old copy of this HTML kept loading
+    # the old script against the new API after a deploy (found live: the Quality page read "undefined"). Always ask.
+    return FileResponse(_STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")

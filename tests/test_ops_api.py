@@ -1627,3 +1627,13 @@ def test_confirm_payment_stops_on_a_payment_already_on_record_and_says_what_it_f
         f"/accounts/BF-1001/cases/{ref}/confirm-payment", json={"amount": due, "record_even_if_duplicate": True}, headers=_auth()
     )
     assert on_purpose.status_code == 200
+
+
+def test_the_page_html_is_never_served_from_a_stale_cache():
+    from fastapi.testclient import TestClient
+
+    from businessflow.channels.browser_api import app as chat_app
+    from businessflow.ops.api import app as ops_app
+
+    for app in (ops_app, chat_app):
+        assert TestClient(app).get("/").headers["cache-control"] == "no-cache"

@@ -2308,7 +2308,9 @@ def voice_speak(request: Request, body: VoiceSpeakIn):
 
 @app.get("/", include_in_schema=False)
 def dashboard():
-    return FileResponse(_STATIC_DIR / "index.html")
+    # The page names its scripts with a version (app.js?v=N); a browser that kept an old copy of this HTML kept loading
+    # the old script against the new API after a deploy (found live: the Quality page read "undefined"). Always ask.
+    return FileResponse(_STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 # Registered last so every API route above (exact paths like /accounts,
