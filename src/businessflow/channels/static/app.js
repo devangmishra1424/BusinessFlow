@@ -216,14 +216,20 @@ $startForm.addEventListener("submit", async (e) => {
 
   const payload = { language: state.language };
   if (state.mode === "verified") {
+    const ownId = document.getElementById("own-account-id").value.trim().toUpperCase();
+    const ownKey = document.getElementById("own-access-key").value.trim();
     const selected = _DEMO_ACCOUNTS.find((a) => a.id === $accountPicker.value);
-    if (!selected) {
-      $startError.textContent = "Choose an account to continue.";
+    if (document.getElementById("own-account").open && ownId && ownKey) {
+      payload.account_id = ownId;
+      payload.access_key = ownKey;
+    } else if (selected) {
+      payload.account_id = selected.id;
+      payload.access_key = selected.key;
+    } else {
+      $startError.textContent = "Choose an account, or enter your own account ID and access key.";
       $startError.hidden = false;
       return;
     }
-    payload.account_id = selected.id;
-    payload.access_key = selected.key;
   }
 
   $submitBtn.disabled = true;
@@ -232,6 +238,7 @@ $startForm.addEventListener("submit", async (e) => {
     const result = await startConversation(payload);
     state.conversationId = result.conversation_id;
     state.accountId = result.account_id;
+    if (state.accountId) rememberLoan(result.account_id, result.conversation_id, payload.access_key);
     if (state.accountId) {
       enterDashboard();
     } else {
@@ -1006,8 +1013,76 @@ function enterDashboard() {
   $chatScreen.hidden = true;
   $dashboardScreen.hidden = false;
   document.getElementById("dash-account-chip").textContent = state.accountId || "";
+  renderLoanSwitch();
   loadDashboard();
 }
+
+/* ============================================================
+   Several loans: every loan verified in this browser tab, one shown at a time
+   ============================================================ */
+// Kept for this tab only (sessionStorage): a shop owner with two loans signs in to each once and switches between them.
+// The key is kept so a conversation the server has forgotten (a restart) can be re-opened without asking again.
+const LOANS_KEY = "bf_loans";
+function savedLoans() {
+  try {
+    return JSON.parse(sessionStorage.getItem(LOANS_KEY) || "[]");
+  } catch (e) {
+    return []; // storage blocked (private mode): this tab just can't switch loans
+  }
+}
+function rememberLoan(accountId, conversationId, key) {
+  const loans = savedLoans().filter((l) => l.accountId !== accountId);
+  loans.push({ accountId, conversationId, key });
+  try {
+    sessionStorage.setItem(LOANS_KEY, JSON.stringify(loans));
+  } catch (e) {
+    // Storage blocked: switching is unavailable, the current loan still works.
+  }
+}
+function renderLoanSwitch() {
+  const loans = savedLoans();
+  const $sel = document.getElementById("loan-switch-select");
+  $sel.innerHTML = loans.map((l) => `<option value="${escapeHtml(l.accountId)}"${l.accountId === state.accountId ? " selected" : ""}>${escapeHtml(l.accountId)}</option>`).join("");
+  $sel.hidden = loans.length < 2;
+}
+async function openLoan(accountId, conversationId) {
+  state.accountId = accountId;
+  state.conversationId = conversationId;
+  $messageList.innerHTML = ""; // the chat belongs to one loan
+  enterDashboard();
+}
+document.getElementById("loan-switch-select").addEventListener("change", async (e) => {
+  const loan = savedLoans().find((l) => l.accountId === e.target.value);
+  if (!loan) return;
+  try {
+    // A fresh conversation each switch: the server may have forgotten an old one, and the key is here.
+    const result = await startConversation({ language: state.language, account_id: loan.accountId, access_key: loan.key });
+    rememberLoan(loan.accountId, result.conversation_id, loan.key);
+    await openLoan(loan.accountId, result.conversation_id);
+  } catch (err) {
+    const $err = document.getElementById("add-loan-error");
+    $err.textContent = friendlyStartError(err);
+    $err.hidden = false;
+    e.target.closest(".loan-switch").querySelector("details").open = true;
+  }
+});
+document.getElementById("add-loan-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = document.getElementById("add-loan-id").value.trim().toUpperCase();
+  const key = document.getElementById("add-loan-key").value.trim();
+  const $err = document.getElementById("add-loan-error");
+  $err.hidden = true;
+  try {
+    const result = await startConversation({ language: state.language, account_id: id, access_key: key });
+    rememberLoan(result.account_id, result.conversation_id, key);
+    e.target.reset();
+    e.target.closest("details").open = false;
+    await openLoan(result.account_id, result.conversation_id);
+  } catch (err) {
+    $err.textContent = friendlyStartError(err);
+    $err.hidden = false;
+  }
+});
 
 function friendlyDashboardError(err) {
   if (err.status === 403) return "Your session isn't verified anymore — please start over.";
