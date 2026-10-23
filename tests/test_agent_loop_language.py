@@ -67,4 +67,4 @@ def test_update_conversation_language_works_for_an_anonymous_conversation_too():
     update_conversation_language(conversation, "hi", None)
 
     assert "Devanagari" in conversation[0]["content"]
-    assert "You do not yet have access to any real account data" in conversation[0]["content"]
+    assert "No account is verified in this chat" in conversation[0]["content"]

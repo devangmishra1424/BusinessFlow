@@ -197,7 +197,7 @@ def test_prompt_with_account_id_names_the_account():
     prompt = build_system_prompt(language="en", account_id="BF-1001")
 
     assert "BF-1001" in prompt
-    assert "You do not yet have access to any real account data" not in prompt
+    assert "No account is verified in this chat" not in prompt
 
 
 def test_prompt_without_account_id_says_no_account_access():
