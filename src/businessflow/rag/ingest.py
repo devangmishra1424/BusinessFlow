@@ -231,6 +231,36 @@ def _supersede_existing_chunks(conn, source_document: str, superseded_at: dateti
     )
 
 
+def list_active_documents(account_id: str = "general") -> list[dict]:
+    """Every document with chunks retrieval can use right now for this scope ('general' = the policy library every
+    borrower's answers draw on), one row each: {source_document, document_type, chunks, added_at}, newest first."""
+    rows = get_connection().execute(
+        """
+        select source_document, min(document_type) as document_type, count(*) as chunks, max(created_at) as added_at
+        from document_chunks where account_id = %s and superseded_at is null
+        group by source_document order by max(created_at) desc
+        """,
+        (account_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def retire_document(source_document: str, account_id: str = "general") -> int:
+    """Takes a document out of retrieval: its active chunks are marked superseded (kept, like a corrected re-upload's
+    previous generation, so what it said stays on record) under the same per-document lock ingest_document takes.
+    Returns how many chunks were retired; 0 means the document had nothing active in this scope. source_document is
+    the stored (repo-relative) name exactly as list_active_documents returns it."""
+    with get_connection().transaction() as tx:
+        tx.execute("select pg_advisory_xact_lock(hashtext(%s))", (source_document,))
+        rows = tx.execute(
+            "update document_chunks set superseded_at = clock_timestamp() "
+            "where source_document = %s and account_id = %s and superseded_at is null returning id",
+            (source_document, account_id),
+        ).fetchall()
+    logger.info("retired %s: %d chunks (account_id=%s)", source_document, len(rows), account_id)
+    return len(rows)
+
+
 def purge_superseded_chunks(older_than_days: int = 30) -> int:
     """The real cleanup _supersede_existing_chunks defers: that function
     marks a chunk superseded_at instead of deleting it, so a correction

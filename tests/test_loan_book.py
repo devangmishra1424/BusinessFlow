@@ -25,6 +25,16 @@ def test_a_good_row_is_read_with_indian_formats():
     assert v["emi_due_date"].isoformat() == "2026-11-05" and v["nach_mandate_active"] is True
 
 
+def test_an_interest_rate_column_is_read_when_the_export_has_one():
+    header = "Loan No,Borrower Name,Business Name,Mobile,Principal,EMI,Tenure,Next Due Date,Interest Rate (% p.a.)\n"
+    good, bad = parse_loan_book(header + "LN-8,Meena Joshi,Joshi Sweets,9812345099,300000,15000,24,05/11/2026,18.5%\n"
+                                         "LN-9,Ravi K,Ravi Store,9812345097,100000,5000,24,05/11/2026,eighteen\n")
+    assert good.errors == [] and good.values["interest_rate_pct"] == 18.5
+    assert any("interest rate 'eighteen'" in e for e in bad.errors)
+    [none] = parse_loan_book(_book("LN-77,Meena Joshi,Joshi Sweets,9812345099,hi,300000,15000,24,20,05/11/2026,yes,low"))
+    assert none.values["interest_rate_pct"] is None
+
+
 def test_each_problem_is_said_row_by_row():
     rows = parse_loan_book(_book(
         "LN-1,Meena Joshi,Joshi Sweets,12345,en,300000,15000,24,,2026-11-05,yes,low",

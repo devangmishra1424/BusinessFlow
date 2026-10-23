@@ -78,6 +78,10 @@ const postCaseNote = (conversationId, caseRef, message) =>
   api(`/conversations/${conversationId}/cases/${encodeURIComponent(caseRef)}/notes`, { method: "POST", body: JSON.stringify({ message }) });
 const postAgent = (conversationId, reason) =>
   api(`/conversations/${conversationId}/quick-actions/agent`, { method: "POST", body: JSON.stringify({ reason: reason || null }) });
+const postFeeWaiver = (conversationId, reason) =>
+  api(`/conversations/${conversationId}/quick-actions/fee-waiver`, { method: "POST", body: JSON.stringify({ reason }) });
+const postClosureCertificate = (conversationId) =>
+  api(`/conversations/${conversationId}/quick-actions/closure-certificate`, { method: "POST" });
 const postPaymentLink = (conversationId, amount) =>
   api(`/conversations/${conversationId}/quick-actions/payment-link`, { method: "POST", body: JSON.stringify({ amount }) });
 
@@ -125,34 +129,15 @@ const $langField = document.getElementById("lang-field");
 const $submitBtn = document.getElementById("start-submit-btn");
 const $accountPicker = document.getElementById("start-account-picker");
 
-// Deliberately embedded, same tradeoff and reasoning as _OPS_DEMO_LOGIN_KEY
-// below -- a one-click "choose a borrower" list instead of typing an
-// account ID + 6-digit key from memory. account_id/access_key still go
-// through the exact same POST /conversations verification the typed form
-// always used; this only fills the two fields for whoever's demoing
-// instead of asking them to remember or look up a real key.
-const _DEMO_ACCOUNTS = [
-  { id: "BF-1001", name: "Priya Sharma", business: "Cotton Threads Boutique", key: "482913" },
-  { id: "BF-1002", name: "Arjun Mehta", business: "Mehta Hardware & Electricals", key: "716044" },
-  { id: "BF-1003", name: "Fatima Khan", business: "Khan Textiles Wholesale", key: "930571" },
-  { id: "BF-1004", name: "Ravi Iyer", business: "Iyer Auto Spares", key: "205839" },
-  { id: "BF-1005", name: "Sunita Patil", business: "Patil Dairy & Kirana Store", key: "128143" },
-  { id: "BF-1006", name: "Rajesh Kumar Yadav", business: "Yadav Welding & Fabrication Works", key: "738570" },
-  { id: "BF-1007", name: "Meera Nair", business: "Nair Spices & Provisions", key: "584558" },
-  { id: "BF-1008", name: "Harpreet Singh Sodhi", business: "Sodhi Auto Care Garage", key: "778854" },
-  { id: "BF-1009", name: "Anjali Deshmukh", business: "Deshmukh Boutique & Tailoring", key: "511301" },
-  { id: "BF-1010", name: "Devang Mishra", business: "AI Start-Up", key: "844488" },
-];
-
 // Every account on the demo, from the server (GET /demo/accounts) -- one opened from the ops page or a loan-book import
-// appears by itself. The list above is only the fallback if that request fails.
-let _accountList = _DEMO_ACCOUNTS.map((a) => ({ account_id: a.id, borrower_name: a.name, business_name: a.business }));
+// appears by itself. Nothing is hard-coded: the demo's borrowers are whatever the books hold.
+let _accountList = [];
 function fillAccountPicker(list) {
   $accountPicker.querySelectorAll("option[value]:not([value=''])").forEach((o) => o.remove());
   for (const acct of list) {
     const opt = document.createElement("option");
     opt.value = acct.account_id;
-    opt.textContent = `${acct.borrower_name} — ${acct.business_name} (${acct.account_id})`;
+    opt.textContent = `${acct.borrower_name} — ${acct.business_name}${acct.loan_type ? `, ${acct.loan_type}` : ""} (${acct.account_id})`;
     $accountPicker.appendChild(opt);
   }
 }
@@ -162,7 +147,7 @@ api("/demo/accounts")
     _accountList = list;
     fillAccountPicker(list);
   })
-  .catch((err) => console.warn("demo: the account list could not be loaded; showing the built-in demo accounts", err));
+  .catch((err) => console.warn("demo: the account list could not be loaded; sign in with an account ID and key instead", err));
 
 // The ops dashboard lives on its own subdomain (see the "Ops team" tab
 // below) -- separate apps, separate asset paths, avoids the path-prefix
@@ -282,7 +267,7 @@ function _prepareChatContent() {
     addSystemMessage(
       state.accountId
         ? `Verified — you're chatting about account ${state.accountId}.`
-        : 'Chatting anonymously — to verify, send your account ID and 6-digit access key together, e.g. "BF-1001 482913".'
+        : 'Chatting anonymously — to verify, send your account ID and 6-digit access key together, e.g. "BF-1234 567890".'
     );
     showAbilities();
   }
@@ -1218,7 +1203,7 @@ function renderDueCard(account) {
   let left;
   let cta = "";
   if (account.months_remaining <= 0) {
-    left = `<div><p class="due-card-label">Loan status</p><p class="due-card-amount">Fully repaid</p><p class="due-card-sub">Nothing is due on this loan. Ask in chat if you need your closure certificate.</p></div>`;
+    left = `<div><p class="due-card-label">Loan status</p><p class="due-card-amount">Fully repaid</p><p class="due-card-sub">Nothing is due on this loan. Get help \u2192 Closure certificate asks our team for it.</p></div>`;
   } else if (account.amount_due_now <= 0) {
     left = `<div><p class="due-card-label">Due now</p><p class="due-card-amount">${fmtInr(0)}</p><p class="due-card-sub">This month's EMI is already covered by your earlier extra payment. Next EMI of ${fmtInr(account.emi_amount)} is due ${fmtDate(account.emi_due_date)}.</p></div>`;
   } else {
@@ -1303,6 +1288,8 @@ function renderDashboard(data) {
   _lastAccount = account;
 
   renderDueCard(account);
+  document.getElementById("help-choice-waiver").hidden = !(account.charges || []).length;
+  document.getElementById("help-choice-closure").hidden = account.months_remaining > 0;
 
   // Warnings -- text is rendered exactly as the backend wrote it, never
   // re-worded; label decides which action(s) (if any) the expanded body
@@ -1708,6 +1695,21 @@ const HELP_CHOICES = {
     hint: "A person on our team picks this up and replies under Requests & messages.",
     required: false,
   },
+  // Shown only while a late fee is owed (renderDashboard): a request to a person, never a waiver by itself.
+  waiver: {
+    label: "Why should we remove the late fee?",
+    placeholder: "e.g. My auto-debit failed because of a bank error; I paid by UPI the same day",
+    hint: "A person on our team decides and replies under Requests & messages. The fee is still owed until then.",
+    required: true,
+  },
+  // Shown only once the loan is fully repaid: nothing to type, the team checks the account and issues it.
+  closure: {
+    label: "",
+    placeholder: "",
+    hint: "Our team checks that everything is paid and issues your closure certificate (no-dues certificate). You'll see it under Requests & messages.",
+    required: false,
+    noText: true,
+  },
 };
 
 const $helpBtn = document.getElementById("action-help-btn");
@@ -1724,6 +1726,7 @@ function selectHelpChoice(choice) {
   $helpFields.hidden = !cfg;
   if (!cfg) return;
   document.getElementById("help-label").textContent = cfg.label;
+  $helpText.hidden = Boolean(cfg.noText);
   $helpText.placeholder = cfg.placeholder;
   document.getElementById("help-hint").textContent = cfg.hint;
   $helpText.focus();
@@ -1758,6 +1761,16 @@ document.getElementById("help-cancel-btn").addEventListener("click", () => {
 });
 
 function helpResultText(choice, result) {
+  if (choice === "waiver") {
+    return result.no_fee_owed
+      ? "There is no late fee on your loan right now, so there is nothing to remove."
+      : "Sent \u2014 a person on our team decides and replies under Requests & messages. Until then the fee is still owed.";
+  }
+  if (choice === "closure") {
+    return result.eligible
+      ? `Requested (${result.escalation_id}) \u2014 our team checks your loan and issues the certificate. Follow it under Requests & messages.`
+      : `Your loan still has ${result.months_remaining} EMI${result.months_remaining === 1 ? "" : "s"} left; the certificate is issued once they are paid.`;
+  }
   if (choice === "person") return "Request sent \u2014 a person on our team will pick it up. You can follow it under Requests & messages.";
   if (result.already_open) {
     return result.kind === "payment_claim"
@@ -1787,6 +1800,8 @@ $helpForm.addEventListener("submit", async (e) => {
   try {
     let result;
     if (choice === "paid") result = await postPaymentClaim(state.conversationId, text);
+    else if (choice === "waiver") result = await postFeeWaiver(state.conversationId, text);
+    else if (choice === "closure") result = await postClosureCertificate(state.conversationId);
     else if (choice === "wrong") result = await postDispute(state.conversationId, helpContext ? `${helpContext}: ${text}` : text);
     else result = await postAgent(state.conversationId, text);
     showActionResult($helpResult, escapeHtml(helpResultText(choice, result)), true);

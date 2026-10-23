@@ -89,8 +89,9 @@ from businessflow.ops.flags import Flag, compute_flags
 from businessflow.rate_limit import RateLimiter
 from businessflow.tools import validation
 from businessflow.tools.account_tools import flag_dispute, get_payment_status
-from businessflow.tools.escalation_tools import escalate_to_human
+from businessflow.tools.escalation_tools import escalate_to_human, request_closure_certificate
 from businessflow.tools.payment_tools import generate_payment_link
+from businessflow.tools.request_tools import request_fee_waiver
 
 _MAX_VOICE_NOTE_SECONDS = 120  # same bound as telegram_bot.py -- an explicit cap on ASR compute, not an unbounded wait
 
@@ -163,6 +164,7 @@ class DemoAccountOut(BaseModel):
     account_id: str
     borrower_name: str
     business_name: str
+    loan_type: str = ""  # a borrower with several loans appears once per loan; this says which
 
 
 @app.get("/demo/accounts", response_model=list[DemoAccountOut])
@@ -171,8 +173,8 @@ def demo_accounts_endpoint():
     404 when the deployment is not a demo."""
     if not _demo_open_access():
         raise HTTPException(status_code=404, detail="not available on this deployment")
-    return [DemoAccountOut(account_id=a.account_id, borrower_name=a.borrower_name, business_name=a.business_name)
-            for a in store.list_accounts()]
+    return [DemoAccountOut(account_id=a.account_id, borrower_name=a.borrower_name, business_name=a.business_name,
+                           loan_type=a.loan_type) for a in store.list_accounts()]
 
 
 class StartConversationResponse(BaseModel):
@@ -329,6 +331,10 @@ class QuickActionAgentRequest(BaseModel):
 
 class QuickActionPaymentLinkRequest(BaseModel):
     amount: float = Field(gt=0)
+
+
+class QuickActionFeeWaiverRequest(BaseModel):
+    reason: str  # why they ask, in their own words -- what the person deciding reads
 
 
 def _require_verified_account(conversation_id: str) -> str:
@@ -1159,6 +1165,29 @@ def reply_to_message_endpoint(conversation_id: str, message_id: int, req: Messag
         return store.reply_to_team_message(account_id, message_id, text, via="web")
     except store.MessageNotReplyableError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.post("/conversations/{conversation_id}/quick-actions/fee-waiver")
+def quick_action_fee_waiver_endpoint(conversation_id: str, req: QuickActionFeeWaiverRequest) -> dict:
+    """"Remove a late fee": the same request the assistant's request_fee_waiver sends -- to a person, with the reason;
+    nothing is waived here. {no_fee_owed: true} when there is no late fee to ask about."""
+    account_id = _require_verified_account(conversation_id)
+    try:
+        result = request_fee_waiver(account_id, req.reason)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="tell us why you are asking") from e
+    _log_quick_action(account_id, "request_fee_waiver", {"account_id": account_id, "reason": req.reason}, result)
+    return result
+
+
+@app.post("/conversations/{conversation_id}/quick-actions/closure-certificate")
+def quick_action_closure_certificate_endpoint(conversation_id: str) -> dict:
+    """"Closure certificate": the assistant's request_closure_certificate from a button. eligible=false (with the EMIs
+    still left) while the loan is not fully repaid; otherwise a request in the ops Inbox for a person to issue it."""
+    account_id = _require_verified_account(conversation_id)
+    result = request_closure_certificate(account_id)
+    _log_quick_action(account_id, "request_closure_certificate", {"account_id": account_id}, result)
+    return result
 
 
 _DEFAULT_AGENT_REASON = "Borrower requested a human agent from the dashboard"
