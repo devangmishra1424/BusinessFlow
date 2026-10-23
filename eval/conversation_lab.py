@@ -181,6 +181,31 @@ CASES: list[LabCase] = [
         ],
         verified=False,
     ),
+    LabCase(
+        "fee_waiver_is_a_request_not_a_waiver", "BF-1002", "en",
+        "tools/request_tools.py request_fee_waiver + data/kb/faq_general.md 'The agent cannot waive a payment': a "
+        "waiver is asked for, a person decides, the fee stays owed until then.",
+        "Asking to remove a fee opens a request for the team; the reply never says it was removed.",
+        [
+            LabTurn("can you remove my late fee? I was in hospital that week", Expect(
+                tools=["request_fee_waiver"], tool_result_contains={"request_fee_waiver": ['"requested": true']},
+                reply_excludes=["waived", "removed the"]),
+                script=[Step(tool_calls=[("get_payment_status", {"account_id": "BF-1002"})]),
+                        Step(tool_calls=[("request_fee_waiver", {"account_id": "BF-1002", "reason": "In hospital that week"})]),
+                        Step(content="I've asked our team to look at removing it. A person decides, and until then the fee is still owed.")]),
+        ],
+    ),
+    LabCase(
+        "requests_are_answered_from_the_record", "BF-1003", "en",
+        "tools/request_tools.py get_my_requests: 'did you check my payment?' is answered from the requests on record.",
+        "A borrower asking about their open request gets its real status.",
+        [
+            LabTurn("did anyone look at my complaint?", Expect(tools=["get_my_requests"],
+                                                             tool_result_contains={"get_my_requests": ['"open_requests"']}),
+                    script=[Step(tool_calls=[("get_my_requests", {"account_id": "BF-1003"})]),
+                            Step(content="Your request is still open with our team; they will reply here.")]),
+        ],
+    ),
     # --- twins: the same rule from the other side, and in Hindi --------------------------------------------------
     LabCase(
         "vague_intent_records_no_promise", "BF-1002", "en",

@@ -86,7 +86,7 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "{ground_policy_claims} {late_fee_amount_vs_status} {check_dispute_block_first} {out_of_domain_legal} "
     "{ground_nach_failures} {fraud_or_identity_claim} {due_date_change_requests} "
     "{cibil_credit_score} {discount_firmness} {restructuring_approval_flow} "
-    "{payment_history_requests} {closure_certificate_requests} {grievance_redressal} "
+    "{payment_history_requests} {closure_certificate_requests} {follow_ups} {grievance_redressal} "
     "{no_mental_math} {untrusted_content} {reply_formatting}"
 )
 
@@ -542,6 +542,17 @@ _CLOSURE_CERTIFICATE_REQUESTS = (
     "coming when it isn't."
 )
 
+# Found in the 2026-10-23 audit of every conversational surface: a borrower could raise things in chat but never ask
+# what happened to them, a typed answer to our team's message went to this assistant instead of the team, and a late
+# fee became a real charge only the team can waive. tools/request_tools.py closes all three.
+_FOLLOW_UPS = (
+    "For 'did you check my payment?', 'what happened to my request?' or 'did anyone reply?', call get_my_requests "
+    "and answer from it -- never guess a status. If they ask us to remove or waive a late fee, call "
+    "request_fee_waiver with their reason and say plainly that a person on our team decides and the fee is still owed "
+    "until then. If they are answering a message our team sent them (we asked them something and they explain), call "
+    "reply_to_team with their words so it reaches the team."
+)
+
 # A borrower saying "I want to file a complaint" or "I'm not happy with
 # how this was handled" is a categorically different thing from a routine
 # billing dispute or an ordinary escalate_to_human call -- it's a
@@ -741,6 +752,7 @@ def build_system_prompt(language: str = "en", account_id: str | None = None, tem
         restructuring_approval_flow=_RESTRUCTURING_APPROVAL_FLOW,
         payment_history_requests=_PAYMENT_HISTORY_REQUESTS,
         closure_certificate_requests=_CLOSURE_CERTIFICATE_REQUESTS,
+        follow_ups=_FOLLOW_UPS,
         grievance_redressal=_GRIEVANCE_REDRESSAL,
         no_mental_math=_NO_MENTAL_MATH,
         untrusted_content=_UNTRUSTED_CONTENT,

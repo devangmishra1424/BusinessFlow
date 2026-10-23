@@ -2187,6 +2187,17 @@ class _VoiceData:
     def case_closed_message(self, kind: str, note: str | None) -> str:
         return _case_closed_message(kind, note)
 
+    def bank_lines(self) -> list[dict]:
+        return [line.model_dump(mode="json") for line in list_bank_lines("open")]
+
+    def health(self) -> dict:
+        return get_portfolio_health()
+
+    def quality(self) -> dict:
+        from businessflow.observability import trace_report
+
+        return trace_report.collect(days=7)
+
 
 def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"

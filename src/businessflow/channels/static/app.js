@@ -38,6 +38,9 @@ const TOOL_LABELS = {
   calculate_hypothetical: "Calculated your options",
   check_policy: "Checked our policy",
   compute: "Worked out the figures",
+  get_my_requests: "Checked your requests and our replies",
+  request_fee_waiver: "Asked our team about removing the fee",
+  reply_to_team: "Sent your reply to our team",
 };
 
 

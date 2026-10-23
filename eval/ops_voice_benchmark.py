@@ -105,6 +105,14 @@ CASES = [
     Case("close_dispute", "close fatima's dispute, it was a bank error that's now fixed", {"close_case"},
          {"account": "fatima", "note": PRESENT}),
     Case("mark_handled", "mark imran's messages as handled", {"mark_messages_handled"}, {"account": "imran"}),
+    # Added with the 2026-10-23 capabilities audit: the commands voice could not reach before.
+    Case("bank_waiting", "anything from the bank waiting to be posted", {"bank_status"}),
+    Case("collections_health", "how are collections doing this month", {"collection_health"}),
+    Case("ai_quality", "how is the ai assistant doing", {"quality_summary"}),
+    Case("waive_fee", "waive fatima's late fee, she was in hospital", {"waive_fee"}, {"account": "fatima", "reason": PRESENT}),
+    Case("unlink_tg", "unlink imran from telegram, he lost his phone", {"unlink_telegram"}, {"account": "imran"}),
+    Case("why_risky", "why is fatima high risk", {"account_details"}, {"account": "fatima", "topic": "risk"}),
+    Case("open_bank", "open the bank statement page", {"open_page", "bank_status"}),
 ]
 
 # What ops/api.py's _describe_screen says inside a run.

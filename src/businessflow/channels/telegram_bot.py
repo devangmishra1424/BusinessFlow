@@ -84,6 +84,7 @@ from businessflow.outbound.send import notify_telegram_chat
 from businessflow.tools.account_tools import flag_dispute, get_payment_history, get_payment_status
 from businessflow.tools.escalation_tools import escalate_to_human, request_closure_certificate
 from businessflow.tools.payment_tools import generate_payment_link
+from businessflow.tools.request_tools import get_my_requests
 
 # Matches agent/client.py's convention: load .env at import time, then
 # read os.environ directly wherever a value is needed (main(), below,
@@ -157,6 +158,19 @@ def _tell_previous_chat(account_id: str, previous_chat_id: int | None) -> None:
         logger.warning("could not tell chat %s that account %s moved to another chat", previous_chat_id, account_id)
 
 
+def _with_loans_note(conversation: list[dict], chat_id: int, account_id: str) -> list[dict]:
+    """When this chat holds several loans, the assistant is told which others there are and that it speaks only about
+    the active one -- so "how much do I owe on my other loan?" gets "send /loans to switch", not a guess."""
+    others = [a for a in store.get_accounts_by_telegram_chat_id(chat_id) if a.account_id != account_id]
+    if others:
+        names = ", ".join(f"{a.account_id} ({a.business_name})" for a in others)
+        conversation.append({"role": "system", "content": (
+            f"This borrower's chat also holds other loans: {names}. You can see and act on {account_id} only. If they "
+            "ask about another loan, tell them to send /loans to switch to it."
+        )})
+    return conversation
+
+
 def switch_loan(chat_id: int, account_id: str) -> str:
     """/loans: makes another loan already linked to this chat the one the conversation is about. Never links anything --
     a loan not in this chat needs its account ID and access key."""
@@ -164,7 +178,7 @@ def switch_loan(chat_id: int, account_id: str) -> str:
         return f"{account_id} isn't linked to this chat -- send its account ID and access key to add it."
     language = _language_for(chat_id, account_id)
     _sessions[chat_id] = {"account_id": account_id, "language": language,
-                          "messages": start_conversation_with_recap(language, account_id)}
+                          "messages": _with_loans_note(start_conversation_with_recap(language, account_id), chat_id, account_id)}
     store.log_event(account_id, "telegram_loan_switched", {})
     return f"Switched to {account_id}. What can I help you with?"
 
@@ -233,6 +247,7 @@ def handle_incoming_message(chat_id: int, text: str) -> str:
             link = store.set_telegram_chat_id(account_id, chat_id)
             _tell_previous_chat(account_id, link["previous_chat_id"])
             loans = link["loans_in_chat"]
+            _with_loans_note(conversation, chat_id, account_id)
             if len(loans) > 1:
                 return (f"Verified -- I've pulled up account {account_id}. This chat now has {len(loans)} loans "
                         f"({', '.join(loans)}); messages about each say which loan, and /loans switches between them. "
@@ -266,7 +281,8 @@ def handle_incoming_message(chat_id: int, text: str) -> str:
                 # The real verification branch above never reads this
                 # account field either, for the same reason -- match it.
                 language = _language_for(chat_id, rehydrated.account_id)
-                conversation = start_conversation_with_recap(language, rehydrated.account_id)
+                conversation = _with_loans_note(start_conversation_with_recap(language, rehydrated.account_id), chat_id,
+                                                rehydrated.account_id)
                 _sessions[chat_id] = {"account_id": rehydrated.account_id, "language": language, "messages": conversation}
                 welcome_back_prefix = f"Welcome back -- I've resumed account {rehydrated.account_id}.\n\n"
             else:
@@ -646,6 +662,58 @@ async def _run_closure(chat_id: int) -> str:
     )
 
 
+async def _run_requests(chat_id: int) -> str:
+    """/requests: what happened to everything they asked (tools/request_tools.py get_my_requests), no model call."""
+    account_id = _verified_account_id(chat_id)
+    if account_id is None:
+        return _NOT_VERIFIED_MESSAGE
+    result = await asyncio.to_thread(get_my_requests, account_id)
+    _log_tool_call(account_id, "get_my_requests", {"account_id": account_id}, result)
+    lines = []
+    for r in result["open_requests"]:
+        line = f"• {r['ref']} -- {r['what']}: open since {r['opened']}"
+        if r["last_from_our_team"]:
+            line += f"\n   Our team: {r['last_from_our_team'][:200]}"
+        lines.append(line)
+    for r in result["recently_closed"][:3]:
+        lines.append(f"• {r['ref']} -- {r['what']}: {r['status']}" + (f" ({r['outcome'][:120]})" if r["outcome"] else ""))
+    for m in result["messages_from_our_team"][:2]:
+        lines.append(f"• Message from our team, {m['sent']}: {m['message'][:200]}"
+                     + ("" if m["you_replied_as"] else "\n   (Reply to that message here to answer it.)"))
+    if not lines:
+        return "You have no requests with us, and no messages from our team."
+    return "Your requests and our replies:\n" + "\n".join(lines)
+
+
+async def _run_promise(chat_id: int) -> str:
+    """/promise: their promise to pay as recorded, part by part (accounts/promises.py), no model call."""
+    account_id = _verified_account_id(chat_id)
+    if account_id is None:
+        return _NOT_VERIFIED_MESSAGE
+    result = await asyncio.to_thread(get_payment_status, account_id)
+    _log_tool_call(account_id, "get_payment_status", {"account_id": account_id}, result)
+    promise = result.get("promise")
+    if not promise or promise["status"] == "replaced":
+        return ("No promise to pay is on record. To make one, tell me how much you will pay and by which date "
+                "(or in parts) -- I'll read it back before recording it.")
+    status = {"on_track": "on track", "kept": "kept -- thank you", "broken": "missed"}.get(promise["status"], promise["status"])
+    lines = [f"Your promise: {promise['terms']} -- {status}."]
+    for p in promise["parts"]:
+        lines.append(f"• ₹{p['amount']:,.0f} by {p['date']}: {p['status']}"
+                     + (f" (₹{p['paid_toward']:,.0f} paid so far)" if p["status"] == "open" and p["paid_toward"] else ""))
+    if promise["status"] == "on_track" and promise["next_part"]:
+        lines.append(f"Next: ₹{promise['next_part']['amount_left']:,.0f} by {promise['next_part']['date']}. /pay gets a link.")
+    return "\n".join(lines)
+
+
+async def on_requests(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(await _run_requests(update.effective_chat.id))
+
+
+async def on_promise(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(await _run_promise(update.effective_chat.id))
+
+
 async def on_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(await _run_status(update.effective_chat.id))
 
@@ -694,6 +762,8 @@ _MENU_ITEMS = [
     ("dispute", "⚠️ Flag a dispute"),
     ("agent", "🧑 Talk to a human"),
     ("closure", "📄 Closure certificate"),
+    ("promise", "🤝 My promise to pay"),
+    ("requests", "📬 My requests & your replies"),
     ("language", "🌐 Change language"),
     ("voice", "🔊 Toggle voice replies"),
 ]
@@ -814,6 +884,10 @@ async def on_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         text = await _run_agent(chat_id, None)
     elif cmd == "closure":
         text = await _run_closure(chat_id)
+    elif cmd == "requests":
+        text = await _run_requests(chat_id)
+    elif cmd == "promise":
+        text = await _run_promise(chat_id)
     elif cmd == "pay":
         text = await _run_pay(chat_id, None)
     elif cmd == "dispute":
@@ -1026,6 +1100,8 @@ async def _register_commands(application: Application) -> None:
             ("start", "Begin or verify your account"),
             ("status", "Check your EMI, due date, and balance"),
             ("loans", "Your loans in this chat -- switch between them"),
+            ("promise", "Your promise to pay, part by part"),
+            ("requests", "What happened to your requests, and our replies"),
             ("history", "See your recent payments"),
             ("pay", "Pay what's due (or /pay <amount>)"),
             ("dispute", "Flag a dispute -- /dispute <what happened>"),
@@ -1077,6 +1153,8 @@ def main() -> None:
     application.add_handler(CommandHandler("menu", on_menu))
     application.add_handler(CommandHandler("help", on_help))
     application.add_handler(CommandHandler("loans", on_loans))
+    application.add_handler(CommandHandler("requests", on_requests))
+    application.add_handler(CommandHandler("promise", on_promise))
     application.add_handler(CallbackQueryHandler(on_callback_query))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_message))
     application.add_handler(MessageHandler(filters.VOICE, on_voice_message))

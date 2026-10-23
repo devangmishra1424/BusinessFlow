@@ -49,6 +49,8 @@ _SYSTEM_PREFIXES = (
 
 # A borrower's reply to a message from our team (accounts/store.py reply_to_team_message): an ordinary request.
 REPLY_REASON_PREFIX = "Reply to our message"
+# A borrower asking the team to remove a late fee (tools/request_tools.py request_fee_waiver): an ordinary request.
+FEE_WAIVER_REASON_PREFIX = "Fee waiver request"
 
 
 def classify_escalation(reason: str, proposed_changes: dict | None = None) -> str:
