@@ -377,6 +377,17 @@ function setView(view) {
 /* ============================================================
    Living demo -- GET /demo, POST /demo/reset
    ============================================================ */
+// A reset runs in the background (POST /demo/reset is 202); this waits for it, bounded, checking every few seconds.
+async function waitForDemoRebuild(limitMs = 10 * 60 * 1000) {
+  const until = Date.now() + limitMs;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 4000));
+    const status = await api("/demo");
+    if (!status.rebuilding) return status;
+    if (Date.now() > until) throw new Error("The demo rebuild is taking longer than expected -- check again in a few minutes.");
+  }
+}
+
 async function initDemoReset() {
   const $btn = document.getElementById("demo-reset-btn");
   try {
@@ -388,13 +399,16 @@ async function initDemoReset() {
   }
   $btn.onclick = async () => {
     const ok = window.confirm(
-      "Put the demo borrowers back to their starting story?\n\nPayments, promises, late fees, cases and messages on the demo accounts are replaced, with dates counted from today. Accounts you opened yourself are not touched."
+      "Put the demo borrowers back to their starting story?\n\nPayments, promises, late fees, cases and messages on the demo loans are entered again, with dates counted from today. Accounts you opened yourself are not touched."
     );
     if (!ok) return;
     $btn.disabled = true;
     try {
       await api("/demo/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: "reset" }) });
-      toast("The demo is back to its starting story.");
+      toast("Rebuilding the demo borrowers -- about a minute.");
+      const status = await waitForDemoRebuild();
+      if (status.last_failure) toast(`The demo rebuild stopped: ${status.last_failure}`, true);
+      else toast("The demo is back to its starting story.");
       await loadAll();
     } catch (err) {
       toast(err.message, true);

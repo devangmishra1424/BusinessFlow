@@ -164,6 +164,7 @@ class DemoAccountOut(BaseModel):
     account_id: str
     borrower_name: str
     business_name: str
+    loan_type: str = ""  # a borrower with several loans appears once per loan; this says which
 
 
 @app.get("/demo/accounts", response_model=list[DemoAccountOut])
@@ -172,8 +173,8 @@ def demo_accounts_endpoint():
     404 when the deployment is not a demo."""
     if not _demo_open_access():
         raise HTTPException(status_code=404, detail="not available on this deployment")
-    return [DemoAccountOut(account_id=a.account_id, borrower_name=a.borrower_name, business_name=a.business_name)
-            for a in store.list_accounts()]
+    return [DemoAccountOut(account_id=a.account_id, borrower_name=a.borrower_name, business_name=a.business_name,
+                           loan_type=a.loan_type) for a in store.list_accounts()]
 
 
 class StartConversationResponse(BaseModel):

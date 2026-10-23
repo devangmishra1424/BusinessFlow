@@ -1147,7 +1147,9 @@ def _record_payment_in(
         account.charges = _load_charges(account_id, conn)
 
     alloc = allocate_payment(account, amount, payment_date)
-    on_time = payment_date <= account.emi_due_date
+    # On time means within the grace period, as the policy promises ("not treated as late for reporting purposes"): it
+    # used to mean on or before the due date, so a payment on day 2 showed as late everywhere the flag is read.
+    on_time = payment_date <= account.emi_due_date + timedelta(days=GRACE_PERIOD_DAYS)
     new_principal = account.principal_amount
     new_emi_amount = account.emi_amount
     new_months_remaining = account.months_remaining

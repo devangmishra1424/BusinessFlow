@@ -23,6 +23,8 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -51,9 +53,11 @@ from businessflow.accounts.escalation_kinds import (
     CALLBACK,
     CHRONIC_DELINQUENCY_REASON,
     CLOSURE,
+    FEE_WAIVER_REASON_PREFIX,
     FRAUD,
     GUARDRAIL_REASON_PREFIX,
     OPS_CALL_NUDGE_PREFIX,
+    REPLY_REASON_PREFIX,
     REQUEST,
     RESTRUCTURING,
     SYSTEM,
@@ -719,6 +723,11 @@ _SYSTEM_TITLES = (
     (GUARDRAIL_REASON_PREFIX, "Agent reply blocked"),
     (OPS_CALL_NUDGE_PREFIX, "Couldn't reach by phone"),
 )
+# A request says what kind it is when its reason does (tools/request_tools.py writes these prefixes).
+_REQUEST_TITLES = (
+    (FEE_WAIVER_REASON_PREFIX, "Asks to waive a late fee"),
+    (REPLY_REASON_PREFIX, "Replied to our message"),
+)
 # What a message from ops is about, in the borrower's words -- Telegram has no thread to show it in.
 _CASE_ABOUT = {
     cases.PAYMENT_CLAIM: "the payment you reported",
@@ -734,6 +743,8 @@ _CASE_ABOUT = {
 def _case_title(kind: str, reason: str) -> str:
     if kind == SYSTEM:
         return next((title for prefix, title in _SYSTEM_TITLES if (reason or "").startswith(prefix)), "System notice")
+    if kind == REQUEST:
+        return next((title for prefix, title in _REQUEST_TITLES if (reason or "").startswith(prefix)), "Request")
     return _CASE_TITLES.get(kind, "Request")
 
 
@@ -2020,6 +2031,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 class DemoStatusOut(BaseModel):
     enabled: bool
     last_reset_at: datetime | None
+    rebuilding: bool = False  # a reset is entering the demo borrowers' history right now
+    last_failure: str | None = None  # the last line a failed rebuild wrote, until the next one starts
 
 
 class DemoResetIn(BaseModel):
@@ -2038,40 +2051,77 @@ def _last_demo_reset() -> datetime | None:
     return row["created_at"] if row else None
 
 
+# The rebuild runs as its own process (scripts/build_demo.py), entering the demo borrowers' history through this API
+# and the chat app over HTTP, the way staff and borrowers would. Concurrency: one ops process (one uvicorn worker) owns
+# the handle below, guarded by the lock; at most one rebuild runs at a time. If this service restarts mid-rebuild, the
+# rebuild stops with it, and the next reset starts again from the top -- a reset clears and re-enters everything, so
+# running it twice is safe. Its output goes to a file; a failure's last line is shown on the dashboard, not swallowed.
+_DEMO_BUILD_LOG = Path(tempfile.gettempdir()) / "businessflow-demo-build.log"
+_demo_build_lock = threading.Lock()
+_demo_build: "subprocess.Popen | None" = None
+
+
+def _demo_build_state() -> tuple[bool, str | None]:
+    """(rebuilding now, the last line of the most recent rebuild if it failed)."""
+    with _demo_build_lock:
+        if _demo_build is None:
+            return False, None
+        code = _demo_build.poll()
+    if code is None:
+        return True, None
+    if code == 0:
+        return False, None
+    try:
+        lines = [line for line in _DEMO_BUILD_LOG.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
+    except OSError as e:
+        return False, f"the rebuild stopped (exit {code}); its log could not be read: {e}"
+    return False, (lines[-1][-300:] if lines else f"the rebuild stopped (exit {code}) without output")
+
+
+def _demo_status() -> DemoStatusOut:
+    rebuilding, failure = _demo_build_state()
+    return DemoStatusOut(enabled=_demo_reset_enabled(), last_reset_at=_last_demo_reset(), rebuilding=rebuilding,
+                         last_failure=failure)
+
+
 @app.get("/demo", response_model=DemoStatusOut, dependencies=[Depends(require_api_key)])
 def demo_status():
-    return DemoStatusOut(enabled=_demo_reset_enabled(), last_reset_at=_last_demo_reset())
+    return _demo_status()
 
 
-@app.post("/demo/reset", response_model=DemoStatusOut, dependencies=[Depends(require_api_key)])
+@app.post("/demo/reset", response_model=DemoStatusOut, status_code=202, dependencies=[Depends(require_api_key)])
 def reset_demo(body: DemoResetIn):
-    """Puts the demo borrowers back to their starting story (scripts/seed_accounts.py, dated from today): payments,
-    promises, fees, cases, messages and bank lines on those accounts are replaced. Accounts anyone opened themselves
-    are left alone. Once per _DEMO_RESET_COOLDOWN at most, so two people trying the demo at once do not keep wiping
-    each other; 404 when the deployment has it off.
+    """Puts the demo borrowers back to their starting story, dated from today (scripts/build_demo.py): what happened on
+    their loans is cleared and entered again through the product's own front doors. Accounts anyone opened themselves
+    are left alone. Starts the rebuild and returns at once (202, rebuilding: true); GET /demo says when it is done or
+    why it failed. 409 while a rebuild runs, 429 within _DEMO_RESET_COOLDOWN of the last one, 404 when off.
 
-    The seed runs as its own process from the repository root (python -m scripts.seed_accounts), the way it is always
-    run: whether `scripts` is importable from inside this server depends on how the server was started. Bounded by a
-    timeout; a seed that fails is a 500 with its last error line, and nothing is half-reset (it is one transaction)."""
+    The rebuild reaches the two apps on this machine at DEMO_OPS_URL (default http://127.0.0.1:8001) and DEMO_CHAT_URL
+    (default CHAT_INTERNAL_URL, as ops voice uses it, else http://127.0.0.1:8000) -- configured, never taken from the
+    request, so a forged Host header cannot point it, and the ops key it carries, anywhere else."""
+    global _demo_build
     if not _demo_reset_enabled():
         raise HTTPException(status_code=404, detail="demo reset is off on this deployment")
     last = _last_demo_reset()
     if last is not None and datetime.now(timezone.utc) - last < _DEMO_RESET_COOLDOWN:
         minutes = max(1, int((datetime.now(timezone.utc) - last).total_seconds() // 60))
         raise HTTPException(status_code=429, detail=f"the demo was reset {minutes} minute(s) ago -- try again in a few minutes")
-    try:
-        subprocess.run([sys.executable, "-m", "scripts.seed_accounts"], cwd=_REPO_ROOT, check=True, capture_output=True,
-                       text=True, timeout=120)
-    except subprocess.CalledProcessError as e:
-        last_line = (e.stderr or "").strip().splitlines()[-1:] or ["no error output"]
-        logger.error("demo reset failed: %s", last_line[0])
-        raise HTTPException(status_code=500, detail=f"the demo could not be reset: {last_line[0]}") from e
-    except subprocess.TimeoutExpired as e:
-        logger.error("demo reset timed out after 120 s")
-        raise HTTPException(status_code=500, detail="the demo reset took too long and was stopped") from e
-    store.log_event(None, "demo_reset", {})
-    logger.info("demo reset: the demo accounts are back to their starting story")
-    return DemoStatusOut(enabled=True, last_reset_at=_last_demo_reset())
+    env = {
+        **os.environ,
+        "DEMO_OPS_URL": os.environ.get("DEMO_OPS_URL", "http://127.0.0.1:8001"),
+        "DEMO_CHAT_URL": os.environ.get("DEMO_CHAT_URL") or os.environ.get("CHAT_INTERNAL_URL", "http://127.0.0.1:8000"),
+    }
+    with _demo_build_lock:
+        if _demo_build is not None and _demo_build.poll() is None:
+            raise HTTPException(status_code=409, detail="the demo is being rebuilt right now -- it takes about a minute")
+        log = open(_DEMO_BUILD_LOG, "w", encoding="utf-8")  # noqa: SIM115 -- handed to the child, closed below
+        try:
+            _demo_build = subprocess.Popen([sys.executable, "-m", "scripts.build_demo"], cwd=_REPO_ROOT, env=env,
+                                           stdout=log, stderr=subprocess.STDOUT)
+        finally:
+            log.close()  # the child holds its own handle
+    logger.info("demo reset: rebuilding the demo borrowers (pid %s, log %s)", _demo_build.pid, _DEMO_BUILD_LOG)
+    return _demo_status()
 
 
 # ============================================================

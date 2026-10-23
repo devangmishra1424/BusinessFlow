@@ -54,3 +54,13 @@ def test_the_closure_certificate_is_requested_only_for_a_repaid_loan(reseed_acco
 def test_the_buttons_need_a_verified_conversation():
     assert client.post("/conversations/nope/quick-actions/fee-waiver", json={"reason": "x"}).status_code == 404
     assert client.post("/conversations/nope/quick-actions/closure-certificate").status_code == 404
+
+
+def test_the_ops_inbox_names_a_fee_waiver_request_as_one(reseed_accounts, monkeypatch):
+    from businessflow.ops import api as ops_api
+
+    store.assess_late_fees(account_id="BF-1002")
+    cid = _open("BF-1002")
+    ref = client.post(f"/conversations/{cid}/quick-actions/fee-waiver", json={"reason": "Bank error on the debit"}).json()["case_ref"]
+    inbox = TestClient(ops_api.app).get("/inbox", headers={"X-API-Key": os.environ["OPS_API_KEY"]}).json()
+    assert next(c for c in inbox if c["case_ref"] == ref)["title"] == "Asks to waive a late fee"

@@ -129,34 +129,15 @@ const $langField = document.getElementById("lang-field");
 const $submitBtn = document.getElementById("start-submit-btn");
 const $accountPicker = document.getElementById("start-account-picker");
 
-// Deliberately embedded, same tradeoff and reasoning as _OPS_DEMO_LOGIN_KEY
-// below -- a one-click "choose a borrower" list instead of typing an
-// account ID + 6-digit key from memory. account_id/access_key still go
-// through the exact same POST /conversations verification the typed form
-// always used; this only fills the two fields for whoever's demoing
-// instead of asking them to remember or look up a real key.
-const _DEMO_ACCOUNTS = [
-  { id: "BF-1001", name: "Priya Sharma", business: "Cotton Threads Boutique", key: "482913" },
-  { id: "BF-1002", name: "Arjun Mehta", business: "Mehta Hardware & Electricals", key: "716044" },
-  { id: "BF-1003", name: "Fatima Khan", business: "Khan Textiles Wholesale", key: "930571" },
-  { id: "BF-1004", name: "Ravi Iyer", business: "Iyer Auto Spares", key: "205839" },
-  { id: "BF-1005", name: "Sunita Patil", business: "Patil Dairy & Kirana Store", key: "128143" },
-  { id: "BF-1006", name: "Rajesh Kumar Yadav", business: "Yadav Welding & Fabrication Works", key: "738570" },
-  { id: "BF-1007", name: "Meera Nair", business: "Nair Spices & Provisions", key: "584558" },
-  { id: "BF-1008", name: "Harpreet Singh Sodhi", business: "Sodhi Auto Care Garage", key: "778854" },
-  { id: "BF-1009", name: "Anjali Deshmukh", business: "Deshmukh Boutique & Tailoring", key: "511301" },
-  { id: "BF-1010", name: "Devang Mishra", business: "AI Start-Up", key: "844488" },
-];
-
 // Every account on the demo, from the server (GET /demo/accounts) -- one opened from the ops page or a loan-book import
-// appears by itself. The list above is only the fallback if that request fails.
-let _accountList = _DEMO_ACCOUNTS.map((a) => ({ account_id: a.id, borrower_name: a.name, business_name: a.business }));
+// appears by itself. Nothing is hard-coded: the demo's borrowers are whatever the books hold.
+let _accountList = [];
 function fillAccountPicker(list) {
   $accountPicker.querySelectorAll("option[value]:not([value=''])").forEach((o) => o.remove());
   for (const acct of list) {
     const opt = document.createElement("option");
     opt.value = acct.account_id;
-    opt.textContent = `${acct.borrower_name} — ${acct.business_name} (${acct.account_id})`;
+    opt.textContent = `${acct.borrower_name} — ${acct.business_name}${acct.loan_type ? `, ${acct.loan_type}` : ""} (${acct.account_id})`;
     $accountPicker.appendChild(opt);
   }
 }
@@ -166,7 +147,7 @@ api("/demo/accounts")
     _accountList = list;
     fillAccountPicker(list);
   })
-  .catch((err) => console.warn("demo: the account list could not be loaded; showing the built-in demo accounts", err));
+  .catch((err) => console.warn("demo: the account list could not be loaded; sign in with an account ID and key instead", err));
 
 // The ops dashboard lives on its own subdomain (see the "Ops team" tab
 // below) -- separate apps, separate asset paths, avoids the path-prefix
@@ -286,7 +267,7 @@ function _prepareChatContent() {
     addSystemMessage(
       state.accountId
         ? `Verified — you're chatting about account ${state.accountId}.`
-        : 'Chatting anonymously — to verify, send your account ID and 6-digit access key together, e.g. "BF-1001 482913".'
+        : 'Chatting anonymously — to verify, send your account ID and 6-digit access key together, e.g. "BF-1234 567890".'
     );
     showAbilities();
   }
