@@ -59,7 +59,8 @@ Run manually: python -m scripts.run_eval_monitor
 
 import json
 import logging
-from datetime import datetime, timezone
+import os
+from datetime import date, datetime, timezone
 
 from businessflow.accounts.db import database_schema, get_connection
 from businessflow.observability import trace_report
@@ -70,15 +71,30 @@ from eval.report import RESULTS_DIR, SuiteOutcome, build_report, for_telegram
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-_SUITES = [
-    # Replay only: no model calls, so it costs nothing and runs first. Keeps the ops Quality tab's lab result current.
+# Free every night: no model calls (the lab replays fixed model turns; the voice check runs local speech models).
+_FREE_SUITES = [
     ("conversation_lab", lambda: conversation_lab.run_lab()["summary"]),
-    ("tool_calling_benchmark", tool_calling_benchmark.main),
-    ("reasoning_accuracy", reasoning_accuracy.main),
-    ("red_team", red_team.main),
-    ("latency_benchmark", latency_benchmark.main),
     ("voice_naturalness_benchmark", voice_naturalness_benchmark.main),
 ]
+# The real model, ONE per night in turn. The free tier's daily budget (~200,000 tokens a day for this model, shared with
+# the live demo) cannot pay for all four in one night -- found 2026-10-23, when every one of them had failed on rate
+# limits since 14 Oct. Rotating keeps each within budget and at most len(_MODEL_SUITES) days old; the Quality page
+# shows each one's age. EVAL_SUITES=name,name runs exactly those instead (a manual re-run).
+_MODEL_SUITES = [
+    ("red_team", red_team.main),
+    ("reasoning_accuracy", reasoning_accuracy.main),
+    ("tool_calling_benchmark", tool_calling_benchmark.main),
+    ("latency_benchmark", latency_benchmark.main),
+]
+
+
+def suites_for_tonight(today: date | None = None, only: str | None = None) -> list[tuple]:
+    """The free suites, then tonight's model suite (by day, in turn) -- or exactly the named ones."""
+    every = dict(_FREE_SUITES + _MODEL_SUITES)
+    if only:
+        return [(name, every[name]) for name in only.split(",") if name in every]
+    today = today or date.today()
+    return _FREE_SUITES + [_MODEL_SUITES[today.toordinal() % len(_MODEL_SUITES)]]
 
 
 def run_all_suites() -> list[SuiteOutcome]:
@@ -93,8 +109,10 @@ def run_all_suites() -> list[SuiteOutcome]:
     is that suite's result for the night, and it goes into the report
     (it used to be logged only, so a suite that never ran told no one).
     Investigate with `python -m eval.<name>`."""
+    # Evals at night can wait out the per-minute rate limit; borrowers never do (agent/loop.py patient mode).
+    os.environ["BUSINESSFLOW_PATIENT_RATE_LIMITS"] = "1"
     outcomes = []
-    for name, run in _SUITES:
+    for name, run in suites_for_tonight(only=os.environ.get("EVAL_SUITES")):
         try:
             outcomes.append(SuiteOutcome(name, summary=run()))
         except Exception as e:
