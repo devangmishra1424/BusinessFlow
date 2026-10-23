@@ -2053,7 +2053,9 @@ def get_quality():
     labs = [data for data in (_read_json(p) for p in lab_paths) if data]
     nightly = []
     for name, what in _NIGHTLY_SUITES.items():
-        history = _EVAL_RESULTS_DIR / f"{name}_history.jsonl"
+        history = live_dir / f"{name}_history.jsonl"
+        if not history.exists():
+            history = _EVAL_RESULTS_DIR / f"{name}_history.jsonl"
         last = None
         if history.exists():
             lines = [line for line in history.read_text(encoding="utf-8").splitlines() if line.strip()]

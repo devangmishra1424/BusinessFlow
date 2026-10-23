@@ -181,7 +181,7 @@ def record_run_history(name: str, summary: dict, results_dir: Path) -> dict | No
         if lines:
             previous = json.loads(lines[-1])["summary"]
 
-    results_dir.mkdir(exist_ok=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
     with history_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps({"recorded_at": datetime.now(timezone.utc).isoformat(), "summary": summary}, ensure_ascii=False) + "\n")
     return previous
