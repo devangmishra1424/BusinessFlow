@@ -41,7 +41,7 @@ def test_main_refuses_to_run_on_the_live_tables_and_says_so(monkeypatch):
     # Found live: run on the live tables at 21:00 UTC, every suite's reseed wiped what people had done on the demo.
     monkeypatch.setattr(monitor, "database_schema", lambda: None)
     ran = []
-    monkeypatch.setattr(monitor, "_SUITES", [("suite", lambda: ran.append(1) or {})])
+    monkeypatch.setattr(monitor, "suites_for_tonight", lambda **kw: [("suite", lambda: ran.append(1) or {})])
     alerts = _alerts(monkeypatch)
 
     with pytest.raises(SystemExit):
@@ -51,7 +51,7 @@ def test_main_refuses_to_run_on_the_live_tables_and_says_so(monkeypatch):
 
 
 def test_run_all_suites_returns_every_suites_outcome_with_its_regressions(monkeypatch):
-    monkeypatch.setattr(monitor, "_SUITES", [
+    monkeypatch.setattr(monitor, "suites_for_tonight", lambda **kw: [
         ("clean_suite", lambda: {"regressed_metrics": []}),
         ("regressed_suite", lambda: {"regressed_metrics": ["recall"]}),
         ("no_key_suite", lambda: {}),  # a suite whose main() predates regressed_metrics -- must not KeyError
@@ -68,7 +68,7 @@ def test_a_suite_that_raises_is_recorded_with_its_error_without_losing_the_other
     def _boom():
         raise RuntimeError("transient API blip")
 
-    monkeypatch.setattr(monitor, "_SUITES", [
+    monkeypatch.setattr(monitor, "suites_for_tonight", lambda **kw: [
         ("broken_suite", _boom),
         ("healthy_suite", lambda: {"regressed_metrics": ["pass_rate"]}),
     ])
@@ -80,7 +80,7 @@ def test_a_suite_that_raises_is_recorded_with_its_error_without_losing_the_other
 
 
 def test_main_sends_the_report_when_a_suite_got_worse(monkeypatch, tmp_path):
-    monkeypatch.setattr(monitor, "_SUITES", [("regressed_suite", lambda: {"regressed_metrics": ["recall"]})])
+    monkeypatch.setattr(monitor, "suites_for_tonight", lambda **kw: [("regressed_suite", lambda: {"regressed_metrics": ["recall"]})])
     alerts = _alerts(monkeypatch)
 
     monitor.main()
@@ -95,7 +95,7 @@ def test_main_sends_the_report_when_a_suite_could_not_run(monkeypatch):
     def _boom():
         raise TimeoutError("Groq timed out")
 
-    monkeypatch.setattr(monitor, "_SUITES", [("red_team", _boom)])
+    monkeypatch.setattr(monitor, "suites_for_tonight", lambda **kw: [("red_team", _boom)])
     alerts = _alerts(monkeypatch)
 
     monitor.main()
@@ -104,10 +104,33 @@ def test_main_sends_the_report_when_a_suite_could_not_run(monkeypatch):
 
 
 def test_main_saves_the_report_but_sends_nothing_when_everything_held_steady(monkeypatch, tmp_path):
-    monkeypatch.setattr(monitor, "_SUITES", [("clean_suite", lambda: {"regressed_metrics": []})])
+    monkeypatch.setattr(monitor, "suites_for_tonight", lambda **kw: [("clean_suite", lambda: {"regressed_metrics": []})])
     alerts = _alerts(monkeypatch)
 
     monitor.main()
 
     assert alerts == []
     assert "held steady" in (tmp_path / "nightly_report.txt").read_text(encoding="utf-8")
+
+
+def test_one_model_suite_runs_each_night_in_turn_and_the_free_ones_always():
+    from datetime import date
+
+    nights = [[name for name, _ in monitor.suites_for_tonight(date(2026, 11, 1).fromordinal(date(2026, 11, 1).toordinal() + i))]
+              for i in range(4)]
+    assert all(n[:2] == ["conversation_lab", "voice_naturalness_benchmark"] and len(n) == 3 for n in nights)
+    assert {n[2] for n in nights} == {"red_team", "reasoning_accuracy", "tool_calling_benchmark", "latency_benchmark"}
+
+
+def test_a_manual_rerun_runs_exactly_the_named_suites():
+    assert [n for n, _ in monitor.suites_for_tonight(only="red_team,reasoning_accuracy,nope")] == ["red_team", "reasoning_accuracy"]
+
+
+def test_the_nightly_run_waits_out_rate_limits(monkeypatch):
+    monkeypatch.delenv("BUSINESSFLOW_PATIENT_RATE_LIMITS", raising=False)
+    monkeypatch.setattr(monitor, "suites_for_tonight", lambda **kw: [])
+    run_all_suites()
+    import os
+
+    assert os.environ["BUSINESSFLOW_PATIENT_RATE_LIMITS"] == "1"
+    monkeypatch.delenv("BUSINESSFLOW_PATIENT_RATE_LIMITS")

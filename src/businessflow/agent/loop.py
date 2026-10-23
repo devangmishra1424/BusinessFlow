@@ -7,6 +7,7 @@ which just talks without checking anything against real data.
 import asyncio
 import json
 import logging
+import os
 import threading
 import time
 import uuid
@@ -89,6 +90,16 @@ _TRANSIENT_ERROR_BACKOFF_SECONDS = 0.5
 _RATE_LIMIT_WAIT_ROUNDS = 2
 _RATE_LIMIT_DEFAULT_WAIT_SECONDS = 10.0  # when a 429 carries no usable Retry-After
 _RATE_LIMIT_MAX_WAIT_SECONDS = 30.0
+# Patient mode, for the nightly evals only (BUSINESSFLOW_PATIENT_RATE_LIMITS=1, set by scripts/run_eval_monitor.py): the
+# free tier allows 8,000 tokens a minute and one call carries ~5,000, so a suite firing calls back to back is
+# rate-limited within two calls. A borrower must not wait minutes, but an eval at 2:30 am can: found 2026-10-23, every
+# real-model suite had crashed on 429 every night since 14 Oct, leaving the Quality page on old numbers.
+_PATIENT_WAIT_ROUNDS = 20
+_PATIENT_MAX_WAIT_SECONDS = 65.0
+
+
+def _patient() -> bool:
+    return os.environ.get("BUSINESSFLOW_PATIENT_RATE_LIMITS") == "1"
 
 
 def _retry_after_seconds(error: "groq.RateLimitError") -> float:
@@ -100,7 +111,7 @@ def _retry_after_seconds(error: "groq.RateLimitError") -> float:
         seconds = float(headers.get("retry-after"))
     except (TypeError, ValueError):
         seconds = _RATE_LIMIT_DEFAULT_WAIT_SECONDS
-    return min(max(seconds, 1.0), _RATE_LIMIT_MAX_WAIT_SECONDS)
+    return min(max(seconds, 1.0), _PATIENT_MAX_WAIT_SECONDS if _patient() else _RATE_LIMIT_MAX_WAIT_SECONDS)
 
 
 # What a reply that fails the guardrail (_finalize_reply) is replaced with. Named so evals can recognise it.
@@ -144,7 +155,7 @@ def _create_completion(**kwargs):
                 continue
             # Every configured key has been tried: wait for a bucket to
             # refill (bounded), then start over from the primary key.
-            if rate_limit_waits >= _RATE_LIMIT_WAIT_ROUNDS:
+            if rate_limit_waits >= (_PATIENT_WAIT_ROUNDS if _patient() else _RATE_LIMIT_WAIT_ROUNDS):
                 raise
             rate_limit_waits += 1
             trace.note(rate_limit_waits=1)
