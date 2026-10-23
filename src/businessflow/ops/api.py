@@ -2069,6 +2069,10 @@ def get_quality():
         # from the last nightly run's turns.
         "components_live": trace_report.collect(days=7),
         "components_nightly": _read_json(live_dir / "trace_report.json"),
+        # The last nightly message as it was written (scripts/run_eval_monitor.py), including any suite that could not
+        # run -- a suite that fails writes no history line, so without this its stale date would be the only sign.
+        "nightly_message": (_EVAL_RESULTS_DIR / "nightly_report.txt").read_text(encoding="utf-8")[:4000]
+        if (_EVAL_RESULTS_DIR / "nightly_report.txt").exists() else None,
     }
 
 

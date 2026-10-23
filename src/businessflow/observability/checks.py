@@ -26,6 +26,12 @@ class Check:
     rule: Callable[[dict], bool]  # span (or turn) -> True when the check FAILS
     span: str | None  # the span name it applies to; None = a whole-turn check (gets the Trace)
     critical: bool = False  # a failure here is red in the report however rare
+    # What kind of problem it is, so speed and capacity never pass for wrong answers:
+    #   correctness -- the AI step got something wrong (counts against the component's health)
+    #   speed       -- right, but slow
+    #   capacity    -- waited on a quota or limit outside the AI (Groq's rate limit)
+    #   protection  -- a safeguard stopped something it should (an unverified chat asking for an account): it worked
+    kind: str = "correctness"
 
 
 _WORD = re.compile(r"[A-Za-z]{5,}")
@@ -111,20 +117,20 @@ CHECKS: list[Check] = [
           lambda s: (_a(s).get("malformed_retries") or 0) > 0, "llm"),
     Check("llm.rate_limited", "Model calls", "The call waited on Groq's rate limit.",
           "The shared daily quota is running out -- nightly evals or a burst of traffic; spread them or add a key.",
-          lambda s: (_a(s).get("rate_limit_waits") or 0) > 0, "llm"),
+          lambda s: (_a(s).get("rate_limit_waits") or 0) > 0, "llm", kind="capacity"),
     Check("llm.slow", "Model calls", f"One model call took over {SLOW_MODEL_SECONDS:.0f} seconds.",
           "Check Groq status and the rate-limit check above; a long conversation history also slows it.",
-          lambda s: s.get("seconds", 0) > SLOW_MODEL_SECONDS, "llm"),
+          lambda s: s.get("seconds", 0) > SLOW_MODEL_SECONDS, "llm", kind="speed"),
     # Tools: did the action it chose actually go through?
     Check("tool.error", "Tools", "A tool the model chose returned an error.",
           "Read the error: bad arguments from the model (prompt) or a real fault in the tool (code).",
           lambda s: _a(s).get("outcome") == "error", "tool"),
     Check("tool.blocked", "Tools", "A tool call was refused: another account, or an unverified chat.",
           "Expected under attack; if it happens in ordinary chats the model is confusing accounts -- read the turn.",
-          lambda s: _a(s).get("outcome") == "blocked", "tool", critical=True),
+          lambda s: _a(s).get("outcome") == "blocked", "tool", kind="protection"),
     Check("tool.slow", "Tools", f"A tool took over {SLOW_TOOL_SECONDS:.0f} seconds.",
           "Usually the database (Sydney) or a cold retrieval model; check which tool.",
-          lambda s: s.get("seconds", 0) > SLOW_TOOL_SECONDS, "tool"),
+          lambda s: s.get("seconds", 0) > SLOW_TOOL_SECONDS, "tool", kind="speed"),
     # Retrieval: did it find something, and was it sure?
     Check("retrieval.empty", "Retrieval", "A policy search found nothing.",
           "The question is outside the knowledge base -- either add the document, or the agent should hand off.",
@@ -152,7 +158,7 @@ CHECKS: list[Check] = [
           _tts_implausible, "tts"),
     Check("tts.slow", "Text-to-speech", f"Speaking one reply took over {SLOW_TTS_SECONDS:.0f} seconds.",
           "Long replies, or the Hindi engine fell back to the slower one; check the engine recorded.",
-          lambda s: s.get("seconds", 0) > SLOW_TTS_SECONDS, "tts"),
+          lambda s: s.get("seconds", 0) > SLOW_TTS_SECONDS, "tts", kind="speed"),
     # Outbound writer: did its draft pass first time?
     Check("compose.redrafted", "Reminder writer", "A reminder draft failed its check and was rewritten.",
           "Read the problem recorded: an invented figure or a claim the model may not make.",

@@ -74,7 +74,7 @@ def test_a_real_window_reads_traces_outcomes_and_gates(reseed_accounts):
             run_case(case)
     report = collect(days=1)
 
-    assert report["window"]["traces"] >= 3
+    assert report["window"]["traces"] >= 1  # each lab case reseeds the demo accounts, which clears their earlier traces
     names = {c["component"] for c in report["components"]}
     assert {"Model calls", "Tools", "Reply truthfulness"} <= names
     gates = {g["name"]: g["passed"] for g in report["gates"]}
@@ -90,3 +90,24 @@ def test_old_traces_are_purged(reseed_accounts):
     conn.execute("insert into events (event_type, details, created_at) values ('trace', '{}', now() - interval '40 days')")
     assert store.purge_old_traces() >= 1
     assert conn.execute("select count(*) as n from events where event_type = 'trace' and created_at < now() - interval '30 days'").fetchone()["n"] == 0
+
+
+def test_waiting_on_a_rate_limit_is_slow_not_wrong():
+    slow = [_trace(spans=[_s("llm", 25, offered_tools=True, failed=["llm.rate_limited", "llm.slow"])]) for _ in range(6)]
+    report = build_report(slow)
+    model = next(c for c in report["components"] if c["component"] == "Model calls")
+    assert (model["status"], model["failed_rate"], model["slow_rate"]) == ("slow", 0.0, 1.0)
+    assert report["verdict"][0]["why"].startswith("answers right, but slow")
+    [chain] = report["chains"]
+    assert (chain["success_rate"], chain["slowed_rate"]) == (1.0, 1.0)
+
+
+def test_a_blocked_call_is_a_protection_that_worked_not_a_failure():
+    traces = [_turn(tool_outcome="blocked") for _ in range(6)]
+    for t in traces:
+        for s in t["spans"]:
+            if s["name"] == "tool":
+                s["failed"] = ["tool.blocked"]
+    tools = next(c for c in build_report(traces)["components"] if c["component"] == "Tools")
+    assert (tools["status"], tools["failed_rate"], tools["protections"]) == ("green", 0.0, 6)
+    assert next(k for k in tools["checks"] if k["name"] == "tool.blocked")["kind"] == "protection"

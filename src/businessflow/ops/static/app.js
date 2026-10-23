@@ -502,7 +502,43 @@ async function initDemoReset() {
    ============================================================ */
 // The per-component report (observability/trace_report.py): verdict weakest first, safeguards, each component and its
 // actions, each chain with where its time goes and where failures start, outcomes judged by what happened later.
-const Q_STATUS = { red: "Needs a look", amber: "Watch", green: "Healthy", not_enough_data: "Too few to judge" };
+const Q_STATUS = { red: "Wrong answers", amber: "Watch", slow: "Slow, not wrong", green: "Healthy", not_enough_data: "Too few to judge" };
+const Q_KIND = {
+  correctness: ["Wrong", "The AI step got something wrong. This is what health is judged on."],
+  speed: ["Slow", "Right, but slower than the limit."],
+  capacity: ["Limit", "Waited on a quota outside the AI (Groq's free-tier rate limit) -- capacity, not quality."],
+  protection: ["Protection", "A safeguard stopped something it should have -- it worked."],
+};
+const Q_STEP = { stt: "speech-to-text", llm: "model", tool: "tools", retrieval: "retrieval", guardrail: "guardrail",
+  tts: "text-to-speech", compose: "reminder writer", bank_match: "bank matcher", turn: "whole turn" };
+const Q_CHAIN = { web_text: "Web chat (typed)", web_voice: "Web chat (voice)", web_speak: "Web: reply read aloud",
+  telegram_text: "Telegram (typed)", telegram_voice: "Telegram (voice)", chat_turn: "Assistant turn (eval/lab)",
+  reminder: "Reminder written", bank_import: "Bank statement matched" };
+
+// What each nightly suite's numbers mean, as one sentence (the raw summary is kept under it).
+function suiteSentence(name, s) {
+  if (!s) return "Not run yet.";
+  const pct = (n, d) => (d ? ` (${Math.round((n / d) * 100)}%)` : "");
+  switch (name) {
+    case "red_team":
+      return `${s.passed_count} of ${s.scenario_count} attacks handled safely${pct(s.passed_count, s.scenario_count)}.`;
+    case "tool_calling_benchmark":
+      return `${s.scenarios_passed} of ${s.scenario_count} clear requests got exactly the right action${pct(s.scenarios_passed, s.scenario_count)}; precision ${Math.round((s.precision ?? 0) * 100)}%, recall ${Math.round((s.recall ?? 0) * 100)}%.`;
+    case "realistic_conversation_benchmark":
+      return `${s.scenarios_passed} of ${s.scenario_count} messy multi-turn conversations fully right${pct(s.scenarios_passed, s.scenario_count)}; recall ${Math.round((s.recall ?? 0) * 100)}%, no forbidden actions: ${s.total_forbidden_violations === 0 ? "yes" : "no"}.`;
+    case "reasoning_accuracy":
+      return `${s.accurate_count} of ${s.judged_count} replies stated the account's facts correctly${pct(s.accurate_count, s.judged_count)} (judged by a second model; ${s.judge_call_failures} could not be judged).`;
+    case "latency_benchmark": {
+      const c = s.clean || {};
+      return `Typical reply ${Math.round(c.p50_seconds ?? 0)} s, slow end (p90) ${Math.round(c.p90_seconds ?? 0)} s over ${c.run_count ?? s.run_count} runs -- most of it waiting on the free-tier rate limit.`;
+    }
+    default:
+      return Object.entries(s).slice(0, 4).map(([k, v]) => `${k.replaceAll("_", " ")}: ${v}`).join(" · ");
+  }
+}
+function daysAgo(iso) {
+  return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+}
 function qPct(v) {
   return v === null || v === undefined ? "–" : `${Math.round(v * 1000) / 10}%`;
 }
@@ -510,20 +546,21 @@ function qSec(v) {
   return v === null || v === undefined ? "–" : `${v < 1 ? Math.round(v * 1000) + " ms" : (Math.round(v * 10) / 10) + " s"}`;
 }
 function componentsHtml(r, title, sub) {
-  if (!r) return `<div class="q-comp-report"><h2>${escapeHtml(title)}</h2><p class="empty-state">No report yet.</p></div>`;
+  if (!r) return `<div class="q-comp-report"><h2>${escapeHtml(title)}</h2><p class="empty-state">Not written yet -- the nightly run (2:30 am IST) writes it from that night's turns.</p></div>`;
   const gates = r.gates.map((g) => `<li class="${g.passed ? "ok" : "bad"}">${g.passed ? "✓" : "⛔"} ${escapeHtml(g.name)} <span class="muted">— ${escapeHtml(g.detail)}</span></li>`).join("");
   const verdict = r.verdict.map((v) => `<span class="q-chip ${v.status}" title="${escapeHtml(v.why)}">${escapeHtml(v.component)} · ${Q_STATUS[v.status]}</span>`).join("");
   const comps = r.components.map((c) => `<details class="q-comp ${c.status}">
       <summary><span class="q-dot"></span><b>${escapeHtml(c.component)}</b>
-        <span class="q-stats">${c.steps} steps · ${qPct(c.failed_rate)} failing a check${c.previous_failed_rate !== null ? ` (was ${qPct(c.previous_failed_rate)})` : ""} · p50 ${qSec(c.p50_seconds)} · p90 ${qSec(c.p90_seconds)}${c.tokens_in ? ` · ${c.tokens_in.toLocaleString("en-IN")} tokens in` : ""}</span></summary>
-      ${c.checks.length ? `<table class="q-table"><tr><th>Check</th><th>Times</th><th>Share</th><th>What to do</th></tr>${c.checks.map((k) => `<tr><td>${k.critical ? "⚠ " : ""}${escapeHtml(k.means)}</td><td>${k.count}</td><td>${qPct(k.rate)}</td><td>${escapeHtml(k.action)}</td></tr>`).join("")}</table>` : `<p class="muted">Every step passed its checks.</p>`}
-      <table class="q-table"><tr><th>Action</th><th>Count</th><th>Failing</th><th>p50</th></tr>${c.actions.map((a) => `<tr><td>${escapeHtml(a.name)}</td><td>${a.count}</td><td>${qPct(a.failed_rate)}</td><td>${qSec(a.p50_seconds)}</td></tr>`).join("")}</table>
+        <span class="q-stats">${c.steps} steps · <b>${qPct(c.failed_rate)} wrong</b>${c.previous_failed_rate !== null ? ` (was ${qPct(c.previous_failed_rate)})` : ""} · ${qPct(c.slow_rate)} slow${c.protections ? ` · ${c.protections} protection${c.protections === 1 ? "" : "s"} worked` : ""} · p50 ${qSec(c.p50_seconds)} · p90 ${qSec(c.p90_seconds)}${c.tokens_in ? ` · ${c.tokens_in.toLocaleString("en-IN")} tokens in` : ""}</span></summary>
+      ${c.checks.length ? `<table class="q-table"><tr><th>Type</th><th>Check that fired</th><th>Times</th><th>Share of steps</th><th>What to do</th></tr>${c.checks.map((k) => `<tr><td><span class="q-kind ${k.kind}" title="${escapeHtml((Q_KIND[k.kind] || ["", ""])[1])}">${escapeHtml((Q_KIND[k.kind] || [k.kind])[0])}</span></td><td>${k.critical ? "⚠ " : ""}${escapeHtml(k.means)}</td><td>${k.count}</td><td>${qPct(k.rate)}</td><td>${escapeHtml(k.action)}</td></tr>`).join("")}</table>` : `<p class="muted">Every step passed its checks.</p>`}
+      <table class="q-table"><tr><th>Action</th><th>Count</th><th>Wrong</th><th>p50 time</th></tr>${c.actions.map((a) => `<tr><td>${escapeHtml(a.name)}</td><td>${a.count}</td><td>${qPct(a.failed_rate)}</td><td>${qSec(a.p50_seconds)}</td></tr>`).join("")}</table>
     </details>`).join("");
   const chains = r.chains.map((ch) => {
-    const bar = Object.entries(ch.time_share).map(([step, share]) => `<span class="q-seg q-${escapeHtml(step)}" style="flex:${share}" title="${escapeHtml(step)}: ${Math.round(share * 100)}% of the time">${share >= 0.12 ? escapeHtml(step) : ""}</span>`).join("");
-    const starts = Object.entries(ch.failures_start_at).map(([step, n]) => `${escapeHtml(step)} ${n}`).join(", ");
-    return `<div class="q-chain"><div><b>${escapeHtml(ch.kind.replaceAll("_", " "))}</b> <span class="muted">${ch.turns} turns · ${qPct(ch.success_rate)} clean · p50 ${qSec(ch.p50_seconds)} · p90 ${qSec(ch.p90_seconds)}</span></div>
-      <div class="q-timebar">${bar}</div>${starts ? `<div class="muted">Failures start at: ${starts}</div>` : ""}</div>`;
+    const bar = Object.entries(ch.time_share).map(([step, share]) => `<span class="q-seg q-${escapeHtml(step)}" style="flex:${share}" title="${escapeHtml(Q_STEP[step] || step)}: ${Math.round(share * 100)}% of the time">${share >= 0.12 ? escapeHtml(Q_STEP[step] || step) : ""}</span>`).join("");
+    const legend = Object.entries(ch.time_share).map(([step, share]) => `${escapeHtml(Q_STEP[step] || step)} ${Math.round(share * 100)}%`).join(" · ");
+    const starts = Object.entries(ch.failures_start_at).map(([step, n]) => `${escapeHtml(Q_STEP[step] || step)} (${n})`).join(", ");
+    return `<div class="q-chain"><div><b>${escapeHtml(Q_CHAIN[ch.kind] || ch.kind.replaceAll("_", " "))}</b> <span class="muted">${ch.turns} turns · <b>${qPct(ch.success_rate)} right</b> · ${qPct(ch.slowed_rate)} slowed · p50 ${qSec(ch.p50_seconds)} · p90 ${qSec(ch.p90_seconds)}</span></div>
+      <div class="q-timebar">${bar}</div><div class="muted">Where the time goes: ${legend}</div>${starts ? `<div class="muted">Wrong answers first appear in: ${starts}</div>` : ""}</div>`;
   }).join("");
   const o = r.outcomes || {};
   const outcomes = [
@@ -538,10 +575,26 @@ function componentsHtml(r, title, sub) {
     <div class="q-verdict">${verdict || `<span class="muted">No AI steps recorded in this window.</span>`}</div>
     ${gates ? `<ul class="q-gates">${gates}</ul>` : ""}
     ${comps}
-    ${chains ? `<h3>Chains</h3>${chains}` : ""}
+    ${chains ? `<h3>Chains (one whole turn, step by step)</h3>${chains}` : ""}
     ${outcomes ? `<h3>What happened afterwards</h3><ul class="q-outcomes">${outcomes}</ul>` : ""}
     ${evidence ? `<details class="q-evidence"><summary>Worst turns (trace ids)</summary><ul>${evidence}</ul></details>` : ""}
   </div>`;
+}
+
+// How to read this page: every word a reader will ask about, defined once.
+function qGuide() {
+  return `<details class="q-guide"><summary>How to read this page</summary><dl>
+    <dt>Turn</dt><dd>One borrower message and everything the system did for it (hear it, think, call tools, check the reply, speak it).</dd>
+    <dt>Step</dt><dd>One AI component's part of a turn, e.g. one model call, one tool call, one speech-to-text pass.</dd>
+    <dt>Check</dt><dd>A plain rule each step is graded by, with no extra model (e.g. "the reply stated an amount no tool gave"). Each says what to do when it fires.</dd>
+    <dt>Wrong / Slow / Limit / Protection</dt><dd><b>Wrong</b>: the step got something wrong -- health is judged only on this. <b>Slow</b>: right but over the time limit. <b>Limit</b>: waited on Groq's free-tier rate limit -- capacity, not quality. <b>Protection</b>: a safeguard stopped something (an unverified chat asking for an account) -- it worked.</dd>
+    <dt>p50 / p90</dt><dd>The time half of the steps finished within / nine in ten finished within. p90 shows the slow end.</dd>
+    <dt>Health colours</dt><dd>Red: wrong answers in 15%+ of steps, or a critical check (⚠) in 5%+. Amber: any critical check, or 5%+ wrong. "Slow, not wrong": right but 15%+ slow or rate-limited. "Too few to judge": under 5 steps -- shown rather than called healthy.</dd>
+    <dt>Gates</dt><dd>Things that must never happen whatever the averages: a model reply skipping the guardrail, a chat promise recorded without its terms read back. A failed gate means a safeguard was bypassed.</dd>
+    <dt>Chain</dt><dd>A whole turn of one kind (web voice, Telegram text, a reminder): how many were right, how many were slowed, where the time went, and the step where wrong answers start.</dd>
+    <dt>Conversation lab</dt><dd>Labelled conversations replayed through the real system on every code change, the model's words fixed ("scripted", or "recorded" from the real model). Each case cites the policy line it is labelled from.</dd>
+    <dt>Nightly suites</dt><dd>The real model on fixed inputs with known answers: attacks, the right action, messy conversations, facts stated correctly (graded by a second model), speed.</dd>
+  </dl></details>`;
 }
 
 async function loadQuality() {
@@ -566,14 +619,17 @@ async function loadQuality() {
     }).join("") || `<p class="empty-state">The conversation lab has not run on this server yet.</p>`;
     const nightly = q.nightly.map((n) => {
       const last = n.last_run;
-      const summary = last ? Object.entries(last.summary || {}).slice(0, 4).map(([k, v]) => `${escapeHtml(k.replaceAll("_", " "))}: <b>${typeof v === "number" && v <= 1 && !Number.isInteger(v) ? Math.round(v * 100) + "%" : escapeHtml(String(v))}</b>`).join(" · ") : "not run yet";
-      return `<div class="q-suite"><div><b>${escapeHtml(n.suite.replaceAll("_", " "))}</b> <span class="muted">— ${escapeHtml(n.checks)}</span></div><div class="q-suite-sum">${summary}${last ? ` <span class="muted">(${fmtDateTime(last.recorded_at)})</span>` : ""}</div></div>`;
-    }).join("");
+      const age = last ? daysAgo(last.recorded_at) : null;
+      const fresh = age === null ? "" : age <= 1 ? `<span class="q-fresh ok">last night</span>` : `<span class="q-fresh stale">${age} days old</span>`;
+      return `<div class="q-suite"><div><b>${escapeHtml(n.suite.replaceAll("_", " "))}</b> <span class="muted">— ${escapeHtml(n.checks)}</span></div>
+        <div class="q-suite-sum">${escapeHtml(suiteSentence(n.suite, last && last.summary))} ${fresh}${last ? ` <span class="muted">(${fmtDateTime(last.recorded_at)})</span>` : ""}
+        ${last ? `<details class="q-raw"><summary>raw numbers</summary><code>${escapeHtml(JSON.stringify(last.summary))}</code></details>` : ""}</div></div>`;
+    }).join("") + (q.nightly_message ? `<details class="q-raw"><summary>Last nightly message, as sent</summary><pre>${escapeHtml(q.nightly_message)}</pre></details>` : "");
     const components = [
       componentsHtml(q.components_live, "Every AI step, live", "real conversations, last 7 days"),
       componentsHtml(q.components_nightly, "Every AI step, nightly", "the nightly suites' turns, on a copy of the data"),
     ].join("");
-    $body.innerHTML = `${components}${labs}<div class="q-nightly"><h2>Nightly suites <span class="muted">· the real model, on a copy of the data</span></h2>${nightly}</div>`;
+    $body.innerHTML = `${qGuide()}${components}${labs}<div class="q-nightly"><h2>Nightly suites <span class="muted">· the real model, on a copy of the data, 2:30 am IST</span></h2><p class="muted">A suite older than a day did not run since: usually the free-tier Groq quota ran out that night. "Last nightly message" says which ones could not run and why.</p>${nightly}</div>`;
   } catch (err) {
     $body.innerHTML = `<p class="mini-form-error">${escapeHtml(err.message)}</p>`;
   }
