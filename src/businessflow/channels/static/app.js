@@ -141,12 +141,25 @@ const _DEMO_ACCOUNTS = [
   { id: "BF-1010", name: "Devang Mishra", business: "AI Start-Up", key: "844488" },
 ];
 
-for (const acct of _DEMO_ACCOUNTS) {
-  const opt = document.createElement("option");
-  opt.value = acct.id;
-  opt.textContent = `${acct.name} — ${acct.business} (${acct.id})`;
-  $accountPicker.appendChild(opt);
+// Every account on the demo, from the server (GET /demo/accounts) -- one opened from the ops page or a loan-book import
+// appears by itself. The list above is only the fallback if that request fails.
+let _accountList = _DEMO_ACCOUNTS.map((a) => ({ account_id: a.id, borrower_name: a.name, business_name: a.business }));
+function fillAccountPicker(list) {
+  $accountPicker.querySelectorAll("option[value]:not([value=''])").forEach((o) => o.remove());
+  for (const acct of list) {
+    const opt = document.createElement("option");
+    opt.value = acct.account_id;
+    opt.textContent = `${acct.borrower_name} — ${acct.business_name} (${acct.account_id})`;
+    $accountPicker.appendChild(opt);
+  }
 }
+fillAccountPicker(_accountList);
+api("/demo/accounts")
+  .then((list) => {
+    _accountList = list;
+    fillAccountPicker(list);
+  })
+  .catch((err) => console.warn("demo: the account list could not be loaded; showing the built-in demo accounts", err));
 
 // The ops dashboard lives on its own subdomain (see the "Ops team" tab
 // below) -- separate apps, separate asset paths, avoids the path-prefix
@@ -216,20 +229,13 @@ $startForm.addEventListener("submit", async (e) => {
 
   const payload = { language: state.language };
   if (state.mode === "verified") {
-    const ownId = document.getElementById("own-account-id").value.trim().toUpperCase();
-    const ownKey = document.getElementById("own-access-key").value.trim();
-    const selected = _DEMO_ACCOUNTS.find((a) => a.id === $accountPicker.value);
-    if (document.getElementById("own-account").open && ownId && ownKey) {
-      payload.account_id = ownId;
-      payload.access_key = ownKey;
-    } else if (selected) {
-      payload.account_id = selected.id;
-      payload.access_key = selected.key;
-    } else {
-      $startError.textContent = "Choose an account, or enter your own account ID and access key.";
+    if (!$accountPicker.value) {
+      $startError.textContent = "Choose an account to continue.";
       $startError.hidden = false;
       return;
     }
+    payload.account_id = $accountPicker.value;
+    payload.demo_open = true; // the demo opens any account in one click (no access key)
   }
 
   $submitBtn.disabled = true;
@@ -238,7 +244,6 @@ $startForm.addEventListener("submit", async (e) => {
     const result = await startConversation(payload);
     state.conversationId = result.conversation_id;
     state.accountId = result.account_id;
-    if (state.accountId) rememberLoan(result.account_id, result.conversation_id, payload.access_key);
     if (state.accountId) {
       enterDashboard();
     } else {
@@ -1018,69 +1023,28 @@ function enterDashboard() {
 }
 
 /* ============================================================
-   Several loans: every loan verified in this browser tab, one shown at a time
+   Switching account: any account on the demo, one click
    ============================================================ */
-// Kept for this tab only (sessionStorage): a shop owner with two loans signs in to each once and switches between them.
-// The key is kept so a conversation the server has forgotten (a restart) can be re-opened without asking again.
-const LOANS_KEY = "bf_loans";
-function savedLoans() {
-  try {
-    return JSON.parse(sessionStorage.getItem(LOANS_KEY) || "[]");
-  } catch (e) {
-    return []; // storage blocked (private mode): this tab just can't switch loans
-  }
-}
-function rememberLoan(accountId, conversationId, key) {
-  const loans = savedLoans().filter((l) => l.accountId !== accountId);
-  loans.push({ accountId, conversationId, key });
-  try {
-    sessionStorage.setItem(LOANS_KEY, JSON.stringify(loans));
-  } catch (e) {
-    // Storage blocked: switching is unavailable, the current loan still works.
-  }
-}
 function renderLoanSwitch() {
-  const loans = savedLoans();
   const $sel = document.getElementById("loan-switch-select");
-  $sel.innerHTML = loans.map((l) => `<option value="${escapeHtml(l.accountId)}"${l.accountId === state.accountId ? " selected" : ""}>${escapeHtml(l.accountId)}</option>`).join("");
-  $sel.hidden = loans.length < 2;
-}
-async function openLoan(accountId, conversationId) {
-  state.accountId = accountId;
-  state.conversationId = conversationId;
-  $messageList.innerHTML = ""; // the chat belongs to one loan
-  enterDashboard();
+  $sel.innerHTML = _accountList
+    .map((a) => `<option value="${escapeHtml(a.account_id)}"${a.account_id === state.accountId ? " selected" : ""}>${escapeHtml(a.account_id)} — ${escapeHtml(a.borrower_name)}</option>`)
+    .join("");
 }
 document.getElementById("loan-switch-select").addEventListener("change", async (e) => {
-  const loan = savedLoans().find((l) => l.accountId === e.target.value);
-  if (!loan) return;
+  const accountId = e.target.value;
+  e.target.disabled = true;
   try {
-    // A fresh conversation each switch: the server may have forgotten an old one, and the key is here.
-    const result = await startConversation({ language: state.language, account_id: loan.accountId, access_key: loan.key });
-    rememberLoan(loan.accountId, result.conversation_id, loan.key);
-    await openLoan(loan.accountId, result.conversation_id);
+    const result = await startConversation({ language: state.language, account_id: accountId, demo_open: true });
+    state.accountId = result.account_id;
+    state.conversationId = result.conversation_id;
+    $messageList.innerHTML = ""; // the chat belongs to one account
+    enterDashboard();
   } catch (err) {
-    const $err = document.getElementById("add-loan-error");
-    $err.textContent = friendlyStartError(err);
-    $err.hidden = false;
-    e.target.closest(".loan-switch").querySelector("details").open = true;
-  }
-});
-document.getElementById("add-loan-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const id = document.getElementById("add-loan-id").value.trim().toUpperCase();
-  const key = document.getElementById("add-loan-key").value.trim();
-  const $err = document.getElementById("add-loan-error");
-  $err.hidden = true;
-  try {
-    const result = await startConversation({ language: state.language, account_id: id, access_key: key });
-    rememberLoan(result.account_id, result.conversation_id, key);
-    e.target.reset();
-    e.target.closest("details").open = false;
-    await openLoan(result.account_id, result.conversation_id);
-  } catch (err) {
-    $err.textContent = friendlyStartError(err);
-    $err.hidden = false;
+    e.target.value = state.accountId;
+    alert(friendlyStartError(err));
+  } finally {
+    e.target.disabled = false;
   }
 });
 
