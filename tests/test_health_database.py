@@ -51,7 +51,10 @@ def test_health_is_ok_when_the_check_passes(name, module, monkeypatch):
     response = TestClient(module.app).get("/health")
 
     assert response.status_code == 200, name
-    assert response.json() == {"status": "ok", "database": "ok"}
+    body = response.json()
+    assert (body["status"], body["database"]) == ("ok", "ok"), name
+    # Only the ops service takes uploads, so only it says whether it can read a PDF (rag/ingest.py pdf_reader_status).
+    assert set(body) == ({"status", "database", "pdf_reader"} if module.__name__.endswith("ops.api") else {"status", "database"}), name
 
 
 def test_health_reports_a_missing_database_url_as_degraded_not_a_crash(monkeypatch):
