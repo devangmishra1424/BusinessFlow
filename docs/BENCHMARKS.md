@@ -131,3 +131,23 @@ python -m eval.tts_benchmark generate && ...# see the header of eval/tts_benchma
 python -m eval.voice_stage_latency          # per-stage local timing
 pytest tests/test_retrieval_quality.py tests/test_guardrail_benchmark.py tests/test_injection_controls.py
 ```
+
+
+## The live library, and the model-free gates (2026-10-24)
+
+`eval/retrieval_benchmark.py` scores the older markdown corpus and its fixtures. These score what a borrower is really
+answered from: the eight policy PDFs and each demo borrower's own agreement. None of them calls a model.
+
+| What | How | Result |
+|---|---|---|
+| Retrieval on the policy PDFs, English | `python -m eval.library_benchmark`, 26 labelled questions | Recall@2 100%, Recall@5 100%, MRR 0.96 |
+| Retrieval, Hindi (no translation: the embedding alone, a lower bound) | 10 labelled questions | Recall@2 100%, Recall@5 100%, MRR 0.90 |
+| A borrower's own fact is among what the assistant is handed | 6 borrowers: the truck number, a rate, a bank, a fee | 6 of 6 |
+| Bank matcher never posts to the wrong borrower on its own | `eval/cash_application_benchmark.py`, 60 labelled lines (NACH, UPI phone, claim UTR, name only, lookalike strangers, shared phone, bank noise) | 0 wrong automatic posts; strong-identifier recall 100%; name-only lines never posted alone; noise left unmatched 100% |
+| No borrower is offered another's documents | `tests/test_eval_gates.py`, every pair of four borrowers, plus an unverified chat | 0 leaks |
+| Policy documents state what the code enforces | the constants in `accounts/policy.py` and `accounts/promises.py` against each document | every constant stated |
+| Every figure survives being read as a PDF | each ₹ amount, percentage and grouped number in the eight source documents against the parsed PDF | none lost |
+| The server can read a PDF | `/health` reports `pdf_reader`; the deploy job fails if it is not `ok` | ok (it was a missing libGL on 2026-10-24) |
+
+The first row's questions and the matcher's lines are in the two files; the gates run on every change in CI. A question
+about the live library that the benchmark misses is added to `QUESTIONS` with the document it must come from.
