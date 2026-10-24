@@ -29,6 +29,7 @@ _FINGERPRINT_CHECK_INTERVAL_SECONDS = 15
 # it was not adopted. tests/test_retrieval_quality.py keeps the benchmark's shipped setting equal to these.
 _TOP_K = 2
 _CANDIDATE_POOL = 4
+_OWN_AGREEMENT_POOL = 8  # candidates for the borrower's own agreement, searched on its own (see check_policy)
 
 # The excerpts come from documents people wrote (policy text, a borrower's contract, an uploaded file), so they can contain
 # sentences that read like orders to an AI. The note travels with every result so the model is reminded where it stands.
@@ -103,6 +104,14 @@ def check_policy(query: str, account_id: str | None = None) -> dict:
     Ground any statement made to a borrower in the returned text, rather
     than stating a policy number or contract term from memory."""
     results = _retriever().retrieve(query, top_k=_TOP_K, candidate_pool=_CANDIDATE_POOL, account_id=account_id)
+    if account_id:
+        # The borrower's own agreement competes with every policy document for two slots and loses on a question like
+        # "what did I give as security?" (the policy library is eight dense documents; the agreement is one of them).
+        # So its two best-matching passages are always offered too (a wider pool: the clause asked about is often second,
+        # measured on the demo agreements), each labelled with its own source_document.
+        own = _retriever().retrieve(query, top_k=2, candidate_pool=_OWN_AGREEMENT_POOL, account_id=account_id,
+                                    document_type="loan_agreement")
+        results = results + [r for r in own if r["text"] not in {x["text"] for x in results}]
     response = {"query": query, "results": results}
     if _UNTRUSTED_NOTE:
         response["note"] = _UNTRUSTED_NOTE

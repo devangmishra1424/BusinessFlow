@@ -72,7 +72,7 @@ class AccountDetailsArgs(_Args):
 
 
 class OpenPageArgs(_Args):
-    page: Literal["portfolio", "inbox", "new_account", "bank", "quality"]
+    page: Literal["portfolio", "inbox", "new_account", "bank", "quality", "library"]
 
 
 class CannotHelpArgs(_Args):
@@ -275,7 +275,7 @@ MENU = [
                                  "risk = why it has the risk it has."},
     }, ["account"]),
     _tool("open_page", "Just go to a page.", {"page": {"type": "string",
-                                                        "enum": ["portfolio", "inbox", "new_account", "bank", "quality"]}},
+                                                        "enum": ["portfolio", "inbox", "new_account", "bank", "quality", "library"]}},
           ["page"]),
     _tool("bank_status", "The bank statement: how many credits are waiting to be matched to a borrower, and the "
           "best guesses -- e.g. 'anything from the bank to post?', 'unmatched payments'."),
