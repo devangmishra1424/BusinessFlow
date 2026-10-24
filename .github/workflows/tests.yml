@@ -113,3 +113,17 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.VM_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} deploy
+
+      - name: Check the deployed apps are healthy and can read a PDF
+        # The deploy above returns before the services are back, so this waits (bounded) for them. A server that cannot
+        # read PDFs (a missing system library, as the VM once lacked libGL) answers /health with pdf_reader set to the
+        # reason; it is flagged here, on the deploy, instead of by the first person to upload a document.
+        run: |
+          for i in $(seq 1 30); do
+            body=$(curl -s -m 10 https://businessflowai-ops.duckdns.org/health || true)
+            echo "$body" | grep -q '"database":"ok"' && break
+            sleep 6
+          done
+          echo "ops health: $body"
+          echo "$body" | grep -q '"pdf_reader":"ok"' || { echo "::error::the ops server cannot read PDFs: $body"; exit 1; }
+          curl -sf -m 15 https://businessflowai.duckdns.org/health | grep -q '"database":"ok"' 

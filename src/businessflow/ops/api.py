@@ -81,6 +81,7 @@ from businessflow.rag.ingest import (
     extract_document_text,
     ingest_document,
     list_active_documents,
+    pdf_reader_status,
     retire_document,
 )
 from businessflow.tools import validation
@@ -815,7 +816,9 @@ def health():
     except (psycopg.Error, RuntimeError) as exc:
         logger.error("health check failed: database unreachable (%s) -- check the Supabase project isn't paused and DATABASE_URL is right", type(exc).__name__)
         return JSONResponse(status_code=503, content={"status": "degraded", "database": "unreachable"})
-    return {"status": "ok", "database": "ok"}
+    # Not a reason to take the site down (chat, markdown uploads and everything else work); a field the deploy check
+    # reads, so a server that cannot read PDFs is flagged the moment it is deployed, not when someone uploads one.
+    return {"status": "ok", "database": "ok", "pdf_reader": pdf_reader_status()}
 
 
 @app.get("/accounts", response_model=list[AccountSummaryOut], dependencies=[Depends(require_api_key)])

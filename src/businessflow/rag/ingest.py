@@ -10,10 +10,12 @@ with no replacement, or half-inserted.
 """
 
 import hashlib
+import importlib
 import logging
 import math
 import re
 import threading
+import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -229,6 +231,31 @@ def _supersede_existing_chunks(conn, source_document: str, superseded_at: dateti
         "update document_chunks set superseded_at = %s where source_document = %s and superseded_at is null",
         (superseded_at, source_document),
     )
+
+
+_PDF_READER_LIBRARIES = ("cv2", "rapidocr")  # what the PDF pipeline imports first, and what a bare server lacks
+_PDF_CHECK_EVERY_SECONDS = 60
+_pdf_check: tuple[float, str] | None = None
+
+
+def pdf_reader_status() -> str:
+    """"ok", or why this server cannot read a PDF (e.g. "ImportError: libGL.so.1: cannot open shared object file").
+    Found 2026-10-24: the VM lacked libGL, every PDF upload was a 500, and nothing said so until someone uploaded one.
+    Imports only what the PDF pipeline imports before it reads a byte, so it is cheap; the answer is cached for a
+    minute. Markdown and Word uploads do not need it."""
+    global _pdf_check
+    now = time.monotonic()
+    if _pdf_check is not None and now - _pdf_check[0] < _PDF_CHECK_EVERY_SECONDS:
+        return _pdf_check[1]
+    status = "ok"
+    for module in _PDF_READER_LIBRARIES:
+        try:
+            importlib.import_module(module)
+        except ImportError as e:  # the specific failure: a missing shared library or package
+            status = f"{type(e).__name__}: {str(e)[:150]}"
+            break
+    _pdf_check = (now, status)
+    return status
 
 
 def list_active_documents(account_id: str = "general") -> list[dict]:

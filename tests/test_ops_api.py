@@ -66,7 +66,7 @@ def _auth() -> dict[str, str]:
 def test_health_reports_ok_when_the_database_is_reachable():
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "database": "ok"}
+    assert response.json() == {"status": "ok", "database": "ok", "pdf_reader": "ok"}
 
 
 @_ops_key_skip
