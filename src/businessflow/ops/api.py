@@ -2300,7 +2300,7 @@ class VoiceScreenIn(BaseModel):
     """What the operator is looking at, so "this account" and "her" mean the profile that is open, and "next" or
     "approve it" mean the item of the run in progress."""
 
-    view: Literal["overview", "inbox"] = "overview"
+    view: Literal["overview", "inbox", "bank", "quality", "library"] = "overview"
     account_id: str | None = Field(default=None, max_length=40)
     workflow: VoiceWorkflowIn | None = None
 

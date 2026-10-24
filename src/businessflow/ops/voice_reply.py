@@ -72,7 +72,7 @@ class DashboardData(Protocol):
 class ScreenOut(BaseModel):
     """Where the page goes. Every field is optional: only what is set changes."""
 
-    view: Literal["overview", "inbox", "bank", "quality"] | None = None
+    view: Literal["overview", "inbox", "bank", "quality", "library"] | None = None
     filter: str | None = None  # all | overdue | disputed | broken_promises | not_on_telegram
     sort: Literal["urgency", "risk", "id"] | None = None
     search: str | None = None
@@ -1210,6 +1210,7 @@ def respond(
                                        ScreenOut(view="overview", open_form="new_account")),
                 "bank": _answer("Here's the bank statement page.", ScreenOut(view="bank")),
                 "quality": _answer("Here's how the assistant is checked.", ScreenOut(view="quality")),
+                "library": _answer("Here's the policy library.", ScreenOut(view="library")),
             }[args.page]
         elif tool == "bank_status":
             reply = _bank_status(data)

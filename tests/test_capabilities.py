@@ -165,3 +165,42 @@ def test_every_new_voice_command_is_on_the_menu_the_model_chooses_from(tool):
     from businessflow.ops.voice import MENU
 
     assert tool in {t["function"]["name"] for t in MENU}
+
+
+def test_voice_opens_the_policy_library_and_accepts_any_page_as_the_current_screen():
+    assert _ask("open_page", page="library").screen.view == "library"
+    from fastapi.testclient import TestClient
+    import os
+    from businessflow.ops.api import app
+
+    for view in ("bank", "quality", "library"):  # asking while one of these pages is open used to be refused (422)
+        r = TestClient(app).post("/voice/plan", headers={"X-API-Key": os.environ["OPS_API_KEY"]},
+                                 json={"tool": "open_page", "arguments": {"page": "bank"}, "heard": "open the bank", "screen": {"view": view}})
+        assert r.status_code == 200, (view, r.text)
+
+
+def test_a_borrowers_own_agreement_is_always_offered_beside_the_policy_excerpts(reseed_accounts):
+    from pathlib import Path
+
+    from businessflow.rag.ingest import ingest_document
+    from businessflow.rag.store import delete_chunks_for_document
+    from businessflow.tools import policy_tools
+
+    path = Path(__file__).resolve().parents[1] / "data" / "documents" / "BF-1001" / "zz_agreement_check.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# Security\n\nThe Borrower hypothecates the light commercial truck registered PB 10 HK 4471.\n", encoding="utf-8")
+    try:
+        ingest_document(str(path), "loan_agreement", "BF-1001")
+        policy_tools._cached_retriever = None  # a fresh snapshot with the new document
+        results = policy_tools.check_policy("what is the grace period?", "BF-1001")["results"]  # a general-policy question
+        assert any("PB 10 HK 4471" in r["text"] for r in results), "the borrower's own agreement must be offered too"
+        other = policy_tools.check_policy("what is the grace period?", "BF-1002")["results"]
+        assert not any("PB 10 HK 4471" in r["text"] for r in other), "never another borrower's"
+    finally:
+        delete_chunks_for_document(str(path))
+        path.unlink(missing_ok=True)
+        try:
+            path.parent.rmdir()
+        except OSError:
+            pass  # other documents live there
+        policy_tools._cached_retriever = None
