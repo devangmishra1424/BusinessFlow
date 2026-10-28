@@ -1,0 +1,14 @@
+[Unit]
+Description=Voice service (STT + TTS)
+After=network.target
+
+[Service]
+User=voice
+WorkingDirectory=/opt/voice
+EnvironmentFile=/etc/voice.env
+ExecStart=/opt/voice/venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

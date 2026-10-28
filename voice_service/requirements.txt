@@ -1,0 +1,8 @@
+# What /opt/voice/venv holds on the voice VM (Ubuntu 24.04, Python 3.12). av is pinned: faster-whisper 1.2.1 fails to
+# open audio with a newer PyAV ("open() got an unexpected keyword argument 'metadata_errors'").
+faster-whisper==1.2.1
+av<16
+piper-tts
+fastapi
+uvicorn
+python-multipart
