@@ -193,9 +193,28 @@ class ToolCallInfo(BaseModel):
     arguments: dict
 
 
+class ToolTiming(BaseModel):
+    tool: str
+    seconds: float
+    outcome: str  # "ok", "error", or "blocked" (another account, or an unverified chat)
+
+
+class AnswerTiming(BaseModel):
+    """What the chat shows small under a reply (observability/trace.py's answer_timing): server time from the request
+    arriving to the reply being ready. It does not include the network to the browser or speaking the reply aloud."""
+    seconds: float
+    listen_seconds: float | None = None  # speech-to-text, on a voice turn only
+    model_seconds: float  # every model call of the turn together
+    model_calls: int
+    tools: list[ToolTiming]
+
+
 class SendMessageResponse(BaseModel):
     reply: str
     tool_calls: list[ToolCallInfo]
+    # Set when the turn went through the model; None for a reply written without it (verification, a refused
+    # recording), which has nothing to time.
+    timing: AnswerTiming | None = None
     # Set only on the turn where an anonymous session just verified via
     # credentials typed into the chat (see send_message_endpoint) -- lets
     # the frontend update its own account-bound UI (the header chip)
@@ -755,9 +774,11 @@ def _process_text_turn(conversation_id: str, session: dict, text: str, client_ip
         # mis-slicing this into the wrong turn's messages.
         turn_start = index_of_last_user_message(updated_conversation)
         tool_calls = extract_new_tool_calls(updated_conversation, turn_start)
+        timing = trace.answer_timing()
         return SendMessageResponse(
             reply=reply,
             tool_calls=[ToolCallInfo(tool=name, arguments=args) for name, args in tool_calls],
+            timing=AnswerTiming(**timing) if timing else None,
         )
 
 
