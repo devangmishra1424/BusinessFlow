@@ -400,12 +400,11 @@ function addUserMessage(text) {
 
 const SPEAKER_ICON = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M11 5 6 9H3v6h3l5 4V5Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 8a5 5 0 0 1 0 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
 
-function addAssistantMessage(text, toolCalls = [], isError = false) {
+function addAssistantMessage(text, toolCalls = [], isError = false, timing = null) {
   const row = document.createElement("div");
   row.className = `msg-row assistant${isError ? " error" : ""}`;
-  const chipsHtml = toolCalls.length
-    ? `<div class="tool-chips">${toolCalls.map((t) => `<span class="tool-chip">✓ ${escapeHtml(TOOL_LABELS[t.tool] || t.tool)}</span>`).join("")}</div>`
-    : "";
+  // How long the server took and which tools it used, small under the reply (answermeta.js).
+  const chipsHtml = isError ? "" : AnswerMeta.html(timing, toolCalls, TOOL_LABELS);
   const speakHtml = isError ? "" : `<button type="button" class="speak-btn" title="Listen to this reply" aria-label="Listen to this reply">${SPEAKER_ICON}</button>`;
   // The agent writes light markdown (**bold**, lists); richtext.js shows it as formatting, escaping everything else. If that
   // script failed to load, the reply is still shown, as plain escaped text.
@@ -457,7 +456,7 @@ async function sendUserText(text, { clearInput = false } = {}) {
   try {
     const result = await sendMessageApi(state.conversationId, text);
     hideTyping();
-    addAssistantMessage(result.reply, result.tool_calls);
+    addAssistantMessage(result.reply, result.tool_calls, false, result.timing);
     if (result.tool_calls && result.tool_calls.length) state.dashboardStale = true;
     if (result.verified_account_id) {
       state.accountId = result.verified_account_id;
@@ -705,7 +704,7 @@ async function handleRecordingStopped() {
     const result = await res.json();
     hideTyping();
     if (result.transcript) addUserMessage(result.transcript);
-    const speakBtn = addAssistantMessage(result.reply, result.tool_calls);
+    const speakBtn = addAssistantMessage(result.reply, result.tool_calls, false, result.timing);
     if (speakBtn) playSpeech(result.reply, speakBtn);
     if (result.tool_calls && result.tool_calls.length) state.dashboardStale = true;
     if (result.verified_account_id) {

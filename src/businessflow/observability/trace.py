@@ -132,6 +132,30 @@ def set_attr(**attrs) -> None:
         t.attrs.update(attrs)
 
 
+def answer_timing(t: Trace | None = None) -> dict | None:
+    """What the chat shows small under a reply: how long the turn has taken so far, and where the time went -- listening
+    (speech-to-text), the model's calls together, and each tool in the order it ran. Read from the same spans the
+    quality report is built from, so the line under a reply and the report can never disagree. Names, outcomes and
+    seconds only, never any text. None when no trace is open (a script, a test of one function)."""
+    t = t or _current_trace.get()
+    if t is None:
+        return None
+    spans = list(t.spans)  # a copy: a worker thread may still be appending
+    listen = [s["seconds"] for s in spans if s["name"] == "stt"]
+    model = [s["seconds"] for s in spans if s["name"] == "llm"]
+    return {
+        "seconds": round(time.perf_counter() - t.started, 3),
+        "listen_seconds": round(sum(listen), 3) if listen else None,
+        "model_seconds": round(sum(model), 3),
+        "model_calls": len(model),
+        "tools": [
+            # A tool span that raised has no outcome of its own, only the error the span recorded.
+            {"tool": s["attrs"].get("tool"), "seconds": s["seconds"], "outcome": s["attrs"].get("outcome", "error")}
+            for s in spans if s["name"] == "tool"
+        ],
+    }
+
+
 def to_record(t: Trace) -> dict:
     """The saved form: numbers, names, outcomes and failed checks -- no scratch text."""
     from businessflow.observability import checks

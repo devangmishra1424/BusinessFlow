@@ -238,6 +238,14 @@ into the quality report on the ops Quality tab and in the nightly message:
 - two safeguard gates (every reply checked; no promise from chat without a read-back);
 - outcomes judged later by what actually happened: reminders delivered and paid within 3 days by tone, borrowers repeating themselves, bank suggestions people kept, promises kept by channel.
 
+**The same trace, shown small under each web-chat reply.** A search says "(0.43 seconds)"; the chat says how long the
+server took to answer and what it used: `Answered in 1.61 s · model 1.20 s (2 calls) · Checked our policy 0.41 s`. A voice
+turn adds the time spent listening; a tool that did not go through is marked, and the raw tool name is in the tooltip.
+The numbers are the open trace's own spans (`trace.answer_timing`, the `timing` field of a message response), so the
+line and the quality report cannot disagree. It is server time, from the request arriving to the reply being ready:
+it leaves out the network to the browser and speaking the reply aloud. Only names, outcomes and seconds are sent,
+never any text. A reply written without the model (verification, an unreadable recording) has no line.
+
 **Bring a real loan book; reset the demo.**
 - **Loan book**: ops import a loan book as CSV (`ops/loan_book.py`). Columns are matched by name, Indian phone and date formats are read, and every row is checked the way the New account form checks one.
 - Nothing is opened unless every row is right. A loan whose reference is already here is skipped on a second import, never opened twice.
