@@ -1164,8 +1164,18 @@ def test_the_chat_api_prefetches_the_hindi_voice_when_it_starts(monkeypatch):
     # Entering the TestClient as a context manager runs the app's lifespan (the module-level `client` does not).
     calls = []
     monkeypatch.setattr(browser_api, "prefetch_voices", lambda: calls.append("prefetch"))
+    monkeypatch.setattr(browser_api, "warm_up_policy_search", lambda: None)  # the real one would load models on a thread
     with TestClient(app):
         assert calls == ["prefetch"]
+
+
+def test_the_chat_api_warms_up_the_policy_search_when_it_starts(monkeypatch):
+    # So the first policy question after a restart or a deploy does not spend ~20 s loading the search models.
+    calls = []
+    monkeypatch.setattr(browser_api, "prefetch_voices", lambda: calls.append("prefetch"))
+    monkeypatch.setattr(browser_api, "warm_up_policy_search", lambda: calls.append("warm-up"))
+    with TestClient(app):
+        assert calls == ["prefetch", "warm-up"]
 
 
 # ---------------------------------------------------------------------------

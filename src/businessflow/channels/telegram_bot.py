@@ -84,6 +84,7 @@ from businessflow.outbound.send import notify_telegram_chat
 from businessflow.tools.account_tools import flag_dispute, get_payment_history, get_payment_status
 from businessflow.tools.escalation_tools import escalate_to_human, request_closure_certificate
 from businessflow.tools.payment_tools import generate_payment_link
+from businessflow.tools.policy_tools import warm_up_in_background as warm_up_policy_search
 from businessflow.tools.request_tools import get_my_requests
 
 # Matches agent/client.py's convention: load .env at import time, then
@@ -1086,9 +1087,12 @@ async def _on_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def _on_start(application: Application) -> None:
     """post_init: runs once before polling begins. The Hindi voice is fetched here, off the event loop, so the
-    first Hindi reply does not download it mid-conversation (a blocking download would freeze every chat)."""
+    first Hindi reply does not download it mid-conversation (a blocking download would freeze every chat). The policy
+    search's models load on a thread of their own, so the first policy question after a restart does not spend ~20 s
+    loading them and polling is not held up either (tools/policy_tools.py)."""
     await _register_commands(application)
     await asyncio.to_thread(prefetch_voices)
+    warm_up_policy_search()
 
 
 async def _register_commands(application: Application) -> None:

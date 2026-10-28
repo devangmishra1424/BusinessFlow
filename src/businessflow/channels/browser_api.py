@@ -92,6 +92,7 @@ from businessflow.tools import validation
 from businessflow.tools.account_tools import flag_dispute, get_payment_status
 from businessflow.tools.escalation_tools import escalate_to_human, request_closure_certificate
 from businessflow.tools.payment_tools import generate_payment_link
+from businessflow.tools.policy_tools import warm_up_in_background as warm_up_policy_search
 from businessflow.tools.request_tools import request_fee_waiver
 
 _MAX_VOICE_NOTE_SECONDS = 120  # same bound as telegram_bot.py -- an explicit cap on ASR compute, not an unbounded wait
@@ -102,6 +103,9 @@ logger = logging.getLogger(__name__)
 async def _lifespan(_app: FastAPI):
     # The Hindi voice is fetched before the first request, so the first Hindi "speak" tap does not download 63 MB.
     await asyncio.to_thread(prefetch_voices)
+    # The policy search's models load here, on a thread of their own, so the first policy question after a restart or a
+    # deploy does not spend ~20 s loading them (tools/policy_tools.py). The service takes requests meanwhile.
+    warm_up_policy_search()
     yield
 
 

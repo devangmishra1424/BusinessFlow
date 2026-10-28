@@ -56,7 +56,11 @@ own uploaded documents, stored in pgvector on the same Postgres project as
 every other table. Each service answers from one in-memory snapshot of the
 chunks and their embeddings and re-checks a one-query fingerprint of the
 table every 15 seconds, so an uploaded document is searchable within
-seconds with no restart. (An earlier design read the text from a snapshot
+seconds with no restart. The two search models load when a service starts, on
+a thread of its own (`tools/policy_tools.py` `warm_up`): measured on a fresh
+process, the first policy search took 21 s and the second 0.2 s, so without it
+whoever asked first after a restart or a deploy waited about 20 s. (An
+earlier design read the text from a snapshot
 but ran the embedding search live against the table, and raised an error
 whenever a document arrived between the two.) Ingestion (Docling) is
 all-or-nothing: parse, check the text is readable, embed, then replace the
