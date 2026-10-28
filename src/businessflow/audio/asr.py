@@ -13,6 +13,7 @@ import numpy as np
 import torch
 from faster_whisper import WhisperModel
 
+from businessflow.audio import remote
 from businessflow.observability import trace
 from businessflow.rag.tokenize import dominant_script
 
@@ -61,23 +62,46 @@ def _model(model_size: str) -> WhisperModel:
     return WhisperModel(model_size, device="cpu", compute_type="int8")
 
 
+def _decode_local(audio_np: np.ndarray, model_size: str, language: str | None) -> remote.Transcript:
+    segments, info = _model(model_size).transcribe(audio_np, language=language, **_DECODE_KWARGS)
+    segments = list(segments)
+    text = " ".join(segment.text.strip() for segment in segments)
+    # Whisper scores every segment it decodes; these were computed and thrown away. Weighted by segment length,
+    # they are the cheapest honest signal of a mis-hearing (observability/checks.py's stt.* rules).
+    lengths = [max(len(seg.text), 1) for seg in segments]
+    avg_logprob = no_speech_prob = None
+    if segments:
+        avg_logprob = round(sum(seg.avg_logprob * n for seg, n in zip(segments, lengths)) / sum(lengths), 3)
+        no_speech_prob = round(max(seg.no_speech_prob for seg in segments), 3)
+    return remote.Transcript(text, avg_logprob, no_speech_prob, getattr(info, "language", None))
+
+
 def transcribe(audio: torch.Tensor, model_size: str = _DEFAULT_MODEL_SIZE, language: str | None = None) -> str:
     """Transcribes a mono float32 audio tensor (as produced by
     businessflow.audio.io.load_wav_as_tensor or vad.trim_to_speech) to text.
     language=None lets Whisper auto-detect; pass "hi" or "en" to force it.
-    See _DECODE_KWARGS above for why each decode-time override is set."""
+    See _DECODE_KWARGS above for why each decode-time override is set.
+
+    With VOICE_SERVICE_URL set, the default model's decode runs on the voice VM (audio/remote.py) and falls back to
+    the local model, with an ERROR logged, when the service cannot answer. A caller that names its own model_size
+    (the comparison scripts) always decodes locally."""
     audio_np: np.ndarray = audio.numpy() if isinstance(audio, torch.Tensor) else audio
     with trace.span("stt", language=language, audio_seconds=round(len(audio_np) / 16000, 2)) as rec:
-        segments, info = _model(model_size).transcribe(audio_np, language=language, **_DECODE_KWARGS)
-        segments = list(segments)
-        text = " ".join(segment.text.strip() for segment in segments)
-        # Whisper scores every segment it decodes; these were computed and thrown away. Weighted by segment length,
-        # they are the cheapest honest signal of a mis-hearing (observability/checks.py's stt.* rules).
-        lengths = [max(len(seg.text), 1) for seg in segments]
-        if segments:
-            rec["avg_logprob"] = round(sum(seg.avg_logprob * n for seg, n in zip(segments, lengths)) / sum(lengths), 3)
-            rec["no_speech_prob"] = round(max(seg.no_speech_prob for seg in segments), 3)
+        result = None
+        if model_size == _DEFAULT_MODEL_SIZE and remote.configured():
+            try:
+                result = remote.transcribe(audio_np, language)
+                rec["backend"] = "remote"
+            except remote.VoiceServiceUnavailable:
+                pass  # remote.py logged why at ERROR; the local model below is the designed fallback
+        if result is None:
+            result = _decode_local(audio_np, model_size, language)
+            rec["backend"] = "local"
+        text = result.text
+        if result.avg_logprob is not None:
+            rec["avg_logprob"] = result.avg_logprob
+            rec["no_speech_prob"] = result.no_speech_prob
         rec["chars"] = len(text)
         rec["script"] = dominant_script(text)
-        rec["detected_language"] = getattr(info, "language", None)
+        rec["detected_language"] = result.language
         return text

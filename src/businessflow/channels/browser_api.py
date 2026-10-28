@@ -78,6 +78,7 @@ from businessflow.agent.loop import (
     start_conversation_with_recap,
     verify_and_start_conversation,
 )
+from businessflow.audio import remote
 from businessflow.audio.asr import transcribe
 from businessflow.audio.tts import encode_ogg_opus, prefetch_voices, speak_english, speak_hindi
 from businessflow.audio.vad import trim_to_speech
@@ -605,7 +606,12 @@ def health():
     except (psycopg.Error, RuntimeError) as exc:
         logger.error("health check failed: database unreachable (%s) -- check the Supabase project isn't paused and DATABASE_URL is right", type(exc).__name__)
         return JSONResponse(status_code=503, content={"status": "degraded", "database": "unreachable"})
-    return {"status": "ok", "database": "ok"}
+    body = {"status": "ok", "database": "ok"}
+    if remote.configured():
+        # Still 200: a voice service that is down costs speed (the local models answer), not the service. "local-fallback"
+        # is how a monitor sees that it is down; the reason is in the log (audio/remote.py), not in this public body.
+        body["voice"] = "local-fallback" if remote.status()["paused"] else "remote"
+    return body
 
 
 # AccessDeniedError's own AccountLockedError (repeated wrong keys against

@@ -32,6 +32,7 @@ from huggingface_hub.errors import LocalEntryNotFoundError
 from piper import PiperVoice
 from transformers import AutoTokenizer, VitsModel
 
+from businessflow.audio import remote
 from businessflow.audio.verbalizer import has_unverbalized_pattern
 from businessflow.observability import trace
 
@@ -170,6 +171,24 @@ def _traced(engine: str, text: str, synthesize) -> Speech:
         return speech
 
 
+_SERVICE_HINDI_VOICE = "priyamvada"
+
+
+def _piper_chunks(text: str, voice: str, local_voice, use_service: bool = True) -> tuple[list, int | None]:
+    """Piper's output for text, one float32 array per sentence, and the sample rate (None when there was nothing to
+    say). From the voice service when VOICE_SERVICE_URL is set (audio/remote.py); from `local_voice()`, the Piper voice
+    loaded in this process, when it is not or when the service cannot answer. Both are the same model file, so it is the
+    same voice either way (Piper adds a little random noise, so two syntheses of one text never match sample for
+    sample, here or there)."""
+    if use_service and remote.configured():
+        try:
+            return remote.synth(text, voice)
+        except remote.VoiceServiceUnavailable:
+            pass  # remote.py logged why at ERROR; the local voice below is the designed fallback
+    chunks = list(local_voice().synthesize(text))
+    return [c.audio_float_array for c in chunks], (chunks[0].sample_rate if chunks else None)
+
+
 def speak_english(text: str) -> Speech:
     return _traced("piper_en", text, _speak_english)
 
@@ -180,10 +199,10 @@ def _speak_english(text: str) -> Speech:
     audio chunk per sentence -- joined here with a deliberate pause
     between them (see _SENTENCE_GAP_SECONDS) rather than Piper's own
     back-to-back concatenation."""
-    voice = _piper_voice()
-    chunks = list(voice.synthesize(text))
-    sample_rate = chunks[0].sample_rate
-    audio = _join_with_gaps([torch.from_numpy(c.audio_float_array) for c in chunks], sample_rate)
+    chunks, sample_rate = _piper_chunks(text, "en", _piper_voice)
+    if not chunks:
+        raise ValueError(f"speak_english: nothing speakable in {text[:60]!r}")
+    audio = _join_with_gaps([torch.from_numpy(c) for c in chunks], sample_rate)
     return Speech(audio=_limit_peak(audio), sample_rate=sample_rate)
 
 
@@ -250,10 +269,14 @@ def _speak_hindi_run(run: str) -> tuple[torch.Tensor, int] | None:
     for engine in _hindi_engine_order():
         try:
             if engine == "piper":
-                chunks = list(_piper_hindi(_piper_hindi_voice_name()).synthesize(run))
+                voice_name = _piper_hindi_voice_name()
+                # The voice service holds priyamvada only; any other PIPER_HINDI_VOICE is spoken here.
+                chunks, rate = _piper_chunks(
+                    run, "hi", lambda: _piper_hindi(voice_name), use_service=voice_name == _SERVICE_HINDI_VOICE,
+                )
                 if not chunks:
                     return None
-                return torch.cat([torch.from_numpy(c.audio_float_array) for c in chunks]), chunks[0].sample_rate
+                return torch.cat([torch.from_numpy(c) for c in chunks]), rate
             tokenizer, model = _mms_hindi()
             audio = _synthesize_mms(tokenizer, model, run)
             return None if audio is None else (audio, model.config.sampling_rate)
