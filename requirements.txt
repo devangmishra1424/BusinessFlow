@@ -1,6 +1,7 @@
 # --- Audio in ---
 silero-vad          # VAD, ONNX-backed
 faster-whisper      # ASR, int8 CPU (size decided by the small-vs-base test, see eval/)
+av<16               # faster-whisper 1.2.1 cannot decode audio files with PyAV 16+ (voice_service tests, voice VM)
 onnxruntime==1.29.0
 
 # --- Reasoning ---
