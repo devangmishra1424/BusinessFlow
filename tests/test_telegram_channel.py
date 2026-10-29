@@ -588,5 +588,24 @@ def test_the_bot_prefetches_the_hindi_voice_after_registering_commands_and_befor
         bot = FakeBot()
 
     monkeypatch.setattr(telegram_bot, "prefetch_voices", lambda: order.append("prefetch"))
+    monkeypatch.setattr(telegram_bot, "warm_up_policy_search", lambda: None)  # the real one would load models on a thread
     asyncio.run(telegram_bot._on_start(FakeApplication()))
     assert order == ["commands", "prefetch"]
+
+
+def test_the_bot_warms_up_the_policy_search_before_polling_without_waiting_for_it(monkeypatch):
+    # The first policy question after a restart should not spend ~20 s loading the search models; and polling must not
+    # wait for them either, which is why this only starts the warm-up (it returns at once).
+    order = []
+
+    class FakeBot:
+        async def set_my_commands(self, commands):
+            order.append("commands")
+
+    class FakeApplication:
+        bot = FakeBot()
+
+    monkeypatch.setattr(telegram_bot, "prefetch_voices", lambda: order.append("prefetch"))
+    monkeypatch.setattr(telegram_bot, "warm_up_policy_search", lambda: order.append("warm-up"))
+    asyncio.run(telegram_bot._on_start(FakeApplication()))
+    assert order == ["commands", "prefetch", "warm-up"]

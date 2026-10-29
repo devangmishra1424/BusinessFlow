@@ -86,6 +86,42 @@ def _refresh_if_changed() -> None:
     logger.info("policy snapshot rebuilt: %d active chunks", len(_cached_retriever._ids))
 
 
+# What warm_up searches for. Any question about the written policy would do; this is one the knowledge base answers.
+_WARM_UP_QUERY = "late fee"
+
+
+def warm_up() -> None:
+    """Loads, by running one real search, what the first policy question would otherwise load while a borrower waits:
+    the snapshot of the documents, the reranker and the embedding model. Measured on a fresh process, the first search
+    took 21 s (the embedding model 11 s, the reranker 13 s) and the second 0.2 s, so every restart or deploy used to cost
+    whoever asked first about 20 s. A service calls this once as it starts (warm_up_in_background).
+
+    It never stops a service from starting. If the database or the model files cannot be reached it logs why and leaves
+    the first question to load them, as before -- and to fail loudly if the cause is still there. Anything else
+    propagates: an error nobody expected should not be hidden in a startup thread."""
+    started = time.perf_counter()
+    try:
+        retriever = _retriever()
+        retriever.retrieve(_WARM_UP_QUERY, top_k=1, candidate_pool=2)
+    except (psycopg.Error, OSError, RuntimeError):
+        logger.warning(
+            "policy search warm-up failed, so the first policy question will load it instead (and fail the same way if "
+            "the cause is still there): check DATABASE_URL, and that the embedding and reranker models can be loaded "
+            "(they are fetched from huggingface.co the first time)", exc_info=True,
+        )
+        return
+    logger.info("policy search warmed up in %.1f s (%d active chunks)", time.perf_counter() - started, len(retriever._ids))
+
+
+def warm_up_in_background() -> threading.Thread:
+    """Starts warm_up on a thread of its own and returns at once, so the service answers /health and takes requests
+    while the models load. A question that arrives meanwhile builds or loads whatever is still missing itself, so it
+    waits no longer than it did before warm-up existed. A daemon thread: stopping the service does not wait for it."""
+    thread = threading.Thread(target=warm_up, name="policy-warm-up", daemon=True)
+    thread.start()
+    return thread
+
+
 @mcp.tool(
     description=(
         "Look up the written policy relevant to a free-text question, e.g. 'can I get "
