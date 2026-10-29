@@ -244,7 +244,7 @@ into the quality report on the ops Quality tab and in the nightly message:
 
 **The same trace, shown small under each web-chat reply.** A search says "(0.43 seconds)"; the chat says how long the
 server took to answer and what it used: `Answered in 1.61 s · model 1.20 s (2 calls) · Checked our policy 0.41 s`. A voice
-turn adds the time spent listening; a tool that did not go through is marked, and the raw tool name is in the tooltip.
+turn adds the time spent listening; a tool that did not go through is marked, and the raw tool name is in the tooltip. When the AI provider's per-minute allowance ran out and the reply had to wait for it to refill (one free-tier key, a long prompt), that wait is its own step, `waited 1 min 58 s for the AI service's rate limit`, and is taken out of the model's time, so a slow answer is not read as a slow model. The dots between steps are text in the markup, not stylesheet rules, so the line reads correctly even on a phone that still has an older stylesheet cached.
 The numbers are the open trace's own spans (`trace.answer_timing`, the `timing` field of a message response), so the
 line and the quality report cannot disagree. It is server time, from the request arriving to the reply being ready:
 it leaves out the network to the browser and speaking the reply aloud. Only names, outcomes and seconds are sent,

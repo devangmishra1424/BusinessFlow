@@ -164,6 +164,7 @@ def _create_completion(**kwargs):
                 "every configured Groq key is rate-limited -- waiting %.0fs for one to refill (round %d of %d)",
                 wait_seconds, rate_limit_waits, _RATE_LIMIT_WAIT_ROUNDS,
             )
+            trace.note(rate_limit_wait_seconds=wait_seconds)  # shown apart from the model's own time (trace.answer_timing)
             time.sleep(wait_seconds)
             reset_to_primary_key()
         except groq.BadRequestError as e:

@@ -58,6 +58,30 @@ def test_a_tool_that_failed_says_so_and_one_that_raised_counts_as_an_error():
     assert [t["outcome"] for t in timing["tools"]] == ["blocked", "error"]
 
 
+def test_time_spent_waiting_on_the_rate_limit_is_taken_out_of_the_model_time_and_reported_alone():
+    # A reply that took two minutes because the free tier's per-minute allowance ran out must not read as "the model took
+    # two minutes": the waits (noted on each model call by agent/loop.py) come out of model_seconds into wait_seconds.
+    timing = trace.answer_timing(_trace_with(
+        _span("llm", 31.0, model="m", rate_limit_wait_seconds=30.0, rate_limit_waits=1),
+        _span("tool", 0.3, tool="check_policy", outcome="ok"),
+        _span("llm", 32.0, model="m", rate_limit_wait_seconds=28.0, rate_limit_waits=1),
+    ))
+    assert timing["wait_seconds"] == pytest.approx(58.0)
+    assert timing["model_seconds"] == pytest.approx(5.0)
+    assert timing["model_calls"] == 2
+
+
+def test_no_waiting_is_reported_as_zero_and_model_time_is_unchanged():
+    timing = trace.answer_timing(_trace_with(_span("llm", 0.8), _span("llm", 0.9)))
+    assert timing["wait_seconds"] == 0
+    assert timing["model_seconds"] == pytest.approx(1.7)
+
+
+def test_model_time_never_goes_negative_if_a_wait_is_longer_than_the_call_it_was_noted_on():
+    timing = trace.answer_timing(_trace_with(_span("llm", 0.5, rate_limit_wait_seconds=10.0)))
+    assert timing["model_seconds"] == 0 and timing["wait_seconds"] == pytest.approx(10.0)
+
+
 def test_with_no_trace_open_there_is_no_timing():
     assert trace.answer_timing() is None
 
@@ -120,7 +144,7 @@ def test_the_timing_holds_names_and_numbers_only_never_what_was_said_or_asked(mo
     body = client.post(f"/conversations/{_session()}/messages", json={"message": "my PAN is ABCDE1234F"}).json()
     flat = str(body["timing"])
     assert "ABCDE1234F" not in flat and "late fee" not in flat
-    assert set(body["timing"]) == {"seconds", "listen_seconds", "model_seconds", "model_calls", "tools"}
+    assert set(body["timing"]) == {"seconds", "listen_seconds", "model_seconds", "wait_seconds", "model_calls", "tools"}
     assert set(body["timing"]["tools"][0]) == {"tool", "seconds", "outcome"}
 
 
