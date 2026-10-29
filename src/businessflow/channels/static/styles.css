@@ -641,11 +641,12 @@ button, input, select, textarea { font-family: inherit; }
 }
 
 /* The small line under a reply: how long it took and what was used (answermeta.js) */
-.answer-meta { display: flex; flex-wrap: wrap; align-items: baseline; margin-top: 5px; padding: 0 4px; font-size: 11px; line-height: 1.5; color: var(--text-3); }
-.answer-meta > span + span::before { content: "·"; margin: 0 6px; }
-.answer-time { font-weight: 600; font-variant-numeric: tabular-nums; }
-.answer-step { font-variant-numeric: tabular-nums; }
+.answer-meta { margin-top: 5px; padding: 0 4px; font-size: 11px; line-height: 1.6; color: var(--text-3); }
+/* The dots between steps are text in the markup (answermeta.js), not a ::before here: a cached older stylesheet once ran the steps together. */
+.answer-time { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.answer-step { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .answer-step.failed { color: var(--danger); }
+.answer-step.answer-wait { color: var(--warning); }
 
 .msg-bubble-row { display: flex; align-items: flex-end; gap: 6px; }
 /* The agent's light markdown, rendered by richtext.js */

@@ -208,7 +208,8 @@ class AnswerTiming(BaseModel):
     arriving to the reply being ready. It does not include the network to the browser or speaking the reply aloud."""
     seconds: float
     listen_seconds: float | None = None  # speech-to-text, on a voice turn only
-    model_seconds: float  # every model call of the turn together
+    model_seconds: float  # every model call of the turn together, without the time spent waiting on the rate limit
+    wait_seconds: float = 0.0  # asleep waiting for the AI provider's per-minute allowance to refill (free tier)
     model_calls: int
     tools: list[ToolTiming]
 

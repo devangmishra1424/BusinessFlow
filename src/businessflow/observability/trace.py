@@ -143,10 +143,15 @@ def answer_timing(t: Trace | None = None) -> dict | None:
     spans = list(t.spans)  # a copy: a worker thread may still be appending
     listen = [s["seconds"] for s in spans if s["name"] == "stt"]
     model = [s["seconds"] for s in spans if s["name"] == "llm"]
+    # Time a model call spent asleep waiting for the provider's per-minute allowance to refill (agent/loop.py notes it on
+    # the call). It is inside the call's seconds, so it is taken out of the model's time and shown as its own step:
+    # a 2-minute reply that spent 5 s thinking and 115 s waiting must not read as "the model took 2 minutes".
+    waited = sum(s["attrs"].get("rate_limit_wait_seconds", 0) for s in spans if s["name"] == "llm")
     return {
         "seconds": round(time.perf_counter() - t.started, 3),
         "listen_seconds": round(sum(listen), 3) if listen else None,
-        "model_seconds": round(sum(model), 3),
+        "model_seconds": round(max(sum(model) - waited, 0.0), 3),
+        "wait_seconds": round(waited, 3),
         "model_calls": len(model),
         "tools": [
             # A tool span that raised has no outcome of its own, only the error the span recorded.

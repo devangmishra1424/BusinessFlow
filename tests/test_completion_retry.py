@@ -13,6 +13,8 @@ import groq
 import httpx
 import pytest
 
+from businessflow.observability import trace
+
 import businessflow.agent.client as client_module
 import businessflow.agent.loop as loop_module
 from groq import RateLimitError
@@ -261,3 +263,21 @@ def test_a_persistent_transient_error_is_raised_after_the_retry_budget(reset_fal
 
     assert len(recorded_sleeps) == loop_module._TRANSIENT_ERROR_RETRIES  # bounded, not infinite
     assert client_module._current_key_index == 0  # a connection error is not a reason to burn through keys
+
+
+def test_a_wait_on_the_rate_limit_is_noted_on_the_model_call_so_the_timing_line_can_show_it(reset_fallback_state, monkeypatch, recorded_sleeps):
+    monkeypatch.setattr("businessflow.accounts.store.log_event", lambda *a, **kw: None)  # a trace is saved when it closes; no database here
+    monkeypatch.setenv("GROQ_API_KEY", "key0")
+    monkeypatch.delenv("ALTERNATE_GROQ_KEY", raising=False)
+    client_module._current_key_index = 0
+    scripts = {"key0": [_rate_limit_error()]}  # the only key is rate-limited once, then answers
+    monkeypatch.setattr(client_module, "Groq", lambda api_key, **kwargs: _ScriptedGroq(api_key, scripts[api_key], kwargs))
+
+    with trace.turn("web_text"):
+        with trace.span("llm"):
+            assert loop_module._create_completion() == "ok"
+        timing = trace.answer_timing()
+
+    assert len(recorded_sleeps) == 1
+    assert timing["wait_seconds"] == pytest.approx(recorded_sleeps[0])
+    assert timing["model_seconds"] >= 0
